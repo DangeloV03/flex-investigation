@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments / Conda
+.env
+.venv
+venv/
+env/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Generated pipeline outputs
+samples/
+results/
+test_run_out/
+manage.csv
+
+# Simulation scratch dirs (if any remain outside results/)
+_scratch_*/

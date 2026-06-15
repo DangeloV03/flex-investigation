@@ -1,0 +1,254 @@
+"""
+json_runner.py
+
+Takes a single self-contained JSON job (one outer combo + one mu value) and
+runs `num_parallel_runs` independent replicas in parallel (multiprocessing).
+
+For each replica:
+  - Build the slab initial condition (x < Lx/2 -> active, rest empty).
+  - Construct HeteroChain with fugacities derived from mu, delta_f.
+  - Run equilibration (eq_time), discard.
+  - Run production (prod_time), record time-averaged densities.
+  - Save final lattice as final_lattice_{i}.npy.
+
+Outputs (in a per-run output directory):
+  - final_lattice_0.npy ... final_lattice_{n-1}.npy
+  - output.csv: id, rho_active, rho_inert, rho_empty, time, mu
+
+Usage:
+    python json_runner.py samples/homo_Ly16_mu4012345.json [--outdir results/homo_Ly16_mu4012345]
+"""
+
+import argparse
+import csv
+import json
+import os
+import shutil
+import time
+import multiprocessing as mp
+
+import numpy as np
+
+from lattice_gas.markov_chain import HeteroChain
+from lattice_gas.boundary_condition import Periodic
+from lattice_gas.ending_criterion import Time
+from lattice_gas.simulate import simulate
+from lattice_gas import load
+
+EMPTY, INERT, BONDING = 0, 1, 2
+
+
+def build_initial_state(Lx: int, Ly: int) -> np.ndarray:
+    """Slab initial condition: x < Lx/2 -> active (BONDING), rest -> empty."""
+    state = np.zeros((Lx, Ly), dtype=np.uint32)
+    state[: Lx // 2, :] = BONDING
+    return state
+
+
+def compute_densities(state: np.ndarray) -> tuple[float, float, float]:
+    total = state.size
+    rho_active = float(np.count_nonzero(state == BONDING)) / total
+    rho_inert = float(np.count_nonzero(state == INERT)) / total
+    rho_empty = float(np.count_nonzero(state == EMPTY)) / total
+    return rho_active, rho_inert, rho_empty
+
+
+def run_replica(args):
+    (
+        replica_id,
+        run_id,
+        seed,
+        params,
+        run_settings,
+        outdir,
+    ) = args
+
+    beta = run_settings["beta"]
+    epsilon = params["epsilon"]
+    delta_mu = params["delta_mu"]
+    delta_f = params["delta_f"]
+    k = params["k"]
+    scheme = params["scheme"]
+    mu = params["mu"]
+    Lx = params["Lx"]
+    Ly = params["Ly"]
+
+    eq_time = run_settings["eq_time"]
+    prod_time = run_settings["prod_time"]
+    n_chunks = run_settings.get("prod_chunks", 10)
+
+    inert_fugacity = np.exp(beta * (mu + delta_f))
+    bonding_fugacity = np.exp(beta * mu)
+
+    chain = HeteroChain(
+        beta,
+        epsilon,
+        delta_mu,
+        inert_fugacity,
+        bonding_fugacity,
+        k,
+        scheme,
+    )
+
+    boundary = Periodic()
+    state = build_initial_state(Lx, Ly)
+
+    # scratch dir reused/overwritten for every simulate() call
+    scratch_dir = os.path.join(outdir, f"_scratch_{replica_id}")
+
+    # --- Equilibration (single run, discarded) ---
+    simulate(state, boundary, chain, [], [Time(eq_time)], seed, scratch_dir)
+    state = load.final_state(scratch_dir)
+
+    # --- Production, chunked for time-averaged densities ---
+    chunk_time = prod_time / n_chunks
+    rho_active_samples = []
+    rho_inert_samples = []
+    rho_empty_samples = []
+    cumulative_time = 0.0
+
+    for chunk_idx in range(n_chunks):
+        chunk_seed = seed + 1 + chunk_idx
+        simulate(state, boundary, chain, [], [Time(chunk_time)], chunk_seed, scratch_dir)
+        state = load.final_state(scratch_dir)
+        cumulative_time += load.final_time(scratch_dir)
+
+        rho_active, rho_inert, rho_empty = compute_densities(state)
+        rho_active_samples.append(rho_active)
+        rho_inert_samples.append(rho_inert)
+        rho_empty_samples.append(rho_empty)
+
+    rho_active = float(np.mean(rho_active_samples))
+    rho_inert = float(np.mean(rho_inert_samples))
+    rho_empty = float(np.mean(rho_empty_samples))
+
+    # Save final lattice at top level of outdir, named by persistent run_id
+    np.save(os.path.join(outdir, f"final_lattice_{run_id}.npy"), state)
+
+    # Clean up scratch simulation dir
+    shutil.rmtree(scratch_dir, ignore_errors=True)
+
+    return {
+        "id": run_id,
+        "rho_active": rho_active,
+        "rho_inert": rho_inert,
+        "rho_empty": rho_empty,
+        "time": cumulative_time,
+        "mu": mu,
+    }
+
+
+def get_next_id(csv_path: str) -> int:
+    """Return the next sequential id to use, continuing from any existing rows."""
+    if not os.path.isfile(csv_path):
+        return 0
+    with open(csv_path, "r", newline="") as f:
+        reader = csv.DictReader(f)
+        existing_ids = [int(r["id"]) for r in reader]
+    return max(existing_ids) + 1 if existing_ids else 0
+
+
+def append_to_csv(csv_path: str, rows: list[dict]):
+    """Append rows to output.csv. Rows must already have their final 'id' set."""
+    file_exists = os.path.isfile(csv_path)
+
+    fieldnames = ["id", "rho_active", "rho_inert", "rho_empty", "time", "mu"]
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
+
+
+def update_manage_csv(manage_path: str, params: dict):
+    """Mark isRan with a timestamp for the matching combo row, but only if
+    that cell is currently empty (first finisher wins)."""
+    if not os.path.isfile(manage_path):
+        return
+
+    with open(manage_path, "r", newline="") as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames
+        rows = list(reader)
+
+    updated = False
+    for row in rows:
+        if row.get("isRan", ""):
+            continue
+        if all(str(row[field]) == str(params[field]) for field in COMBO_KEY_FIELDS):
+            row["isRan"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            updated = True
+            break
+
+    if updated:
+        with open(manage_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("json_path", help="Path to the job JSON file")
+    parser.add_argument(
+        "--outdir",
+        default=None,
+        help="Output directory (default: results/<job_basename>)",
+    )
+    args = parser.parse_args()
+
+    with open(args.json_path) as f:
+        params = json.load(f)
+
+    run_settings = params["run_settings"]
+    num_parallel_runs = run_settings["num_parallel_runs"]
+    seed_base = run_settings["seed_base"]
+
+    if args.outdir is not None:
+        outdir = args.outdir
+    else:
+        basename = os.path.splitext(os.path.basename(args.json_path))[0]
+        outdir = os.path.join("results", basename)
+    os.makedirs(outdir, exist_ok=True)
+
+    csv_path = os.path.join(outdir, "output.csv")
+    next_id = get_next_id(csv_path)
+
+    rng = np.random.default_rng(seed_base)
+    replica_seeds = rng.integers(0, 2**31, size=num_parallel_runs)
+
+    tasks = []
+    for replica_id in range(num_parallel_runs):
+        run_id = next_id + replica_id
+        seed = int(replica_seeds[replica_id])
+        tasks.append((replica_id, run_id, seed, params, run_settings, outdir))
+
+    with mp.Pool(processes=num_parallel_runs) as pool:
+        results = pool.map(run_replica, tasks)
+
+    results.sort(key=lambda r: r["id"])
+
+    append_to_csv(csv_path, results)
+
+    print(f"Wrote {len(results)} rows to {csv_path}")
+    for r in results:
+        print(
+            f"  replica {r['id']}: rho_active={r['rho_active']:.4f} "
+            f"rho_inert={r['rho_inert']:.4f} rho_empty={r['rho_empty']:.4f} "
+            f"time={r['time']:.2f}"
+        )
+
+    update_manage_csv("manage.csv", params)
+
+    dest_json = os.path.join(outdir, os.path.basename(args.json_path))
+    if os.path.abspath(args.json_path) != os.path.abspath(dest_json):
+        shutil.move(args.json_path, dest_json)
+        print(f"Moved job JSON to {dest_json}")
+
+
+if __name__ == "__main__":
+    main()
