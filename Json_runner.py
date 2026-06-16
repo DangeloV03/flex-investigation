@@ -13,10 +13,10 @@ For each replica:
 
 Outputs (in a per-run output directory):
   - final_lattice_0.npy ... final_lattice_{n-1}.npy
-  - output.csv: id, rho_active, rho_inert, rho_empty, time, mu
+  - output.csv: id, rho_active, rho_inert, rho_empty, time
 
 Usage:
-    python json_runner.py samples/homo_Ly16_mu4012345.json [--outdir results/homo_Ly16_mu4012345]
+    python json_runner.py samples/homo_Ly16_mu00.json [--outdir results/homo_Ly16_mu00]
 """
 
 import argparse
@@ -134,7 +134,6 @@ def run_replica(args):
         "rho_inert": rho_inert,
         "rho_empty": rho_empty,
         "time": cumulative_time,
-        "mu": mu,
     }
 
 
@@ -148,17 +147,37 @@ def get_next_id(csv_path: str) -> int:
     return max(existing_ids) + 1 if existing_ids else 0
 
 
-def append_to_csv(csv_path: str, rows: list[dict]):
+def append_to_csv(csv_path: str, rows: list[dict], params: dict):
     """Append rows to output.csv. Rows must already have their final 'id' set."""
     file_exists = os.path.isfile(csv_path)
 
-    fieldnames = ["id", "rho_active", "rho_inert", "rho_empty", "time", "mu"]
+    run_settings = params["run_settings"]
+    fieldnames = [
+        "id", "epsilon", "delta_f", "delta_mu", "k",
+        "scheme", "Lx", "Ly", "mu",
+        "rho_active", "rho_inert", "rho_empty", "time",
+        "beta", "num_parallel_runs", "eq_time", "prod_time", "seed_base",
+    ]
     with open(csv_path, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
         for row in rows:
-            writer.writerow(row)
+            row_out = dict(row)
+            row_out["epsilon"] = params["epsilon"]
+            row_out["delta_f"] = params["delta_f"]
+            row_out["delta_mu"] = params["delta_mu"]
+            row_out["k"] = params["k"]
+            row_out["scheme"] = params["scheme"]
+            row_out["Lx"] = params["Lx"]
+            row_out["Ly"] = params["Ly"]
+            row_out["mu"] = params["mu"]
+            row_out["beta"] = run_settings["beta"]
+            row_out["num_parallel_runs"] = run_settings["num_parallel_runs"]
+            row_out["eq_time"] = run_settings["eq_time"]
+            row_out["prod_time"] = run_settings["prod_time"]
+            row_out["seed_base"] = run_settings["seed_base"]
+            writer.writerow(row_out)
 
 
 COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
@@ -211,20 +230,23 @@ def main():
     if args.outdir is not None:
         outdir = args.outdir
     else:
-        basename = os.path.splitext(os.path.basename(args.json_path))[0]
-        outdir = os.path.join("results", basename)
+        scheme = params["scheme"]
+        epsilon = params["epsilon"]
+        Ly = params["Ly"]
+        mu = params["mu"]
+        eps_tag = str(abs(float(epsilon))).replace(".", "")
+        mu_tag = f"mu{round(abs(mu) * 1_000_000):07d}"
+        combo_dir = f"{scheme}_eps{eps_tag}_Ly{Ly}"
+        outdir = os.path.join("results", combo_dir, mu_tag)
     os.makedirs(outdir, exist_ok=True)
 
     csv_path = os.path.join(outdir, "output.csv")
     next_id = get_next_id(csv_path)
 
-    rng = np.random.default_rng(seed_base)
-    replica_seeds = rng.integers(0, 2**31, size=num_parallel_runs)
-
     tasks = []
     for replica_id in range(num_parallel_runs):
         run_id = next_id + replica_id
-        seed = int(replica_seeds[replica_id])
+        seed = seed_base + run_id * 2  # +1 used internally for prod phase
         tasks.append((replica_id, run_id, seed, params, run_settings, outdir))
 
     with mp.Pool(processes=num_parallel_runs) as pool:
@@ -232,7 +254,7 @@ def main():
 
     results.sort(key=lambda r: r["id"])
 
-    append_to_csv(csv_path, results)
+    append_to_csv(csv_path, results, params)
 
     print(f"Wrote {len(results)} rows to {csv_path}")
     for r in results:
@@ -243,11 +265,6 @@ def main():
         )
 
     update_manage_csv("manage.csv", params)
-
-    dest_json = os.path.join(outdir, os.path.basename(args.json_path))
-    if os.path.abspath(args.json_path) != os.path.abspath(dest_json):
-        shutil.move(args.json_path, dest_json)
-        print(f"Moved job JSON to {dest_json}")
 
 
 if __name__ == "__main__":

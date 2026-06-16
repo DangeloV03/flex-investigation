@@ -12,21 +12,36 @@ build/
 # Virtual environments / Conda
 .env
 .venv
+.venv*/
 venv/
 env/
 
-# IDE / OS
+# IDE / OS / Jupyter
 .idea/
 .vscode/
 *.swp
 *.swo
 .DS_Store
+.ipynb_checkpoints/
 
-# Generated pipeline outputs
+# Local tooling caches
+.mplconfig/
+.cache/
+
+# Generated pipeline outputs (large data — keep out of git)
 samples/
+test_samples/
 results/
+plots/
 test_run_out/
+
+# Run tracking CSVs (generated / local state)
 manage.csv
+test_manage.csv
+*_manage.csv
 
 # Simulation scratch dirs (if any remain outside results/)
 _scratch_*/
+
+# Lattice snapshots from runs
+**/final_lattice_*.npy

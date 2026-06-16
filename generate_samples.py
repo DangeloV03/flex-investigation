@@ -11,7 +11,7 @@ Workflow:
            - Write one self-contained JSON file per (scheme, Ly, mu).
 
 Each JSON file is intended to be passed directly to json_runner.py, e.g.:
-    python json_runner.py samples/homo_Ly8_mu4012345.json
+    python json_runner.py samples/homo_Ly8_mu03.json
 """
 
 import csv
@@ -58,8 +58,8 @@ RUN_SETTINGS = {
     "k": K,
     "initial_condition": "slab_half_active_half_empty",  # x < Lx/2 -> active, x >= Lx/2 -> empty
     "num_parallel_runs": 4,
-    "eq_time": 50.0,
-    "prod_time": 50.0,
+    "eq_time": 10000.0,
+    "prod_time": 10000.0,
     "seed_base": 1000,
 }
 
@@ -69,22 +69,18 @@ MANAGE_CSV = "manage.csv"
 # Columns identifying a unique outer combo (used as the match key by json_runner.py)
 COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
 MANAGE_FIELDS = COMBO_KEY_FIELDS + [
-    "mu_coex_flex",
+    "mu_coex_FLEX",
     "isSubmitted",
     "isRan",
     "isAnalyzed",
     "mu_coex_SIM",
+    "RequestForAdditionalData",
 ]
 
 
 def mu_sweep(mu_coex_flex: float) -> list[float]:
     values = np.linspace(mu_coex_flex - MU_WINDOW, mu_coex_flex + MU_WINDOW, N_MU_POINTS)
     return [round(float(v), 6) for v in values]
-
-
-def mu_filename_tag(mu: float) -> str:
-    """Encode |mu| in a filename-safe tag (6 decimal places)."""
-    return f"mu{round(abs(mu) * 1_000_000):06d}"
 
 
 def main():
@@ -127,15 +123,16 @@ def main():
                     "scheme": scheme,
                     "Lx": Lx,
                     "Ly": Ly,
-                    "mu_coex_flex": mu_coex_flex,
+                    "mu_coex_FLEX": mu_coex_flex,
                     "isSubmitted": timestamp,
                     "isRan": "",
                     "isAnalyzed": "",
                     "mu_coex_SIM": "",
+                    "RequestForAdditionalData": 0,
                 }
             )
 
-            for mu in mu_values:
+            for idx, mu in enumerate(mu_values):
                 job = {
                     "epsilon": EPSILON,
                     "delta_f": DELTA_F,
@@ -145,11 +142,11 @@ def main():
                     "Lx": Lx,
                     "Ly": Ly,
                     "mu": mu,
-                    "mu_coex_flex": mu_coex_flex,
+                    "mu_coex_FLEX": mu_coex_flex,
                     "run_settings": RUN_SETTINGS,
                 }
 
-                filename = f"{scheme}_Ly{Ly}_{mu_filename_tag(mu)}.json"
+                filename = f"{scheme}_Ly{Ly}_mu{idx:02d}.json"
                 filepath = os.path.join(OUTPUT_DIR, filename)
                 with open(filepath, "w") as f:
                     json.dump(job, f, indent=2)
