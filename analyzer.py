@@ -6,7 +6,8 @@ Long-running watcher that:
   2. Groups results by outer combo (scheme, Lx, Ly, epsilon, delta_f, delta_mu, k).
   3. For each combo with enough data, computes phi(mu) and psi(mu).
   4. Checks for sign change in phi:
-       - Sign change found  -> refine: 10 new mu points between the bracketing pair.
+       - Sign change found  -> refine: 10 new mu points between the bracketing pair,
+         unless nearest left/right neighbors of min(psi) already bracket phi~0.
        - No sign change     -> extend: jump window in the direction needed.
      Max MAX_ADDITIONAL_REQUESTS additional data requests per combo.
   5. Finds min(psi) -> mu_coex_SIM.
@@ -22,13 +23,14 @@ import csv
 import json
 import os
 import pathlib
-import subprocess
 import sys
 import time
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+from queue_manifest import prepend_pending
 
 MANAGE_CSV = "manage.csv"
 RESULTS_DIR = "results"
@@ -37,6 +39,8 @@ SAMPLES_DIR = "samples"
 POLL_INTERVAL = 10.0  # seconds
 MAX_ADDITIONAL_REQUESTS = 5
 N_REFINEMENT_POINTS = 10
+PHI_NEIGHBOR_SIGMA_K = 2.0  # |phi| <= k * max(phi_err, PHI_ABS_TOL) counts as "close"
+PHI_ABS_TOL = 0.05
 COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
 MANAGE_FIELDS = COMBO_KEY_FIELDS + [
     "mu_coex_flex",
@@ -277,15 +281,92 @@ def make_job_json(job_template: dict, mu: float, samples_dir: str) -> str:
     return filepath
 
 
-def dispatch_jobs(mu_values: list[float], job_template: dict, samples_dir: str):
-    """Write JSON files and call json_runner.py for each mu value sequentially."""
+def enqueue_jobs(
+    mu_values: list[float],
+    job_template: dict,
+    samples_dir: str,
+    manifest_path: str = "run_all_queue.json",
+):
+    """Write JSON files and prepend them to the run_all queue (priority stack)."""
+    paths = []
     for mu in mu_values:
         json_path = make_job_json(job_template, mu, samples_dir)
-        print(f"[analyzer] Dispatching {json_path} (mu={mu:.6f})")
-        result = subprocess.run([sys.executable, "json_runner.py", json_path])
-        if result.returncode != 0:
-            print(f"[analyzer] WARNING: json_runner.py failed for {json_path}",
-                  file=sys.stderr)
+        paths.append(json_path)
+        print(f"[analyzer] Enqueued {json_path} (mu={mu:.6f})")
+    import queue_manifest as qm
+
+    prev = qm.MANIFEST_PATH
+    qm.MANIFEST_PATH = manifest_path
+    try:
+        prepend_pending(paths)
+    finally:
+        qm.MANIFEST_PATH = prev
+
+
+# ---------------------------------------------------------------------------
+# Coexistence resolution check
+# ---------------------------------------------------------------------------
+
+def phi_is_close_to_zero(phi: float, phi_err: float) -> bool:
+    """True if |phi| is within k sigma of zero (with an absolute floor)."""
+    threshold = PHI_NEIGHBOR_SIGMA_K * max(phi_err, PHI_ABS_TOL)
+    return abs(phi) <= threshold
+
+
+def is_coex_resolved(
+    mu_vals: np.ndarray,
+    phi_vals: np.ndarray,
+    phi_errs: np.ndarray,
+    psi_vals: np.ndarray,
+) -> bool:
+    """True when min(psi) has neg/pos phi neighbors that are both near zero."""
+    if len(mu_vals) < 3:
+        return False
+
+    min_idx = int(np.argmin(psi_vals))
+    if min_idx == 0 or min_idx == len(mu_vals) - 1:
+        return False
+
+    phi_left = phi_vals[min_idx - 1]
+    phi_right = phi_vals[min_idx + 1]
+    if phi_left >= 0 or phi_right <= 0:
+        return False
+
+    return (
+        phi_is_close_to_zero(phi_left, phi_errs[min_idx - 1])
+        and phi_is_close_to_zero(phi_right, phi_errs[min_idx + 1])
+    )
+
+
+def finalize_combo(
+    combo_key: tuple,
+    combo: dict,
+    tag: str,
+    mu_vals: np.ndarray,
+    phi_vals: np.ndarray,
+    phi_errs: np.ndarray,
+    psi_vals: np.ndarray,
+    psi_errs: np.ndarray,
+    manage_path: str,
+    plots_dir: str,
+    n_requests: int,
+    reason: str = "",
+):
+    """Set mu_coex_SIM, save plot, and mark combo analyzed."""
+    min_idx = int(np.argmin(psi_vals))
+    mu_coex_sim = float(mu_vals[min_idx])
+    suffix = f" ({reason})" if reason else ""
+    print(f"[analyzer] {tag}: mu_coex_SIM = {mu_coex_sim:.6f}{suffix}")
+
+    plot_combo(
+        combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
+        mu_coex_sim=mu_coex_sim, plots_dir=plots_dir,
+    )
+    update_manage_field(manage_path, combo, {
+        "mu_coex_SIM": mu_coex_sim,
+        "isAnalyzed": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "RequestForAdditionalData": n_requests,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +374,7 @@ def dispatch_jobs(mu_values: list[float], job_template: dict, samples_dir: str):
 # ---------------------------------------------------------------------------
 
 def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
-                  plots_dir: str, samples_dir: str):
+                  plots_dir: str, samples_dir: str, manifest_path: str):
     job = data["job"]
     points = data["points"]
 
@@ -333,6 +414,14 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
         mu_lo = min(mu_pos, mu_neg)
         mu_hi = max(mu_pos, mu_neg)
 
+        if is_coex_resolved(mu_vals, phi_vals, phi_errs, psi_vals):
+            finalize_combo(
+                combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+                psi_vals, psi_errs, manage_path, plots_dir, n_requests,
+                reason="neighbors resolved",
+            )
+            return
+
         # Check if we already have refined points in this bracket
         existing_in_bracket = np.sum((mu_vals >= mu_lo) & (mu_vals <= mu_hi))
 
@@ -348,24 +437,14 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
                 n_requests += 1
                 rows[idx]["RequestForAdditionalData"] = n_requests
                 write_manage(manage_path, rows)
-                dispatch_jobs(new_mus, job, samples_dir)
+                enqueue_jobs(new_mus, job, samples_dir, manifest_path)
                 return  # re-analyze after new data arrives
 
-        # Find mu_coex_SIM as min of psi
-        min_idx = np.argmin(psi_vals)
-        mu_coex_sim = float(mu_vals[min_idx])
-        print(f"[analyzer] {tag}: mu_coex_SIM = {mu_coex_sim:.6f}")
-
-        # Save plot with mu_coex_SIM marked
-        plot_combo(combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
-                   mu_coex_sim=mu_coex_sim, plots_dir=plots_dir)
-
-        # Update manage.csv
-        update_manage_field(manage_path, combo, {
-            "mu_coex_SIM": mu_coex_sim,
-            "isAnalyzed": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "RequestForAdditionalData": n_requests,
-        })
+        finalize_combo(
+            combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+            psi_vals, psi_errs, manage_path, plots_dir, n_requests,
+            reason="bracket filled or max requests",
+        )
 
     else:
         # No sign change — need to extend the mu window
@@ -403,7 +482,7 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
         plot_combo(combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
                    plots_dir=plots_dir)
 
-        dispatch_jobs(new_mus, job, samples_dir)
+        enqueue_jobs(new_mus, job, samples_dir, manifest_path)
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +498,8 @@ def main():
     parser.add_argument("--plots", default=PLOTS_DIR)
     parser.add_argument("--samples", default=SAMPLES_DIR)
     parser.add_argument("--interval", type=float, default=POLL_INTERVAL)
+    parser.add_argument("--manifest", default="run_all_queue.json",
+                        help="Queue manifest for run_all.py")
     args = parser.parse_args()
 
     print(f"[analyzer] Watching '{args.results}' every {args.interval}s "
@@ -441,7 +522,9 @@ def main():
                 processed_combos.add(combo_key)
                 continue
 
-            analyze_combo(combo_key, data, args.manage, args.plots, args.samples)
+            analyze_combo(
+                combo_key, data, args.manage, args.plots, args.samples, args.manifest,
+            )
 
             # Re-check if now analyzed
             rows = read_manage(args.manage)

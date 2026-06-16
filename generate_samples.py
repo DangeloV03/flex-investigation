@@ -21,6 +21,7 @@ import time
 import numpy as np
 
 from flex_coex_chemical_potential_prediction import coex_chemical_potential
+from queue_manifest import seed_pending
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +58,7 @@ RUN_SETTINGS = {
     "beta": 1.0,
     "k": K,
     "initial_condition": "slab_half_active_half_empty",  # x < Lx/2 -> active, x >= Lx/2 -> empty
-    "num_parallel_runs": 4,
+    "num_parallel_runs": 32,
     "eq_time": 10000.0,
     "prod_time": 10000.0,
     "seed_base": 1000,
@@ -89,6 +90,7 @@ def main():
     n_files = 0
     skipped_schemes = []
     manage_rows = []
+    pending_paths = []
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
 
     for scheme, flex_index in SCHEME_TO_FLEX_INDEX.items():
@@ -150,7 +152,10 @@ def main():
                 filepath = os.path.join(OUTPUT_DIR, filename)
                 with open(filepath, "w") as f:
                     json.dump(job, f, indent=2)
+                pending_paths.append(filepath)
                 n_files += 1
+
+    seed_pending(pending_paths)
 
     with open(MANAGE_CSV, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=MANAGE_FIELDS)
@@ -159,6 +164,7 @@ def main():
             writer.writerow(row)
 
     print(f"\nWrote {n_files} JSON files to '{OUTPUT_DIR}/'")
+    print(f"Seeded {len(pending_paths)} jobs into run_all_queue.json")
     print(f"Wrote {len(manage_rows)} rows to '{MANAGE_CSV}'")
     if skipped_schemes:
         print(f"Skipped schemes (mu_coex_FLEX > 0): {skipped_schemes}")

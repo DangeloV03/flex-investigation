@@ -1,0 +1,17 @@
+# Static Slurm directives for run_all.py (simple_slurm).
+# Edit partition, account, and resources for your Della setup.
+
+job_name: flex_sim
+cpus_per_task: 4
+mem: 8G
+time: "02:00:00"
+partition: cpu
+# account: your_account   # uncomment if required
+report_dir: /home/vd7294/slurm_reports
+output: "/home/vd7294/slurm_reports/%j.out"
+error: "/home/vd7294/slurm_reports/%j.err"
+
+# Shell commands prepended to each batch script (module loads, conda activate, etc.)
+setup_cmds:
+  - "module load anaconda3/2024.10"
+  - "source activate lattice"
