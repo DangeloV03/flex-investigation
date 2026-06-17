@@ -5,11 +5,14 @@ Long-running watcher that:
   1. Polls results/ for completed output.csv files.
   2. Groups results by outer combo (scheme, Lx, Ly, epsilon, delta_f, delta_mu, k).
   3. For each combo with enough data, computes phi(mu) and psi(mu).
-  4. Checks for sign change in phi:
+  4. Waits for all N_INITIAL_MU_POINTS (10) initial mu jobs before analyzing.
+  5. Checks for sign change in phi:
        - Sign change found  -> refine: 10 new mu points between the bracketing pair,
          unless nearest left/right neighbors of min(psi) already bracket phi~0.
        - No sign change     -> extend: jump window in the direction needed.
      Max MAX_ADDITIONAL_REQUESTS additional data requests per combo.
+     Follow-up requests are only issued after new results arrive; duplicate
+     queue submissions do not consume the request budget.
   5. Finds min(psi) -> mu_coex_SIM.
   6. Saves phi/psi plots per combo.
   7. Updates manage.csv with mu_coex_SIM, isAnalyzed, RequestForAdditionalData.
@@ -38,6 +41,7 @@ PLOTS_DIR = "plots"
 SAMPLES_DIR = "samples"
 POLL_INTERVAL = 10.0  # seconds
 MAX_ADDITIONAL_REQUESTS = 5
+N_INITIAL_MU_POINTS = 10  # must match generate_samples.N_MU_POINTS
 N_REFINEMENT_POINTS = 10
 PHI_NEIGHBOR_SIGMA_K = 2.0  # |phi| <= k * max(phi_err, PHI_ABS_TOL) counts as "close"
 PHI_ABS_TOL = 0.05
@@ -298,8 +302,11 @@ def enqueue_jobs(
     job_template: dict,
     samples_dir: str,
     manifest_path: str = "run_all_queue.json",
-):
-    """Write JSON files and prepend them to the run_all queue (priority stack)."""
+) -> int:
+    """Write JSON files and prepend them to the run_all queue (priority stack).
+
+    Returns the number of jobs actually added to the queue (duplicates skipped).
+    """
     paths = []
     for mu in mu_values:
         json_path = make_job_json(job_template, mu, samples_dir)
@@ -310,7 +317,7 @@ def enqueue_jobs(
     prev = qm.MANIFEST_PATH
     qm.MANIFEST_PATH = manifest_path
     try:
-        prepend_pending(paths)
+        return prepend_pending(paths)
     finally:
         qm.MANIFEST_PATH = prev
 
@@ -429,8 +436,44 @@ def finalize_unstable(
 # Core analysis logic per combo
 # ---------------------------------------------------------------------------
 
+def _request_more_data(
+    *,
+    tag: str,
+    combo_key: tuple,
+    combo: dict,
+    new_mus: list[float],
+    job: dict,
+    manage_path: str,
+    rows: list[dict],
+    idx: int,
+    n_requests: int,
+    n_points: int,
+    samples_dir: str,
+    manifest_path: str,
+    pending_points: dict[tuple, int],
+    action: str,
+) -> bool:
+    """Enqueue refinement/extension jobs if needed. Returns True if jobs were queued."""
+    if not new_mus:
+        return False
+
+    n_added = enqueue_jobs(new_mus, job, samples_dir, manifest_path)
+    if n_added == 0:
+        print(f"[analyzer] {tag}: {action} jobs already queued, waiting")
+        return False
+
+    n_requests += 1
+    rows[idx]["RequestForAdditionalData"] = n_requests
+    write_manage(manage_path, rows)
+    pending_points[combo_key] = n_points
+    print(f"[analyzer] {tag}: {action}, queued {n_added} jobs "
+          f"(request {n_requests}/{MAX_ADDITIONAL_REQUESTS})")
+    return True
+
+
 def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
-                  plots_dir: str, samples_dir: str, manifest_path: str):
+                  plots_dir: str, samples_dir: str, manifest_path: str,
+                  pending_points: dict[tuple, int]):
     job = data["job"]
     points = data["points"]
 
@@ -440,9 +483,7 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
     tag = f"{scheme}_eps{eps_tag}_Ly{Ly}"
 
     mu_vals, phi_vals, phi_errs, psi_vals, psi_errs = build_curves(points)
-
-    if len(mu_vals) < 2:
-        return  # not enough points yet
+    n_points = len(mu_vals)
 
     # Check manage row for current request count
     rows = read_manage(manage_path)
@@ -454,6 +495,22 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
     # Already analyzed
     if rows[idx].get("isAnalyzed", ""):
         return
+
+    # After restart, anchor follow-up wait to the current result count.
+    if n_requests > 0 and combo_key not in pending_points:
+        pending_points[combo_key] = n_points
+
+    # Wait for the full initial mu sweep before any analysis or follow-up requests.
+    if n_requests == 0 and n_points < N_INITIAL_MU_POINTS:
+        print(f"[analyzer] {tag}: waiting for initial batch "
+              f"({n_points}/{N_INITIAL_MU_POINTS})")
+        return
+
+    # After a follow-up request, wait for new results before acting again.
+    if n_requests > 0:
+        points_at_request = pending_points.get(combo_key)
+        if points_at_request is not None and n_points <= points_at_request:
+            return
 
     # Check for sign change in phi
     signs = np.sign(phi_vals)
@@ -490,11 +547,24 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
             if new_mus:
                 print(f"[analyzer] {tag}: sign change found, refining "
                       f"[{mu_lo:.4f}, {mu_hi:.4f}] with {len(new_mus)} points")
-                n_requests += 1
-                rows[idx]["RequestForAdditionalData"] = n_requests
-                write_manage(manage_path, rows)
-                enqueue_jobs(new_mus, job, samples_dir, manifest_path)
-                return  # re-analyze after new data arrives
+                if _request_more_data(
+                    tag=tag,
+                    combo_key=combo_key,
+                    combo=combo,
+                    new_mus=new_mus,
+                    job=job,
+                    manage_path=manage_path,
+                    rows=rows,
+                    idx=idx,
+                    n_requests=n_requests,
+                    n_points=n_points,
+                    samples_dir=samples_dir,
+                    manifest_path=manifest_path,
+                    pending_points=pending_points,
+                    action="refining",
+                ):
+                    return  # re-analyze after new data arrives
+                return
 
         if n_requests >= MAX_ADDITIONAL_REQUESTS and not is_coex_resolved(
             mu_vals, phi_vals, phi_errs, psi_vals
@@ -539,15 +609,22 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
         new_mus = [m for m in new_mus
                    if not any(abs(m - existing) < 1e-6 for existing in mu_vals)]
 
-        n_requests += 1
-        rows[idx]["RequestForAdditionalData"] = n_requests
-        write_manage(manage_path, rows)
-
-        # Plot current state so we can see what's happening
-        plot_combo(combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
-                   plots_dir=plots_dir)
-
-        enqueue_jobs(new_mus, job, samples_dir, manifest_path)
+        _request_more_data(
+            tag=tag,
+            combo_key=combo_key,
+            combo=combo,
+            new_mus=new_mus,
+            job=job,
+            manage_path=manage_path,
+            rows=rows,
+            idx=idx,
+            n_requests=n_requests,
+            n_points=n_points,
+            samples_dir=samples_dir,
+            manifest_path=manifest_path,
+            pending_points=pending_points,
+            action="extending window",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -571,6 +648,7 @@ def main():
           f"(Ctrl-C to stop)")
 
     processed_combos = set()  # combo_keys that are fully analyzed
+    pending_points: dict[tuple, int] = {}  # point count when last follow-up was queued
 
     while True:
         grouped = discover_combo_results(args.results)
@@ -585,10 +663,12 @@ def main():
             idx = find_manage_row(rows, combo)
             if idx is not None and rows[idx].get("isAnalyzed", ""):
                 processed_combos.add(combo_key)
+                pending_points.pop(combo_key, None)
                 continue
 
             analyze_combo(
                 combo_key, data, args.manage, args.plots, args.samples, args.manifest,
+                pending_points,
             )
 
             # Re-check if now analyzed

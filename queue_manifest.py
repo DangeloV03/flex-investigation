@@ -64,15 +64,19 @@ def seed_pending(paths: list[str], path: str = MANIFEST_PATH) -> None:
         manifest["pending"] = list(paths)
 
 
-def prepend_pending(paths: list[str], path: str = MANIFEST_PATH) -> None:
-    """Prepend paths to the front of pending (analyzer priority / stack)."""
+def prepend_pending(paths: list[str], path: str = MANIFEST_PATH) -> int:
+    """Prepend paths to the front of pending (analyzer priority / stack).
+
+    Returns the number of paths actually added (duplicates skipped).
+    """
     if not paths:
-        return
+        return 0
     with locked_manifest(path) as manifest:
         existing = set(manifest["pending"])
         in_flight = set(manifest["in_flight"].values())
         new_paths = [p for p in paths if p not in existing and p not in in_flight]
         manifest["pending"] = new_paths + manifest["pending"]
+        return len(new_paths)
 
 
 def merge_pending(paths: list[str], path: str = MANIFEST_PATH) -> None:
