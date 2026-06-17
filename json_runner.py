@@ -99,6 +99,7 @@ def run_replica(args):
     # --- Equilibration (single run, discarded) ---
     simulate(state, boundary, chain, [], [Time(eq_time)], seed, scratch_dir)
     state = load.final_state(scratch_dir)
+    print(f"[json_runner] replica={replica_id} equilibration done", flush=True)
 
     # --- Production, chunked for time-averaged densities ---
     chunk_time = prod_time / n_chunks
@@ -117,6 +118,11 @@ def run_replica(args):
         rho_active_samples.append(rho_active)
         rho_inert_samples.append(rho_inert)
         rho_empty_samples.append(rho_empty)
+        print(
+            f"[json_runner] replica={replica_id} chunk {chunk_idx + 1}/{n_chunks} "
+            f"t={cumulative_time:.1f}",
+            flush=True,
+        )
 
     rho_active = float(np.mean(rho_active_samples))
     rho_inert = float(np.mean(rho_inert_samples))
@@ -240,6 +246,13 @@ def main():
         outdir = os.path.join("results", combo_dir, mu_tag)
     os.makedirs(outdir, exist_ok=True)
 
+    print(
+        f"[json_runner] START {args.json_path} "
+        f"eps={params['epsilon']} dmu={params['delta_mu']} mu={params['mu']} "
+        f"Ly={params['Ly']} replicas={num_parallel_runs} outdir={outdir}",
+        flush=True,
+    )
+
     csv_path = os.path.join(outdir, "output.csv")
     next_id = get_next_id(csv_path)
 
@@ -256,12 +269,13 @@ def main():
 
     append_to_csv(csv_path, results, params)
 
-    print(f"Wrote {len(results)} rows to {csv_path}")
+    print(f"Wrote {len(results)} rows to {csv_path}", flush=True)
     for r in results:
         print(
             f"  replica {r['id']}: rho_active={r['rho_active']:.4f} "
             f"rho_inert={r['rho_inert']:.4f} rho_empty={r['rho_empty']:.4f} "
-            f"time={r['time']:.2f}"
+            f"time={r['time']:.2f}",
+            flush=True,
         )
 
     update_manage_csv("manage.csv", params)

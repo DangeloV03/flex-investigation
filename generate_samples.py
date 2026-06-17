@@ -51,7 +51,7 @@ RUN_SETTINGS = {
     "beta": 1.0,
     "k": K,
     "initial_condition": "slab_half_active_half_empty",
-    "num_parallel_runs": 32,
+    "num_parallel_runs": 4,
     "eq_time": 10000.0,
     "prod_time": 10000.0,
     "seed_base": 1000,

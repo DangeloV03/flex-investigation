@@ -14,4 +14,7 @@ error: "/home/vd7294/slurm_reports/%j.err"
 # Shell commands prepended to each batch script (module loads, conda activate, etc.)
 setup_cmds:
   - "module load anaconda3/2024.10"
-  - "source activate lattice"
+  - "source \"$(conda info --base)/etc/profile.d/conda.sh\""
+  - "conda activate lattice"
+  - "export LD_LIBRARY_PATH=\"$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}\""
+  - "export PYTHONUNBUFFERED=1"

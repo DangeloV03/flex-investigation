@@ -92,12 +92,12 @@ def active_slurm_ids(slurm) -> set[str]:
 
 def submit_slurm_job(slurm, json_path: str, python: str) -> str:
     abs_json = os.path.abspath(json_path)
-    job_id = slurm.sbatch(f"{python} json_runner.py {abs_json}")
+    job_id = slurm.sbatch(f"{python} -u json_runner.py {abs_json}")
     return str(job_id)
 
 
 def run_local_job(json_path: str, python: str) -> bool:
-    result = subprocess.run([python, "json_runner.py", json_path])
+    result = subprocess.run([python, "-u", "json_runner.py", json_path])
     return result.returncode == 0
 
 
@@ -177,7 +177,7 @@ def submit_up_to_cap(
             continue
 
         if local_jobs is not None:
-            proc = subprocess.Popen([python, "json_runner.py", json_path])
+            proc = subprocess.Popen([python, "-u", "json_runner.py", json_path])
             job_id = f"local-{proc.pid}"
             mark_in_flight(job_id, json_path)
             local_jobs[job_id] = proc
