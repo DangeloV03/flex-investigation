@@ -19,3 +19,21 @@ Install Cargo
 Install lattice-gas module
 Set up conda env 
 Write smokescreen python test that we run via slurm to test that it is properly being called
+
+Steps:
+Run a long simulation that takes a couple of minitues. Request 4 CPUS and run 4 parallel instances and check that output runs correctly and outputs to the scratch folder
+
+# Push To Git
+git add ...
+git commit -m "..."
+git push origin dangelo/run-on-della
+
+# Update on Della
+cd /scratch/gpfs/WJACOBS/vd7294/flex-investigation
+git status
+git pull origin dangelo/run-on-delta  
+
+# Reset daemon processes
+# find and kill old processes, then:
+nohup python run_all.py > run_all.log 2>&1 &
+nohup python analyzer.py > analyzer.log 2>&1 &

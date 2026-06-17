@@ -1,63 +1,56 @@
 """
 generate_samples.py
 
-Workflow:
-  1. Fixed: epsilon = -2.0, delta_f = 0, delta_mu = 0, k = 1.
-  2. For each scheme in {homo, positive_drive, negative_drive}:
-       - Compute mu_coex_FLEX (DRIVEN=True) using flex_coex_chemical_potential_prediction.
-       - If mu_coex_FLEX > 0, skip this scheme.
-       - Else, for each Ly in [8, 16, 32] (Lx = 10 * Ly):
-           - Sweep mu over mu_coex_FLEX +/- 0.1, 10 points.
-           - Write one self-contained JSON file per (scheme, Ly, mu).
+LHS campaign over (epsilon, delta_mu) for homo / Ly=32:
+  1. Draw N_LHS Latin-hypercube samples, snap to grid, dedupe.
+  2. Skip combos already in manage.csv, queue, samples/, or results/.
+  3. Compute mu_coex_FLEX per combo; skip if mu_coex_FLEX > 0.
+  4. Sweep mu over mu_coex_FLEX +/- 0.1 (10 points), write JSON files.
+  5. Merge new rows into manage.csv and append jobs to run_all_queue.json.
 
-Each JSON file is intended to be passed directly to json_runner.py, e.g.:
-    python json_runner.py samples/homo_Ly8_mu03.json
+Usage:
+    python generate_samples.py
 """
 
 import csv
+import glob
 import json
 import os
+import pathlib
 import time
+
 import numpy as np
+import pandas as pd
+from scipy.stats import qmc
 
 from flex_coex_chemical_potential_prediction import coex_chemical_potential
-from queue_manifest import seed_pending
-
+from queue_manifest import merge_pending, read_manifest
 
 # ---------------------------------------------------------------------------
-# Fixed parameters
+# Campaign constants
 # ---------------------------------------------------------------------------
 
-EPSILON = -2.0
+SCHEME = "homo"
+FLEX_INDEX = 1
+LY = 32
+LX = 320
 DELTA_F = 0.0
-DELTA_MU = 0.0
-K = 1.0  # chem_rec_baserate / inert_to_bonding_rate
+K = 1.0
 
-# scheme name -> FLEX scheme index (1=homo, 2=positive_drive, 3=negative_drive)
-SCHEME_TO_FLEX_INDEX = {
-    "homo": 1,
-    "positive_drive": 2,
-    "negative_drive": 3,
-}
+EPS_BOUNDS = (-2.5, -1.4)
+EPS_STEP = 0.1
+DMU_BOUNDS = (-1.0, 6.0)
+DMU_STEP = 0.5
+N_LHS = 150
+LHS_SEED = 42
 
-LY_VALUES = [8, 16, 32]
-LX_MULTIPLIER = 10  # Lx = LX_MULTIPLIER * Ly
-
-# ---------------------------------------------------------------------------
-# Inner mu sweep settings
-# ---------------------------------------------------------------------------
-
-MU_WINDOW = 0.1  # +/- around mu_coex_FLEX
+MU_WINDOW = 0.1
 N_MU_POINTS = 10
-
-# ---------------------------------------------------------------------------
-# Shared run settings (passed through to json_runner.py)
-# ---------------------------------------------------------------------------
 
 RUN_SETTINGS = {
     "beta": 1.0,
     "k": K,
-    "initial_condition": "slab_half_active_half_empty",  # x < Lx/2 -> active, x >= Lx/2 -> empty
+    "initial_condition": "slab_half_active_half_empty",
     "num_parallel_runs": 32,
     "eq_time": 10000.0,
     "prod_time": 10000.0,
@@ -66,8 +59,9 @@ RUN_SETTINGS = {
 
 OUTPUT_DIR = "samples"
 MANAGE_CSV = "manage.csv"
+MANIFEST_PATH = "run_all_queue.json"
+RESULTS_DIR = "results"
 
-# Columns identifying a unique outer combo (used as the match key by json_runner.py)
 COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
 MANAGE_FIELDS = COMBO_KEY_FIELDS + [
     "mu_coex_FLEX",
@@ -75,8 +69,64 @@ MANAGE_FIELDS = COMBO_KEY_FIELDS + [
     "isRan",
     "isAnalyzed",
     "mu_coex_SIM",
+    "mu_coex_SIM_error",
     "RequestForAdditionalData",
 ]
+
+
+def snap_to_grid(value: float, lo: float, step: float) -> float:
+    idx = round((value - lo) / step)
+    return round(lo + idx * step, 6)
+
+
+def lhs_outer_combos(n: int = N_LHS, seed: int = LHS_SEED) -> list[tuple[float, float]]:
+    """Draw LHS samples in (epsilon, delta_mu), snap to grid, return unique pairs."""
+    sampler = qmc.LatinHypercube(d=2, seed=seed)
+    unit = sampler.random(n=n)
+    eps_lo, eps_hi = EPS_BOUNDS
+    dmu_lo, dmu_hi = DMU_BOUNDS
+    scaled = qmc.scale(
+        unit,
+        [eps_lo, dmu_lo],
+        [eps_hi, dmu_hi],
+    )
+    seen: set[tuple[float, float]] = set()
+    pairs: list[tuple[float, float]] = []
+    for eps_raw, dmu_raw in scaled:
+        eps = snap_to_grid(float(eps_raw), eps_lo, EPS_STEP)
+        dmu = snap_to_grid(float(dmu_raw), dmu_lo, DMU_STEP)
+        key = (eps, dmu)
+        if key not in seen:
+            seen.add(key)
+            pairs.append(key)
+    return pairs
+
+
+def combo_key_from_dict(combo: dict) -> tuple:
+    return tuple(str(combo[f]) for f in COMBO_KEY_FIELDS)
+
+
+def combo_dict(epsilon: float, delta_mu: float) -> dict:
+    return {
+        "epsilon": epsilon,
+        "delta_f": DELTA_F,
+        "delta_mu": delta_mu,
+        "k": K,
+        "scheme": SCHEME,
+        "Lx": LX,
+        "Ly": LY,
+    }
+
+
+def eps_filename_tag(epsilon: float) -> str:
+    return "eps" + str(abs(epsilon)).replace(".", "p")
+
+
+def dmu_filename_tag(delta_mu: float) -> str:
+    body = str(abs(delta_mu)).replace(".", "p")
+    if delta_mu < 0:
+        return f"dm-{body}"
+    return f"dm{body}"
 
 
 def mu_sweep(mu_coex_flex: float) -> list[float]:
@@ -84,90 +134,172 @@ def mu_sweep(mu_coex_flex: float) -> list[float]:
     return [round(float(v), 6) for v in values]
 
 
+def read_manage(manage_path: str) -> list[dict]:
+    if not os.path.isfile(manage_path):
+        return []
+    with open(manage_path, "r", newline="") as f:
+        rows = list(csv.DictReader(f))
+    for row in rows:
+        row.setdefault("mu_coex_SIM_error", "")
+    return rows
+
+
+def write_manage(manage_path: str, rows: list[dict]) -> None:
+    with open(manage_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=MANAGE_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in MANAGE_FIELDS})
+
+
+def combo_from_json_path(json_path: str) -> tuple | None:
+    if not os.path.isfile(json_path):
+        return None
+    try:
+        with open(json_path) as f:
+            job = json.load(f)
+        return combo_key_from_dict(job)
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def collect_active_combo_keys(
+    manage_path: str,
+    manifest_path: str,
+    samples_dir: str,
+    results_dir: str,
+) -> dict[tuple, str]:
+    """Return combo_key -> reason for combos already submitted/running/done."""
+    active: dict[tuple, str] = {}
+
+    for row in read_manage(manage_path):
+        if any(row.get(f, "") for f in ("isSubmitted", "isRan", "isAnalyzed")):
+            key = combo_key_from_dict(row)
+            active.setdefault(key, "manage")
+
+    manifest = read_manifest(manifest_path)
+    for json_path in manifest.get("pending", []) + list(manifest.get("in_flight", {}).values()):
+        key = combo_from_json_path(json_path)
+        if key is not None:
+            active.setdefault(key, "queue")
+
+    for json_path in glob.glob(os.path.join(samples_dir, "*.json")):
+        key = combo_from_json_path(json_path)
+        if key is not None:
+            active.setdefault(key, "samples")
+
+    results_path = pathlib.Path(results_dir)
+    for csv_path in results_path.glob("*/*/output.csv"):
+        try:
+            df = pd.read_csv(csv_path, nrows=1)
+            if not all(col in df.columns for col in COMBO_KEY_FIELDS):
+                continue
+            job = {
+                f: df[f].iloc[0].item() if hasattr(df[f].iloc[0], "item")
+                else df[f].iloc[0]
+                for f in COMBO_KEY_FIELDS
+            }
+            key = combo_key_from_dict(job)
+            active.setdefault(key, "results")
+        except Exception:
+            continue
+
+    return active
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    n_files = 0
-    skipped_schemes = []
-    manage_rows = []
-    pending_paths = []
+    outer_pairs = lhs_outer_combos()
+    print(f"LHS: {N_LHS} draws -> {len(outer_pairs)} unique snapped (epsilon, delta_mu) pairs")
+
+    active_combos = collect_active_combo_keys(
+        MANAGE_CSV, MANIFEST_PATH, OUTPUT_DIR, RESULTS_DIR,
+    )
+    existing_rows = read_manage(MANAGE_CSV)
+    existing_keys = {combo_key_from_dict(row) for row in existing_rows}
+
+    pending_paths: list[str] = []
+    new_manage_rows: list[dict] = []
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    n_files = 0
+    skipped_flex = 0
+    skipped_dedup = 0
 
-    for scheme, flex_index in SCHEME_TO_FLEX_INDEX.items():
-        mu_coex_flex = coex_chemical_potential(
-            epsilon=EPSILON,
-            df=DELTA_F,
-            dmu=DELTA_MU,
-            chem_rec_baserate=K,
-            DRIVEN=True,
-            scheme=flex_index,
-        )
-        # fsolve may return an array-like; coerce to float
-        mu_coex_flex = float(np.asarray(mu_coex_flex).ravel()[0])
+    for epsilon, delta_mu in outer_pairs:
+        combo = combo_dict(epsilon, delta_mu)
+        key = combo_key_from_dict(combo)
 
-        if mu_coex_flex > 0:
-            print(f"[skip] scheme={scheme}: mu_coex_FLEX={mu_coex_flex:.6f} > 0")
-            skipped_schemes.append(scheme)
+        if key in active_combos:
+            print(f"[skip dedup:{active_combos[key]}] eps={epsilon}, dmu={delta_mu}")
+            skipped_dedup += 1
             continue
 
-        print(f"scheme={scheme}: mu_coex_FLEX={mu_coex_flex:.6f}")
+        try:
+            mu_coex_flex = coex_chemical_potential(
+                epsilon=epsilon,
+                df=DELTA_F,
+                dmu=delta_mu,
+                chem_rec_baserate=K,
+                DRIVEN=True,
+                scheme=FLEX_INDEX,
+            )
+            mu_coex_flex = float(np.asarray(mu_coex_flex).ravel()[0])
+        except Exception as exc:
+            print(f"[skip flex] eps={epsilon}, dmu={delta_mu}: {exc}")
+            skipped_flex += 1
+            continue
+
+        if mu_coex_flex > 0:
+            print(f"[skip flex] eps={epsilon}, dmu={delta_mu}: mu_coex_FLEX={mu_coex_flex:.6f} > 0")
+            skipped_flex += 1
+            continue
+
+        print(f"eps={epsilon}, dmu={delta_mu}: mu_coex_FLEX={mu_coex_flex:.6f}")
         mu_values = mu_sweep(mu_coex_flex)
 
-        for Ly in LY_VALUES:
-            Lx = LX_MULTIPLIER * Ly
+        if key not in existing_keys:
+            new_manage_rows.append({
+                "epsilon": epsilon,
+                "delta_f": DELTA_F,
+                "delta_mu": delta_mu,
+                "k": K,
+                "scheme": SCHEME,
+                "Lx": LX,
+                "Ly": LY,
+                "mu_coex_FLEX": mu_coex_flex,
+                "isSubmitted": timestamp,
+                "isRan": "",
+                "isAnalyzed": "",
+                "mu_coex_SIM": "",
+                "mu_coex_SIM_error": "",
+                "RequestForAdditionalData": 0,
+            })
+            existing_keys.add(key)
 
-            manage_rows.append(
-                {
-                    "epsilon": EPSILON,
-                    "delta_f": DELTA_F,
-                    "delta_mu": DELTA_MU,
-                    "k": K,
-                    "scheme": scheme,
-                    "Lx": Lx,
-                    "Ly": Ly,
-                    "mu_coex_FLEX": mu_coex_flex,
-                    "isSubmitted": timestamp,
-                    "isRan": "",
-                    "isAnalyzed": "",
-                    "mu_coex_SIM": "",
-                    "RequestForAdditionalData": 0,
-                }
-            )
+        outer_tag = f"{eps_filename_tag(epsilon)}_{dmu_filename_tag(delta_mu)}"
+        for idx, mu in enumerate(mu_values):
+            job = {
+                **combo,
+                "mu": mu,
+                "mu_coex_FLEX": mu_coex_flex,
+                "run_settings": RUN_SETTINGS,
+            }
+            filename = f"{SCHEME}_{outer_tag}_Ly{LY}_mu{idx:02d}.json"
+            filepath = os.path.join(OUTPUT_DIR, filename)
+            with open(filepath, "w") as f:
+                json.dump(job, f, indent=2)
+            pending_paths.append(filepath)
+            n_files += 1
 
-            for idx, mu in enumerate(mu_values):
-                job = {
-                    "epsilon": EPSILON,
-                    "delta_f": DELTA_F,
-                    "delta_mu": DELTA_MU,
-                    "k": K,
-                    "scheme": scheme,
-                    "Lx": Lx,
-                    "Ly": Ly,
-                    "mu": mu,
-                    "mu_coex_FLEX": mu_coex_flex,
-                    "run_settings": RUN_SETTINGS,
-                }
-
-                filename = f"{scheme}_Ly{Ly}_mu{idx:02d}.json"
-                filepath = os.path.join(OUTPUT_DIR, filename)
-                with open(filepath, "w") as f:
-                    json.dump(job, f, indent=2)
-                pending_paths.append(filepath)
-                n_files += 1
-
-    seed_pending(pending_paths)
-
-    with open(MANAGE_CSV, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=MANAGE_FIELDS)
-        writer.writeheader()
-        for row in manage_rows:
-            writer.writerow(row)
+    merge_pending(pending_paths, path=MANIFEST_PATH)
+    write_manage(MANAGE_CSV, existing_rows + new_manage_rows)
 
     print(f"\nWrote {n_files} JSON files to '{OUTPUT_DIR}/'")
-    print(f"Seeded {len(pending_paths)} jobs into run_all_queue.json")
-    print(f"Wrote {len(manage_rows)} rows to '{MANAGE_CSV}'")
-    if skipped_schemes:
-        print(f"Skipped schemes (mu_coex_FLEX > 0): {skipped_schemes}")
+    print(f"Merged {len(pending_paths)} jobs into '{MANIFEST_PATH}'")
+    print(f"Added {len(new_manage_rows)} new rows to '{MANAGE_CSV}' "
+          f"({len(existing_rows)} existing)")
+    print(f"Skipped {skipped_dedup} dedup, {skipped_flex} FLEX filter")
 
 
 if __name__ == "__main__":

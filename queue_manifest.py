@@ -75,6 +75,20 @@ def prepend_pending(paths: list[str], path: str = MANIFEST_PATH) -> None:
         manifest["pending"] = new_paths + manifest["pending"]
 
 
+def merge_pending(paths: list[str], path: str = MANIFEST_PATH) -> None:
+    """Append new paths to pending, skipping duplicates and in-flight jobs."""
+    if not paths:
+        return
+    with locked_manifest(path) as manifest:
+        existing = set(manifest["pending"])
+        in_flight = set(manifest["in_flight"].values())
+        new_paths = [
+            p for p in paths
+            if p not in existing and p not in in_flight
+        ]
+        manifest["pending"].extend(new_paths)
+
+
 def pop_next_pending(path: str = MANIFEST_PATH) -> str | None:
     """Remove and return the next pending JSON path, or None if empty."""
     with locked_manifest(path) as manifest:

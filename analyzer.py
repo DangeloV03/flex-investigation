@@ -43,11 +43,12 @@ PHI_NEIGHBOR_SIGMA_K = 2.0  # |phi| <= k * max(phi_err, PHI_ABS_TOL) counts as "
 PHI_ABS_TOL = 0.05
 COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
 MANAGE_FIELDS = COMBO_KEY_FIELDS + [
-    "mu_coex_flex",
+    "mu_coex_FLEX",
     "isSubmitted",
     "isRan",
     "isAnalyzed",
     "mu_coex_SIM",
+    "mu_coex_SIM_error",
     "RequestForAdditionalData",
 ]
 
@@ -67,7 +68,8 @@ def write_manage(manage_path: str, rows: list[dict]):
     with open(manage_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=MANAGE_FIELDS)
         writer.writeheader()
-        writer.writerows(rows)
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in MANAGE_FIELDS})
 
 
 def find_manage_row(rows: list[dict], combo: dict) -> int | None:
@@ -213,6 +215,16 @@ def build_curves(points: list[tuple]) -> tuple:
 # Plotting
 # ---------------------------------------------------------------------------
 
+def _plot_mu_coex(mu_coex_sim) -> bool:
+    if mu_coex_sim is None:
+        return False
+    if isinstance(mu_coex_sim, str) and mu_coex_sim.lower() == "nan":
+        return False
+    if isinstance(mu_coex_sim, float) and np.isnan(mu_coex_sim):
+        return False
+    return True
+
+
 def plot_combo(combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
                mu_coex_sim=None, plots_dir=PLOTS_DIR):
     os.makedirs(plots_dir, exist_ok=True)
@@ -226,9 +238,9 @@ def plot_combo(combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
     ax1.errorbar(mu_vals, phi_vals, yerr=phi_errs, fmt="o-", capsize=4,
                  linewidth=1.2, markersize=5, label=r"$\phi$")
     ax1.axhline(0, color="gray", linestyle="--", linewidth=0.8)
-    if mu_coex_sim is not None:
+    if _plot_mu_coex(mu_coex_sim):
         ax1.axvline(mu_coex_sim, color="red", linestyle="--", linewidth=1,
-                    label=f"$\\mu_{{coex}}^{{SIM}}={mu_coex_sim:.4f}$")
+                    label=f"$\\mu_{{coex}}^{{SIM}}={float(mu_coex_sim):.4f}$")
     ax1.set_xlabel(r"$\mu$", fontsize=13)
     ax1.set_ylabel(r"$\phi$", fontsize=13)
     ax1.set_title(f"$\\phi$ vs $\\mu$ — {tag}", fontsize=12)
@@ -238,9 +250,9 @@ def plot_combo(combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
     # psi plot
     ax2.errorbar(mu_vals, psi_vals, yerr=psi_errs, fmt="o-", capsize=4,
                  linewidth=1.2, markersize=5, color="orange", label=r"$\psi$")
-    if mu_coex_sim is not None:
+    if _plot_mu_coex(mu_coex_sim):
         ax2.axvline(mu_coex_sim, color="red", linestyle="--", linewidth=1,
-                    label=f"$\\mu_{{coex}}^{{SIM}}={mu_coex_sim:.4f}$")
+                    label=f"$\\mu_{{coex}}^{{SIM}}={float(mu_coex_sim):.4f}$")
     ax2.set_xlabel(r"$\mu$", fontsize=13)
     ax2.set_ylabel(r"$\psi$", fontsize=13)
     ax2.set_title(f"$\\psi$ vs $\\mu$ — {tag}", fontsize=12)
@@ -338,6 +350,18 @@ def is_coex_resolved(
     )
 
 
+def compute_mu_coex_sim_error(
+    mu_vals: np.ndarray,
+    phi_errs: np.ndarray,
+    psi_vals: np.ndarray,
+) -> float:
+    """Neighbor phi_err scale at min(psi), matching is_coex_resolved geometry."""
+    min_idx = int(np.argmin(psi_vals))
+    if min_idx == 0 or min_idx == len(mu_vals) - 1:
+        return float(phi_errs[min_idx])
+    return float(max(phi_errs[min_idx - 1], phi_errs[min_idx + 1]))
+
+
 def finalize_combo(
     combo_key: tuple,
     combo: dict,
@@ -355,8 +379,10 @@ def finalize_combo(
     """Set mu_coex_SIM, save plot, and mark combo analyzed."""
     min_idx = int(np.argmin(psi_vals))
     mu_coex_sim = float(mu_vals[min_idx])
+    sim_error = compute_mu_coex_sim_error(mu_vals, phi_errs, psi_vals)
     suffix = f" ({reason})" if reason else ""
-    print(f"[analyzer] {tag}: mu_coex_SIM = {mu_coex_sim:.6f}{suffix}")
+    print(f"[analyzer] {tag}: mu_coex_SIM = {mu_coex_sim:.6f}, "
+          f"error = {sim_error:.6f}{suffix}")
 
     plot_combo(
         combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
@@ -364,6 +390,36 @@ def finalize_combo(
     )
     update_manage_field(manage_path, combo, {
         "mu_coex_SIM": mu_coex_sim,
+        "mu_coex_SIM_error": sim_error,
+        "isAnalyzed": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "RequestForAdditionalData": n_requests,
+    })
+
+
+def finalize_unstable(
+    combo_key: tuple,
+    combo: dict,
+    tag: str,
+    mu_vals: np.ndarray,
+    phi_vals: np.ndarray,
+    phi_errs: np.ndarray,
+    psi_vals: np.ndarray,
+    psi_errs: np.ndarray,
+    manage_path: str,
+    plots_dir: str,
+    n_requests: int,
+    reason: str = "",
+):
+    """Mark unstable combo analyzed with mu_coex_SIM=NaN after max refinement requests."""
+    suffix = f" ({reason})" if reason else ""
+    print(f"[analyzer] {tag}: unstable, mu_coex_SIM=NaN{suffix}")
+    plot_combo(
+        combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
+        mu_coex_sim=None, plots_dir=plots_dir,
+    )
+    update_manage_field(manage_path, combo, {
+        "mu_coex_SIM": "NaN",
+        "mu_coex_SIM_error": "NaN",
         "isAnalyzed": time.strftime("%Y-%m-%d %H:%M:%S"),
         "RequestForAdditionalData": n_requests,
     })
@@ -440,20 +496,29 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
                 enqueue_jobs(new_mus, job, samples_dir, manifest_path)
                 return  # re-analyze after new data arrives
 
-        finalize_combo(
-            combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-            psi_vals, psi_errs, manage_path, plots_dir, n_requests,
-            reason="bracket filled or max requests",
-        )
+        if n_requests >= MAX_ADDITIONAL_REQUESTS and not is_coex_resolved(
+            mu_vals, phi_vals, phi_errs, psi_vals
+        ):
+            finalize_unstable(
+                combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+                psi_vals, psi_errs, manage_path, plots_dir, n_requests,
+                reason="max requests without resolution",
+            )
+        else:
+            finalize_combo(
+                combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+                psi_vals, psi_errs, manage_path, plots_dir, n_requests,
+                reason="bracket filled or max requests",
+            )
 
     else:
         # No sign change — need to extend the mu window
         if n_requests >= MAX_ADDITIONAL_REQUESTS:
-            print(f"[analyzer] {tag}: max additional requests reached, "
-                  f"cannot find sign change. Skipping.")
-            # Still plot what we have
-            plot_combo(combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
-                       plots_dir=plots_dir)
+            finalize_unstable(
+                combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+                psi_vals, psi_errs, manage_path, plots_dir, n_requests,
+                reason="max requests, no sign change",
+            )
             return
 
         window = mu_vals[-1] - mu_vals[0]
