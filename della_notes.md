@@ -31,9 +31,22 @@ git push origin dangelo/run-on-della
 # Update on Della
 cd /scratch/gpfs/WJACOBS/vd7294/flex-investigation
 git status
-git pull origin dangelo/run-on-delta  
+git pull origin dangelo/run-on-della
 
-# Reset daemon processes
-# find and kill old processes, then:
-nohup python run_all.py > run_all.log 2>&1 &
-nohup python analyzer.py > analyzer.log 2>&1 &
+# Start / stop daemons (tmux — preferred over nohup)
+./scripts/start_daemons.sh              # detached session: run_all + analyzer
+tmux attach -t flex-investigation       # reattach to watch logs
+# Ctrl-b then d                         # detach (keeps running)
+
+./scripts/stop_daemons.sh               # stop tmux session + stray processes
+./scripts/stop_daemons.sh --slurm       # also cancel flex_sim Slurm jobs
+
+# Manual tmux (if you prefer not to use the scripts)
+tmux new -s flex-investigation
+# window 0: python -u run_all.py
+# Ctrl-b c for new window, then: python -u analyzer.py
+# Ctrl-b d to detach
+
+# Legacy nohup (not recommended — hard to monitor, easy to duplicate)
+# nohup python -u run_all.py > run_all.log 2>&1 &
+# nohup python -u analyzer.py > analyzer.log 2>&1 &

@@ -78,15 +78,19 @@ python run_all.py --local
 
 ```bash
 ssh <NetID>@della9.princeton.edu
-cd /scratch/gpfs/WJACOBS/flex-investigation   # your project path
-conda activate lattice
+cd /scratch/gpfs/WJACOBS/vd7294/flex-investigation   # your project path
+git pull origin dangelo/run-on-della
 
-# Start dispatcher (keeps up to 100 jobs active)
-nohup python run_all.py > run_all.log 2>&1 &
+# Start run_all + analyzer in tmux (detached; survives SSH logout)
+chmod +x scripts/start_daemons.sh scripts/stop_daemons.sh
+./scripts/start_daemons.sh
+tmux attach -t flex-investigation    # watch output; Ctrl-b d to detach
 
-# Start analyzer in a second session (enqueues refinement jobs at queue front)
-nohup python analyzer.py > analyzer.log 2>&1 &
+# Stop later
+./scripts/stop_daemons.sh
 ```
+
+The tmux session has two windows: `run_all` (Slurm dispatcher) and `analyzer` (results watcher).
 
 `run_all.py`:
 
