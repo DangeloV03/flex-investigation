@@ -41,6 +41,10 @@ tmux attach -t flex-investigation       # reattach to watch logs
 ./scripts/stop_daemons.sh               # stop tmux session + stray processes
 ./scripts/stop_daemons.sh --slurm       # also cancel flex_sim Slurm jobs
 
+# Delete lattice .npy for wrongly analyzed combos (keeps output.csv)
+python scripts/clean_wrong_npy.py --dry-run
+python scripts/clean_wrong_npy.py --mode premature --reset-manage   # NaN + max requests, re-analyze
+
 # Manual tmux (if you prefer not to use the scripts)
 tmux new -s flex-investigation
 # window 0: python -u run_all.py
