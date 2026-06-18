@@ -1,12 +1,15 @@
 """
 generate_samples.py
 
-LHS campaign over (epsilon, delta_mu) for homo / Ly=32:
-  1. Draw N_LHS Latin-hypercube samples, snap to grid, dedupe.
+Full grid campaign over (epsilon, delta_mu) for homo scheme 1 / K=1 / Ly=32:
+  1. Enumerate every (epsilon, delta_mu) on the configured grid.
   2. Skip combos already in manage.csv, queue, samples/, or results/.
   3. Compute mu_coex_FLEX per combo; skip if mu_coex_FLEX > 0.
   4. Sweep mu over mu_coex_FLEX +/- 0.1 (10 points), write JSON files.
-  5. Merge new rows into manage.csv and append jobs to run_all_queue.json.
+  5. Append new rows to manage.csv and merge jobs into run_all_queue.json.
+
+Existing JSON files and manage.csv rows are never overwritten or removed; re-runs
+only append missing combos/files.
 
 Usage:
     python generate_samples.py
@@ -16,12 +19,10 @@ import csv
 import glob
 import json
 import os
-import pathlib
 import time
 
 import numpy as np
 import pandas as pd
-from scipy.stats import qmc
 
 from flex_coex_chemical_potential_prediction import coex_chemical_potential
 from combo_paths import COMBO_KEY_FIELDS, combo_dir, combo_has_results, combo_key_from_dict, iter_output_csvs
@@ -38,12 +39,12 @@ LX = 320
 DELTA_F = 0.0
 K = 1.0
 
-EPS_BOUNDS = (-2.5, -1.4)
+EPS_MIN = -2.3
+EPS_MAX = -1.5
 EPS_STEP = 0.1
-DMU_BOUNDS = (-1.0, 6.0)
-DMU_STEP = 0.5
-N_LHS = 150
-LHS_SEED = 42
+DMU_MIN = 2.0
+DMU_MAX = 5.0
+DMU_STEP = 0.25
 
 MU_WINDOW = 0.1
 N_MU_POINTS = 10
@@ -76,31 +77,18 @@ MANAGE_FIELDS = COMBO_KEY_FIELDS + [
 ]
 
 
-def snap_to_grid(value: float, lo: float, step: float) -> float:
-    idx = round((value - lo) / step)
-    return round(lo + idx * step, 6)
+def frange(lo: float, hi: float, step: float) -> list[float]:
+    """Inclusive float range [lo, hi] at fixed step (rounded to 6 decimals)."""
+    n = int(round((hi - lo) / step)) + 1
+    return [round(lo + i * step, 6) for i in range(n)]
 
 
-def lhs_outer_combos(n: int = N_LHS, seed: int = LHS_SEED) -> list[tuple[float, float]]:
-    """Draw LHS samples in (epsilon, delta_mu), snap to grid, return unique pairs."""
-    sampler = qmc.LatinHypercube(d=2, seed=seed)
-    unit = sampler.random(n=n)
-    eps_lo, eps_hi = EPS_BOUNDS
-    dmu_lo, dmu_hi = DMU_BOUNDS
-    scaled = qmc.scale(
-        unit,
-        [eps_lo, dmu_lo],
-        [eps_hi, dmu_hi],
-    )
-    seen: set[tuple[float, float]] = set()
+def grid_outer_combos() -> list[tuple[float, float]]:
+    """Full Cartesian grid over (epsilon, delta_mu)."""
     pairs: list[tuple[float, float]] = []
-    for eps_raw, dmu_raw in scaled:
-        eps = snap_to_grid(float(eps_raw), eps_lo, EPS_STEP)
-        dmu = snap_to_grid(float(dmu_raw), dmu_lo, DMU_STEP)
-        key = (eps, dmu)
-        if key not in seen:
-            seen.add(key)
-            pairs.append(key)
+    for epsilon in frange(EPS_MIN, EPS_MAX, EPS_STEP):
+        for delta_mu in frange(DMU_MIN, DMU_MAX, DMU_STEP):
+            pairs.append((epsilon, delta_mu))
     return pairs
 
 
@@ -144,11 +132,32 @@ def read_manage(manage_path: str) -> list[dict]:
 
 
 def write_manage(manage_path: str, rows: list[dict]) -> None:
+    """Rewrite manage.csv from the full row list (caller must preserve existing rows)."""
+    if os.path.isfile(manage_path):
+        prior_count = len(read_manage(manage_path))
+        if len(rows) < prior_count:
+            raise RuntimeError(
+                f"Refusing to write {manage_path}: {len(rows)} rows would replace "
+                f"{prior_count} existing rows. manage.csv rows are never deleted."
+            )
+
     with open(manage_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=MANAGE_FIELDS)
         writer.writeheader()
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in MANAGE_FIELDS})
+
+
+def append_manage_rows(manage_path: str, new_rows: list[dict]) -> int:
+    """Append only new combo rows; never modify or drop existing manage.csv rows."""
+    existing_rows = read_manage(manage_path)
+    existing_keys = {combo_key_from_dict(row) for row in existing_rows}
+    to_add = [
+        row for row in new_rows
+        if combo_key_from_dict(row) not in existing_keys
+    ]
+    write_manage(manage_path, existing_rows + to_add)
+    return len(to_add)
 
 
 def combo_from_json_path(json_path: str) -> tuple | None:
@@ -168,13 +177,15 @@ def collect_active_combo_keys(
     samples_dir: str,
     results_dir: str,
 ) -> dict[tuple, str]:
-    """Return combo_key -> reason for combos already submitted/running/done."""
+    """Return combo_key -> reason for combos already known to the campaign.
+
+    Every manage.csv row counts as active (append-only ledger; rows are never deleted).
+    """
     active: dict[tuple, str] = {}
 
     for row in read_manage(manage_path):
-        if any(row.get(f, "") for f in ("isSubmitted", "isRan", "isAnalyzed")):
-            key = combo_key_from_dict(row)
-            active.setdefault(key, "manage")
+        key = combo_key_from_dict(row)
+        active.setdefault(key, "manage")
 
     manifest = read_manifest(manifest_path)
     for json_path in manifest.get("pending", []) + list(manifest.get("in_flight", {}).values()):
@@ -214,8 +225,14 @@ def collect_active_combo_keys(
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    outer_pairs = lhs_outer_combos()
-    print(f"LHS: {N_LHS} draws -> {len(outer_pairs)} unique snapped (epsilon, delta_mu) pairs")
+    outer_pairs = grid_outer_combos()
+    n_eps = len(frange(EPS_MIN, EPS_MAX, EPS_STEP))
+    n_dmu = len(frange(DMU_MIN, DMU_MAX, DMU_STEP))
+    print(
+        f"Grid: epsilon [{EPS_MIN}, {EPS_MAX}] step {EPS_STEP} ({n_eps} pts) x "
+        f"delta_mu [{DMU_MIN}, {DMU_MAX}] step {DMU_STEP} ({n_dmu} pts) "
+        f"-> {len(outer_pairs)} (epsilon, delta_mu) pairs"
+    )
 
     active_combos = collect_active_combo_keys(
         MANAGE_CSV, MANIFEST_PATH, OUTPUT_DIR, RESULTS_DIR,
@@ -227,6 +244,7 @@ def main():
     new_manage_rows: list[dict] = []
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     n_files = 0
+    n_existing_json = 0
     skipped_flex = 0
     skipped_dedup = 0
 
@@ -292,18 +310,22 @@ def main():
             }
             filename = f"{SCHEME}_{outer_tag}_Ly{LY}_mu{idx:02d}.json"
             filepath = os.path.join(OUTPUT_DIR, filename)
-            with open(filepath, "w") as f:
-                json.dump(job, f, indent=2)
+            if os.path.isfile(filepath):
+                n_existing_json += 1
+            else:
+                with open(filepath, "w") as f:
+                    json.dump(job, f, indent=2)
+                n_files += 1
             pending_paths.append(filepath)
-            n_files += 1
 
     merge_pending(pending_paths, path=MANIFEST_PATH)
-    write_manage(MANAGE_CSV, existing_rows + new_manage_rows)
+    n_added = append_manage_rows(MANAGE_CSV, new_manage_rows)
 
-    print(f"\nWrote {n_files} JSON files to '{OUTPUT_DIR}/'")
+    print(f"\nWrote {n_files} new JSON files to '{OUTPUT_DIR}/' "
+          f"({n_existing_json} already existed, left unchanged)")
     print(f"Merged {len(pending_paths)} jobs into '{MANIFEST_PATH}'")
-    print(f"Added {len(new_manage_rows)} new rows to '{MANAGE_CSV}' "
-          f"({len(existing_rows)} existing)")
+    print(f"Added {n_added} new rows to '{MANAGE_CSV}' "
+          f"({len(existing_rows)} existing, unchanged)")
     print(f"Skipped {skipped_dedup} dedup, {skipped_flex} FLEX filter")
 
 
