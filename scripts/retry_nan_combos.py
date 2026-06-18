@@ -41,11 +41,13 @@ import numpy as np
 
 from analyzer import (
     COMBO_KEY_FIELDS,
+    MANAGE_CSV,
     MAX_ADDITIONAL_REQUESTS,
     N_INITIAL_MU_POINTS,
     N_REFINEMENT_POINTS,
     PHI_ABS_TOL,
     PHI_NEIGHBOR_SIGMA_K,
+    SAMPLES_DIR,
     analyze_combo,
     build_curves,
     combo_dir_name,
@@ -58,7 +60,6 @@ from analyzer import (
     write_manage,
 )
 from combo_paths import RESULTS_DIR, combo_key_from_dict
-from generate_samples import MANAGE_CSV, SAMPLES_DIR
 from queue_manifest import read_manifest
 
 
