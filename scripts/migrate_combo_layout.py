@@ -158,20 +158,29 @@ def main() -> int:
     if args.replot:
         import matplotlib
         matplotlib.use("Agg")
-        from analyzer import build_curves, discover_combo_results, plot_combo
+        from analyzer import build_curves, discover_combo_results, mu_coex_for_plot, plot_combo, read_manage
 
         print("\n=== regenerating phi/psi artifacts ===")
+        rows = read_manage(args.manage)
         grouped = discover_combo_results(args.results)
         for combo_key, data in sorted(grouped.items()):
             job = data["job"]
             tag = combo_dir_name(job)
             mu_vals, phi_vals, phi_errs, psi_vals, psi_errs = build_curves(data["points"])
+            combo = {f: job[f] for f in COMBO_KEY_FIELDS}
+            idx = next(
+                (i for i, row in enumerate(rows)
+                 if all(str(row[f]) == str(combo[f]) for f in COMBO_KEY_FIELDS)),
+                None,
+            )
+            manage_row = rows[idx] if idx is not None else None
+            mu_coex_sim = mu_coex_for_plot(mu_vals, psi_vals, manage_row)
             if args.dry_run:
-                print(f"would replot {tag} ({len(mu_vals)} points)")
+                print(f"would replot {tag} ({len(mu_vals)} points, mu_coex={mu_coex_sim})")
             else:
                 plot_combo(
                     combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
-                    results_dir=args.results,
+                    mu_coex_sim=mu_coex_sim, results_dir=args.results,
                 )
 
     if args.dry_run:

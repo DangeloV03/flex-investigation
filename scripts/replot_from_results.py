@@ -24,6 +24,7 @@ from analyzer import (
     build_curves,
     discover_combo_results,
     find_manage_row,
+    mu_coex_for_plot,
     plot_combo,
     read_manage,
 )
@@ -46,16 +47,10 @@ def main():
         tag = combo_dir_name(job)
         mu_vals, phi_vals, phi_errs, psi_vals, psi_errs = build_curves(data["points"])
 
-        mu_coex_sim = None
         combo = {f: job[f] for f in COMBO_KEY_FIELDS}
         idx = find_manage_row(rows, combo)
-        if idx is not None:
-            raw = rows[idx].get("mu_coex_SIM", "")
-            if str(raw).strip() and str(raw).strip().lower() != "nan":
-                try:
-                    mu_coex_sim = float(raw)
-                except ValueError:
-                    pass
+        manage_row = rows[idx] if idx is not None else None
+        mu_coex_sim = mu_coex_for_plot(mu_vals, psi_vals, manage_row)
 
         out = os.path.join(args.results, tag, "phi_psi.png")
         print(f"{'would plot' if args.dry_run else 'plotting'}: {out}  ({len(mu_vals)} mu points)")

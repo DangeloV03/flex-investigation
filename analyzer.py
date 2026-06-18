@@ -179,6 +179,29 @@ def _plot_mu_coex(mu_coex_sim) -> bool:
     return True
 
 
+def mu_coex_for_plot(
+    mu_vals: np.ndarray,
+    psi_vals: np.ndarray,
+    manage_row: dict | None = None,
+) -> float | None:
+    """Pick mu_coex to annotate plots: manage.csv value, else argmin(psi).
+
+    Returns None when manage.csv explicitly records mu_coex_SIM=NaN (unstable).
+    """
+    if manage_row is not None:
+        raw = str(manage_row.get("mu_coex_SIM", "")).strip()
+        if raw.lower() == "nan":
+            return None
+        if raw:
+            try:
+                return float(raw)
+            except ValueError:
+                pass
+    if len(mu_vals) == 0:
+        return None
+    return float(mu_vals[int(np.argmin(psi_vals))])
+
+
 def plot_combo(combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
                mu_coex_sim=None, results_dir=RESULTS_DIR):
     job = dict(zip(COMBO_KEY_FIELDS, combo_key))
