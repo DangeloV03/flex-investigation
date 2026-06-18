@@ -35,7 +35,7 @@ from generate_samples import (
     read_manage,
     write_manage,
 )
-from json_runner import default_outdir
+from combo_paths import combo_dir, mu_dir, combo_has_results
 from queue_manifest import merge_pending, read_manifest
 
 MANAGE_CSV = "manage.csv"
@@ -51,9 +51,19 @@ def count_completed_mus(row: dict) -> tuple[int, set[float]]:
     completed: set[float] = set()
     for mu in mu_sweep(mu_coex_flex):
         params = {**combo, "mu": mu}
-        csv_path = os.path.join(default_outdir(params), "output.csv")
+        csv_path = os.path.join(mu_dir(params), "output.csv")
         if os.path.isfile(csv_path):
             completed.add(mu)
+        else:
+            # Also accept legacy layout paths during migration
+            from combo_paths import legacy_combo_dir_names, mu_dir_name
+            for legacy in legacy_combo_dir_names(combo):
+                legacy_csv = os.path.join(
+                    RESULTS_DIR, legacy, mu_dir_name(mu), "output.csv",
+                )
+                if os.path.isfile(legacy_csv):
+                    completed.add(mu)
+                    break
     return len(completed), completed
 
 
@@ -155,11 +165,15 @@ def main():
             print(f"  reset isRan (was {row['isRan']!r}, but 0 results)")
             if not args.dry_run:
                 row["isRan"] = ""
+                row["combo_path"] = combo_dir(combo)
 
         for mu in missing:
             path = make_job_json(combo, mu, mu_coex_flex, args.samples)
             print(f"  + {path}  mu={mu:.6f}")
             pending_paths.append(path)
+
+        if not args.dry_run and not row.get("combo_path"):
+            row["combo_path"] = combo_dir(combo)
 
     if not pending_paths:
         print("Nothing to enqueue.")
@@ -172,7 +186,7 @@ def main():
         return
 
     merge_pending(pending_paths, path=args.manifest)
-    if args.reset_ran:
+    if args.reset_ran or any(not r.get("combo_path") for r in rows):
         write_manage(args.manage, rows)
     print(f"Merged into {args.manifest}. Restart run_all if it exited.")
 

@@ -24,6 +24,7 @@ import pandas as pd
 from scipy.stats import qmc
 
 from flex_coex_chemical_potential_prediction import coex_chemical_potential
+from combo_paths import COMBO_KEY_FIELDS, combo_dir, combo_has_results, combo_key_from_dict
 from queue_manifest import merge_pending, read_manifest
 
 # ---------------------------------------------------------------------------
@@ -62,7 +63,7 @@ MANAGE_CSV = "manage.csv"
 MANIFEST_PATH = "run_all_queue.json"
 RESULTS_DIR = "results"
 
-COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
+COMBO_KEY_FIELDS = COMBO_KEY_FIELDS  # re-export
 MANAGE_FIELDS = COMBO_KEY_FIELDS + [
     "mu_coex_FLEX",
     "isSubmitted",
@@ -71,6 +72,7 @@ MANAGE_FIELDS = COMBO_KEY_FIELDS + [
     "mu_coex_SIM",
     "mu_coex_SIM_error",
     "RequestForAdditionalData",
+    "combo_path",
 ]
 
 
@@ -100,10 +102,6 @@ def lhs_outer_combos(n: int = N_LHS, seed: int = LHS_SEED) -> list[tuple[float, 
             seen.add(key)
             pairs.append(key)
     return pairs
-
-
-def combo_key_from_dict(combo: dict) -> tuple:
-    return tuple(str(combo[f]) for f in COMBO_KEY_FIELDS)
 
 
 def combo_dict(epsilon: float, delta_mu: float) -> dict:
@@ -141,6 +139,7 @@ def read_manage(manage_path: str) -> list[dict]:
         rows = list(csv.DictReader(f))
     for row in rows:
         row.setdefault("mu_coex_SIM_error", "")
+        row.setdefault("combo_path", "")
     return rows
 
 
@@ -203,6 +202,12 @@ def collect_active_combo_keys(
             active.setdefault(key, "results")
         except Exception:
             continue
+
+    for row in read_manage(manage_path):
+        combo = {f: row[f] for f in COMBO_KEY_FIELDS}
+        if combo_has_results(combo, results_dir):
+            key = combo_key_from_dict(combo)
+            active.setdefault(key, "results")
 
     return active
 
@@ -274,6 +279,7 @@ def main():
                 "mu_coex_SIM": "",
                 "mu_coex_SIM_error": "",
                 "RequestForAdditionalData": 0,
+                "combo_path": combo_dir(combo),
             })
             existing_keys.add(key)
 

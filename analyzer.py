@@ -14,8 +14,8 @@ Long-running watcher that:
      Follow-up requests are only issued after new results arrive; duplicate
      queue submissions do not consume the request budget.
   5. Finds min(psi) -> mu_coex_SIM.
-  6. Saves phi/psi plots per combo.
-  7. Updates manage.csv with mu_coex_SIM, isAnalyzed, RequestForAdditionalData.
+  6. Saves phi/psi plot and CSV inside each combo folder under results/.
+  7. Updates manage.csv with mu_coex_SIM, isAnalyzed, combo_path, RequestForAdditionalData.
 
 Usage:
     python analyzer.py [--results results] [--manage manage.csv] [--interval 10]
@@ -25,7 +25,6 @@ import argparse
 import csv
 import json
 import os
-import pathlib
 import sys
 import time
 
@@ -33,11 +32,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from combo_paths import (
+    COMBO_KEY_FIELDS,
+    RESULTS_DIR,
+    combo_dir,
+    combo_dir_name,
+    discover_combo_results,
+    phi_psi_png_path,
+    write_phi_psi_csv,
+)
 from queue_manifest import prepend_pending
 
 MANAGE_CSV = "manage.csv"
-RESULTS_DIR = "results"
-PLOTS_DIR = "plots"
 SAMPLES_DIR = "samples"
 POLL_INTERVAL = 10.0  # seconds
 MAX_ADDITIONAL_REQUESTS = 5
@@ -45,7 +51,6 @@ N_INITIAL_MU_POINTS = 10  # must match generate_samples.N_MU_POINTS
 N_REFINEMENT_POINTS = 10
 PHI_NEIGHBOR_SIGMA_K = 2.0  # |phi| <= k * max(phi_err, PHI_ABS_TOL) counts as "close"
 PHI_ABS_TOL = 0.05
-COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
 MANAGE_FIELDS = COMBO_KEY_FIELDS + [
     "mu_coex_FLEX",
     "isSubmitted",
@@ -54,6 +59,7 @@ MANAGE_FIELDS = COMBO_KEY_FIELDS + [
     "mu_coex_SIM",
     "mu_coex_SIM_error",
     "RequestForAdditionalData",
+    "combo_path",
 ]
 
 
@@ -65,7 +71,11 @@ def read_manage(manage_path: str) -> list[dict]:
     if not os.path.isfile(manage_path):
         return []
     with open(manage_path, "r", newline="") as f:
-        return list(csv.DictReader(f))
+        rows = list(csv.DictReader(f))
+    for row in rows:
+        row.setdefault("mu_coex_SIM_error", "")
+        row.setdefault("combo_path", "")
+    return rows
 
 
 def write_manage(manage_path: str, rows: list[dict]):
@@ -98,66 +108,6 @@ def update_manage_field(manage_path: str, combo: dict, updates: dict):
             continue
         rows[idx][field] = value
     write_manage(manage_path, rows)
-
-
-# ---------------------------------------------------------------------------
-# Results discovery
-# ---------------------------------------------------------------------------
-
-def discover_combo_results(results_dir: str, samples_dir: str = None) -> dict:
-    """Scan results/ and group output.csv files by combo key.
-
-    Reads all params including run_settings directly from output.csv columns.
-    No JSON files needed.
-
-    Returns: { combo_key_tuple: {"job": job, "points": [(mu, df), ...]} }
-    """
-    grouped = {}
-    results_path = pathlib.Path(results_dir)
-
-    for csv_path in sorted(results_path.glob("*/*/output.csv")):
-        try:
-            df = pd.read_csv(csv_path)
-            if df.empty or "mu" not in df.columns:
-                continue
-
-            required = COMBO_KEY_FIELDS + ["mu"]
-            if not all(col in df.columns for col in required):
-                continue
-
-            mu = float(df["mu"].iloc[0])
-            if df["mu"].nunique() != 1:
-                continue
-
-            # Build job dict from CSV columns
-            job = {f: df[f].iloc[0].item() if hasattr(df[f].iloc[0], "item")
-                   else df[f].iloc[0] for f in COMBO_KEY_FIELDS}
-            job["mu"] = mu
-
-            # Reconstruct run_settings from CSV columns if present
-            run_settings_fields = ["beta", "num_parallel_runs", "eq_time",
-                                   "prod_time", "seed_base"]
-            if all(col in df.columns for col in run_settings_fields):
-                job["run_settings"] = {
-                    f: df[f].iloc[0].item() if hasattr(df[f].iloc[0], "item")
-                    else df[f].iloc[0]
-                    for f in run_settings_fields
-                }
-                job["run_settings"]["initial_condition"] = "slab_half_active_half_empty"
-            else:
-                job["run_settings"] = None
-
-            combo_key = tuple(str(job[f]) for f in COMBO_KEY_FIELDS)
-
-        except Exception as e:
-            print(f"[analyzer] Skipping {csv_path}: {e}", file=sys.stderr)
-            continue
-
-        if combo_key not in grouped:
-            grouped[combo_key] = {"job": job, "points": []}
-        grouped[combo_key]["points"].append((mu, df))
-
-    return grouped
 
 
 # ---------------------------------------------------------------------------
@@ -219,23 +169,6 @@ def build_curves(points: list[tuple]) -> tuple:
 # Plotting
 # ---------------------------------------------------------------------------
 
-def dmu_dir_tag(delta_mu: float) -> str:
-    body = str(abs(float(delta_mu))).replace(".", "p")
-    if float(delta_mu) < 0:
-        return f"dm-{body}"
-    return f"dm{body}"
-
-
-def combo_dir_tag(job: dict) -> str:
-    """Human-readable tag for a combo (matches json_runner results dirname)."""
-    epsilon = job["epsilon"]
-    scheme = job["scheme"]
-    delta_mu = job["delta_mu"]
-    Ly = job["Ly"]
-    eps_tag = str(abs(float(epsilon))).replace(".", "")
-    return f"{scheme}_eps{eps_tag}_{dmu_dir_tag(delta_mu)}_Ly{Ly}"
-
-
 def _plot_mu_coex(mu_coex_sim) -> bool:
     if mu_coex_sim is None:
         return False
@@ -247,10 +180,15 @@ def _plot_mu_coex(mu_coex_sim) -> bool:
 
 
 def plot_combo(combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
-               mu_coex_sim=None, plots_dir=PLOTS_DIR):
-    os.makedirs(plots_dir, exist_ok=True)
+               mu_coex_sim=None, results_dir=RESULTS_DIR):
     job = dict(zip(COMBO_KEY_FIELDS, combo_key))
-    tag = combo_dir_tag(job)
+    tag = combo_dir_name(job)
+    plot_path = phi_psi_png_path(job, results_dir)
+    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+
+    write_phi_psi_csv(
+        job, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs, base=results_dir,
+    )
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
@@ -280,7 +218,6 @@ def plot_combo(combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
     ax2.grid(True, linestyle="--", alpha=0.4)
 
     fig.tight_layout()
-    plot_path = os.path.join(plots_dir, f"{tag}_phi_psi.png")
     fig.savefig(plot_path, dpi=150)
     plt.close(fig)
     print(f"[analyzer] Plot saved: {plot_path}")
@@ -395,11 +332,11 @@ def finalize_combo(
     psi_vals: np.ndarray,
     psi_errs: np.ndarray,
     manage_path: str,
-    plots_dir: str,
+    results_dir: str,
     n_requests: int,
     reason: str = "",
 ):
-    """Set mu_coex_SIM, save plot, and mark combo analyzed."""
+    """Set mu_coex_SIM, save plot/csv, and mark combo analyzed."""
     min_idx = int(np.argmin(psi_vals))
     mu_coex_sim = float(mu_vals[min_idx])
     sim_error = compute_mu_coex_sim_error(mu_vals, phi_errs, psi_vals)
@@ -409,13 +346,14 @@ def finalize_combo(
 
     plot_combo(
         combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
-        mu_coex_sim=mu_coex_sim, plots_dir=plots_dir,
+        mu_coex_sim=mu_coex_sim, results_dir=results_dir,
     )
     update_manage_field(manage_path, combo, {
         "mu_coex_SIM": mu_coex_sim,
         "mu_coex_SIM_error": sim_error,
         "isAnalyzed": time.strftime("%Y-%m-%d %H:%M:%S"),
         "RequestForAdditionalData": n_requests,
+        "combo_path": combo_dir(combo, results_dir),
     })
 
 
@@ -429,7 +367,7 @@ def finalize_unstable(
     psi_vals: np.ndarray,
     psi_errs: np.ndarray,
     manage_path: str,
-    plots_dir: str,
+    results_dir: str,
     n_requests: int,
     reason: str = "",
 ):
@@ -438,13 +376,14 @@ def finalize_unstable(
     print(f"[analyzer] {tag}: unstable, mu_coex_SIM=NaN{suffix}")
     plot_combo(
         combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
-        mu_coex_sim=None, plots_dir=plots_dir,
+        mu_coex_sim=None, results_dir=results_dir,
     )
     update_manage_field(manage_path, combo, {
         "mu_coex_SIM": "NaN",
         "mu_coex_SIM_error": "NaN",
         "isAnalyzed": time.strftime("%Y-%m-%d %H:%M:%S"),
         "RequestForAdditionalData": n_requests,
+        "combo_path": combo_dir(combo, results_dir),
     })
 
 
@@ -488,13 +427,13 @@ def _request_more_data(
 
 
 def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
-                  plots_dir: str, samples_dir: str, manifest_path: str,
+                  results_dir: str, samples_dir: str, manifest_path: str,
                   pending_points: dict[tuple, int]):
     job = data["job"]
     points = data["points"]
 
     combo = {f: job[f] for f in COMBO_KEY_FIELDS}
-    tag = combo_dir_tag(job)
+    tag = combo_dir_name(job)
 
     mu_vals, phi_vals, phi_errs, psi_vals, psi_errs = build_curves(points)
     n_points = len(mu_vals)
@@ -544,7 +483,7 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
         if is_coex_resolved(mu_vals, phi_vals, phi_errs, psi_vals):
             finalize_combo(
                 combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-                psi_vals, psi_errs, manage_path, plots_dir, n_requests,
+                psi_vals, psi_errs, manage_path, results_dir, n_requests,
                 reason="neighbors resolved",
             )
             return
@@ -585,13 +524,13 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
         ):
             finalize_unstable(
                 combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-                psi_vals, psi_errs, manage_path, plots_dir, n_requests,
+                psi_vals, psi_errs, manage_path, results_dir, n_requests,
                 reason="max requests without resolution",
             )
         else:
             finalize_combo(
                 combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-                psi_vals, psi_errs, manage_path, plots_dir, n_requests,
+                psi_vals, psi_errs, manage_path, results_dir, n_requests,
                 reason="bracket filled or max requests",
             )
 
@@ -600,7 +539,7 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
         if n_requests >= MAX_ADDITIONAL_REQUESTS:
             finalize_unstable(
                 combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-                psi_vals, psi_errs, manage_path, plots_dir, n_requests,
+                psi_vals, psi_errs, manage_path, results_dir, n_requests,
                 reason="max requests, no sign change",
             )
             return
@@ -651,7 +590,6 @@ def main():
     )
     parser.add_argument("--results", default=RESULTS_DIR)
     parser.add_argument("--manage", default=MANAGE_CSV)
-    parser.add_argument("--plots", default=PLOTS_DIR)
     parser.add_argument("--samples", default=SAMPLES_DIR)
     parser.add_argument("--interval", type=float, default=POLL_INTERVAL)
     parser.add_argument("--manifest", default="run_all_queue.json",
@@ -681,7 +619,7 @@ def main():
                 continue
 
             analyze_combo(
-                combo_key, data, args.manage, args.plots, args.samples, args.manifest,
+                combo_key, data, args.manage, args.results, args.samples, args.manifest,
                 pending_points,
             )
 

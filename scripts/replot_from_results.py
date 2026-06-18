@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 """
-Regenerate phi/psi plots from existing results/ data.
-
-The live analyzer skips combos already marked isAnalyzed in manage.csv, so
-plots are not recreated after plots/ is deleted. This script ignores that
-gate and plots every combo that has output.csv data.
+Regenerate phi/psi plots and CSV from existing results/ data.
 
 Usage:
     python scripts/replot_from_results.py --dry-run
@@ -23,23 +19,20 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-from analyzer import (  # noqa: E402
+from analyzer import (
     COMBO_KEY_FIELDS,
-    PLOTS_DIR,
-    RESULTS_DIR,
     build_curves,
-    combo_dir_tag,
     discover_combo_results,
     find_manage_row,
     plot_combo,
     read_manage,
 )
+from combo_paths import RESULTS_DIR, combo_dir_name
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Replot phi/psi from results/")
+    parser = argparse.ArgumentParser(description="Replot phi/psi into combo folders")
     parser.add_argument("--results", default=RESULTS_DIR)
-    parser.add_argument("--plots", default=PLOTS_DIR)
     parser.add_argument("--manage", default="manage.csv")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -50,7 +43,7 @@ def main():
 
     for combo_key, data in sorted(grouped.items()):
         job = data["job"]
-        tag = combo_dir_tag(job)
+        tag = combo_dir_name(job)
         mu_vals, phi_vals, phi_errs, psi_vals, psi_errs = build_curves(data["points"])
 
         mu_coex_sim = None
@@ -64,7 +57,7 @@ def main():
                 except ValueError:
                     pass
 
-        out = os.path.join(args.plots, f"{tag}_phi_psi.png")
+        out = os.path.join(args.results, tag, "phi_psi.png")
         print(f"{'would plot' if args.dry_run else 'plotting'}: {out}  ({len(mu_vals)} mu points)")
         if not args.dry_run:
             plot_combo(
@@ -75,11 +68,11 @@ def main():
                 psi_vals,
                 psi_errs,
                 mu_coex_sim=mu_coex_sim,
-                plots_dir=args.plots,
+                results_dir=args.results,
             )
         n += 1
 
-    print(f"\n{'Would write' if args.dry_run else 'Wrote'} {n} plot(s) to {args.plots}/")
+    print(f"\n{'Would write' if args.dry_run else 'Wrote'} artifacts for {n} combo(s)")
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ Outputs (in a per-run output directory):
   - output.csv: id, rho_active, rho_inert, rho_empty, time
 
 Usage:
-    python json_runner.py samples/homo_Ly16_mu00.json [--outdir results/homo_Ly16_mu00]
+    python json_runner.py samples/homo_Ly16_mu00.json [--outdir results/.../mu...]
 """
 
 import argparse
@@ -29,6 +29,7 @@ import multiprocessing as mp
 
 import numpy as np
 
+from combo_paths import COMBO_KEY_FIELDS, combo_dir, mu_dir
 from lattice_gas.markov_chain import HeteroChain
 from lattice_gas.boundary_condition import Periodic
 from lattice_gas.ending_criterion import Time
@@ -36,25 +37,6 @@ from lattice_gas.simulate import simulate
 from lattice_gas import load
 
 EMPTY, INERT, BONDING = 0, 1, 2
-
-
-def dmu_dir_tag(delta_mu: float) -> str:
-    body = str(abs(float(delta_mu))).replace(".", "p")
-    if float(delta_mu) < 0:
-        return f"dm-{body}"
-    return f"dm{body}"
-
-
-def default_outdir(params: dict) -> str:
-    scheme = params["scheme"]
-    epsilon = params["epsilon"]
-    delta_mu = params["delta_mu"]
-    Ly = params["Ly"]
-    mu = params["mu"]
-    eps_tag = str(abs(float(epsilon))).replace(".", "")
-    mu_tag = f"mu{round(abs(mu) * 1_000_000):07d}"
-    combo_dir = f"{scheme}_eps{eps_tag}_{dmu_dir_tag(delta_mu)}_Ly{Ly}"
-    return os.path.join("results", combo_dir, mu_tag)
 
 
 def build_initial_state(Lx: int, Ly: int) -> np.ndarray:
@@ -112,15 +94,12 @@ def run_replica(args):
     boundary = Periodic()
     state = build_initial_state(Lx, Ly)
 
-    # scratch dir reused/overwritten for every simulate() call
     scratch_dir = os.path.join(outdir, f"_scratch_{replica_id}")
 
-    # --- Equilibration (single run, discarded) ---
     simulate(state, boundary, chain, [], [Time(eq_time)], seed, scratch_dir)
     state = load.final_state(scratch_dir)
     print(f"[json_runner] replica={replica_id} equilibration done", flush=True)
 
-    # --- Production, chunked for time-averaged densities ---
     chunk_time = prod_time / n_chunks
     rho_active_samples = []
     rho_inert_samples = []
@@ -147,10 +126,8 @@ def run_replica(args):
     rho_inert = float(np.mean(rho_inert_samples))
     rho_empty = float(np.mean(rho_empty_samples))
 
-    # Save final lattice at top level of outdir, named by persistent run_id
     np.save(os.path.join(outdir, f"final_lattice_{run_id}.npy"), state)
 
-    # Clean up scratch simulation dir
     shutil.rmtree(scratch_dir, ignore_errors=True)
 
     return {
@@ -205,28 +182,32 @@ def append_to_csv(csv_path: str, rows: list[dict], params: dict):
             writer.writerow(row_out)
 
 
-COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
-
-
 def update_manage_csv(manage_path: str, params: dict) -> None:
-    """Set isRan on the matching manage.csv row if that field is still empty."""
+    """Set isRan and combo_path on the matching manage.csv row when still empty."""
     if not os.path.isfile(manage_path):
         return
 
     with open(manage_path, "r", newline="") as f:
         reader = csv.DictReader(f)
-        fieldnames = reader.fieldnames
+        fieldnames = list(reader.fieldnames or [])
         rows = list(reader)
 
     if not fieldnames:
         return
 
+    if "combo_path" not in fieldnames:
+        fieldnames.append("combo_path")
+
+    combo_path = combo_dir(params)
     updated = False
     for row in rows:
-        if row.get("isRan", ""):
+        if row.get("isRan", "") and row.get("combo_path", ""):
             continue
         if all(str(row[field]) == str(params[field]) for field in COMBO_KEY_FIELDS):
-            row["isRan"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            if not row.get("isRan", ""):
+                row["isRan"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            if not row.get("combo_path", ""):
+                row["combo_path"] = combo_path
             updated = True
             break
 
@@ -234,7 +215,7 @@ def update_manage_csv(manage_path: str, params: dict) -> None:
         return
 
     with open(manage_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -245,7 +226,7 @@ def main():
     parser.add_argument(
         "--outdir",
         default=None,
-        help="Output directory (default: results/<job_basename>)",
+        help="Output directory (default: results/<combo>/mu...)",
     )
     args = parser.parse_args()
 
@@ -259,8 +240,9 @@ def main():
     if args.outdir is not None:
         outdir = args.outdir
     else:
-        outdir = default_outdir(params)
+        outdir = mu_dir(params)
     os.makedirs(outdir, exist_ok=True)
+    os.makedirs(combo_dir(params), exist_ok=True)
 
     eps = params["epsilon"]
     dmu = params["delta_mu"]
@@ -279,7 +261,7 @@ def main():
     tasks = []
     for replica_id in range(num_parallel_runs):
         run_id = next_id + replica_id
-        seed = seed_base + run_id * 2  # +1 used internally for prod phase
+        seed = seed_base + run_id * 2
         tasks.append((replica_id, run_id, seed, params, run_settings, outdir))
 
     with mp.Pool(processes=num_parallel_runs) as pool:

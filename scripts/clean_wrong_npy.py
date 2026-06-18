@@ -22,7 +22,10 @@ import shutil
 import sys
 from pathlib import Path
 
-COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from combo_paths import COMBO_KEY_FIELDS, iter_output_csvs
+
 MANAGE_FIELDS = COMBO_KEY_FIELDS + [
     "mu_coex_FLEX",
     "isSubmitted",
@@ -31,6 +34,7 @@ MANAGE_FIELDS = COMBO_KEY_FIELDS + [
     "mu_coex_SIM",
     "mu_coex_SIM_error",
     "RequestForAdditionalData",
+    "combo_path",
 ]
 
 
@@ -73,7 +77,7 @@ def is_target_row(row: dict, mode: str) -> bool:
 def find_result_dirs(results_dir: Path, combo_key: tuple[str, ...]) -> list[Path]:
     combo = dict(zip(COMBO_KEY_FIELDS, combo_key))
     dirs: list[Path] = []
-    for csv_path in sorted(results_dir.glob("*/*/output.csv")):
+    for csv_path in iter_output_csvs(str(results_dir)):
         try:
             with open(csv_path, newline="") as f:
                 row = next(csv.DictReader(f), None)
