@@ -38,6 +38,25 @@ from lattice_gas import load
 EMPTY, INERT, BONDING = 0, 1, 2
 
 
+def dmu_dir_tag(delta_mu: float) -> str:
+    body = str(abs(float(delta_mu))).replace(".", "p")
+    if float(delta_mu) < 0:
+        return f"dm-{body}"
+    return f"dm{body}"
+
+
+def default_outdir(params: dict) -> str:
+    scheme = params["scheme"]
+    epsilon = params["epsilon"]
+    delta_mu = params["delta_mu"]
+    Ly = params["Ly"]
+    mu = params["mu"]
+    eps_tag = str(abs(float(epsilon))).replace(".", "")
+    mu_tag = f"mu{round(abs(mu) * 1_000_000):07d}"
+    combo_dir = f"{scheme}_eps{eps_tag}_{dmu_dir_tag(delta_mu)}_Ly{Ly}"
+    return os.path.join("results", combo_dir, mu_tag)
+
+
 def build_initial_state(Lx: int, Ly: int) -> np.ndarray:
     """Slab initial condition: x < Lx/2 -> active (BONDING), rest -> empty."""
     state = np.zeros((Lx, Ly), dtype=np.uint32)
@@ -189,9 +208,8 @@ def append_to_csv(csv_path: str, rows: list[dict], params: dict):
 COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
 
 
-def update_manage_csv(manage_path: str, params: dict):
-    """Mark isRan with a timestamp for the matching combo row, but only if
-    that cell is currently empty (first finisher wins)."""
+def update_manage_csv(manage_path: str, params: dict) -> None:
+    """Set isRan on the matching manage.csv row if that field is still empty."""
     if not os.path.isfile(manage_path):
         return
 
@@ -199,6 +217,9 @@ def update_manage_csv(manage_path: str, params: dict):
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames
         rows = list(reader)
+
+    if not fieldnames:
+        return
 
     updated = False
     for row in rows:
@@ -209,11 +230,13 @@ def update_manage_csv(manage_path: str, params: dict):
             updated = True
             break
 
-    if updated:
-        with open(manage_path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
+    if not updated:
+        return
+
+    with open(manage_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def main():
@@ -236,20 +259,17 @@ def main():
     if args.outdir is not None:
         outdir = args.outdir
     else:
-        scheme = params["scheme"]
-        epsilon = params["epsilon"]
-        Ly = params["Ly"]
-        mu = params["mu"]
-        eps_tag = str(abs(float(epsilon))).replace(".", "")
-        mu_tag = f"mu{round(abs(mu) * 1_000_000):07d}"
-        combo_dir = f"{scheme}_eps{eps_tag}_Ly{Ly}"
-        outdir = os.path.join("results", combo_dir, mu_tag)
+        outdir = default_outdir(params)
     os.makedirs(outdir, exist_ok=True)
 
+    eps = params["epsilon"]
+    dmu = params["delta_mu"]
+    mu_val = params["mu"]
+    ly = params["Ly"]
     print(
         f"[json_runner] START {args.json_path} "
-        f"eps={params['epsilon']} dmu={params['delta_mu']} mu={params['mu']} "
-        f"Ly={params['Ly']} replicas={num_parallel_runs} outdir={outdir}",
+        f"eps={eps} dmu={dmu} mu={mu_val} "
+        f"Ly={ly} replicas={num_parallel_runs} outdir={outdir}",
         flush=True,
     )
 
@@ -269,12 +289,17 @@ def main():
 
     append_to_csv(csv_path, results, params)
 
-    print(f"Wrote {len(results)} rows to {csv_path}", flush=True)
+    n_rows = len(results)
+    print(f"Wrote {n_rows} rows to {csv_path}", flush=True)
     for r in results:
+        rid = r["id"]
+        ra = r["rho_active"]
+        ri = r["rho_inert"]
+        re_ = r["rho_empty"]
+        t = r["time"]
         print(
-            f"  replica {r['id']}: rho_active={r['rho_active']:.4f} "
-            f"rho_inert={r['rho_inert']:.4f} rho_empty={r['rho_empty']:.4f} "
-            f"time={r['time']:.2f}",
+            f"  replica {rid}: rho_active={ra:.4f} rho_inert={ri:.4f} "
+            f"rho_empty={re_:.4f} time={t:.2f}",
             flush=True,
         )
 

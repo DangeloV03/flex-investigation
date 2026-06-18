@@ -219,6 +219,23 @@ def build_curves(points: list[tuple]) -> tuple:
 # Plotting
 # ---------------------------------------------------------------------------
 
+def dmu_dir_tag(delta_mu: float) -> str:
+    body = str(abs(float(delta_mu))).replace(".", "p")
+    if float(delta_mu) < 0:
+        return f"dm-{body}"
+    return f"dm{body}"
+
+
+def combo_dir_tag(job: dict) -> str:
+    """Human-readable tag for a combo (matches json_runner results dirname)."""
+    epsilon = job["epsilon"]
+    scheme = job["scheme"]
+    delta_mu = job["delta_mu"]
+    Ly = job["Ly"]
+    eps_tag = str(abs(float(epsilon))).replace(".", "")
+    return f"{scheme}_eps{eps_tag}_{dmu_dir_tag(delta_mu)}_Ly{Ly}"
+
+
 def _plot_mu_coex(mu_coex_sim) -> bool:
     if mu_coex_sim is None:
         return False
@@ -232,9 +249,8 @@ def _plot_mu_coex(mu_coex_sim) -> bool:
 def plot_combo(combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
                mu_coex_sim=None, plots_dir=PLOTS_DIR):
     os.makedirs(plots_dir, exist_ok=True)
-    epsilon, scheme, Ly = combo_key[0], combo_key[4], combo_key[6]
-    eps_tag = str(abs(float(epsilon))).replace(".", "")
-    tag = f"{scheme}_eps{eps_tag}_Ly{Ly}"
+    job = dict(zip(COMBO_KEY_FIELDS, combo_key))
+    tag = combo_dir_tag(job)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
@@ -478,9 +494,7 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
     points = data["points"]
 
     combo = {f: job[f] for f in COMBO_KEY_FIELDS}
-    epsilon, scheme, Ly = job["epsilon"], job["scheme"], job["Ly"]
-    eps_tag = str(abs(float(epsilon))).replace(".", "")
-    tag = f"{scheme}_eps{eps_tag}_Ly{Ly}"
+    tag = combo_dir_tag(job)
 
     mu_vals, phi_vals, phi_errs, psi_vals, psi_errs = build_curves(points)
     n_points = len(mu_vals)
