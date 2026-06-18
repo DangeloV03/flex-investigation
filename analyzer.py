@@ -7,15 +7,15 @@ Long-running watcher that:
   3. For each combo with enough data, computes phi(mu) and psi(mu).
   4. Waits for all N_INITIAL_MU_POINTS (10) initial mu jobs before analyzing.
   5. Checks for sign change in phi:
-       - Sign change found  -> refine: 10 new mu points between the bracketing pair,
-         unless nearest left/right neighbors of min(psi) already bracket phi~0.
-       - No sign change     -> extend: jump window in the direction needed.
+       - Sign change found  -> refine mu in the bracket until dense or budget exhausted.
+       - Neighbors of min(psi) near zero -> finalize (resolved).
+       - Interior min(psi) with sign change -> finalize with argmin(psi) once bracket
+         is dense or no new mu values remain (never NaN for this case).
+       - No sign change     -> extend mu window; NaN only if budget exhausted.
      Max MAX_ADDITIONAL_REQUESTS additional data requests per combo.
-     Follow-up requests are only issued after new results arrive; duplicate
-     queue submissions do not consume the request budget.
-  5. Finds min(psi) -> mu_coex_SIM.
-  6. Saves phi/psi plot and CSV inside each combo folder under results/.
-  7. Updates manage.csv with mu_coex_SIM, isAnalyzed, combo_path, RequestForAdditionalData.
+  6. Finds min(psi) -> mu_coex_SIM.
+  7. Saves phi/psi plot and CSV inside each combo folder under results/.
+  8. Updates manage.csv with mu_coex_SIM, isAnalyzed, combo_path, RequestForAdditionalData.
 
 Usage:
     python analyzer.py [--results results] [--manage manage.csv] [--interval 10]
@@ -333,13 +333,80 @@ def is_coex_resolved(
     )
 
 
+def psi_min_index(psi_vals: np.ndarray) -> int:
+    return int(np.argmin(psi_vals))
+
+
+def interior_psi_minimum(psi_vals: np.ndarray) -> bool:
+    """True when argmin(psi) is not at the edge of the sampled mu range."""
+    if len(psi_vals) < 3:
+        return False
+    min_idx = psi_min_index(psi_vals)
+    return 0 < min_idx < len(psi_vals) - 1
+
+
+def has_phi_sign_change(phi_vals: np.ndarray) -> bool:
+    signs = np.sign(phi_vals)
+    return not np.all(signs == signs[0])
+
+
+def sign_change_bracket(
+    mu_vals: np.ndarray,
+    phi_vals: np.ndarray,
+) -> tuple[float, float] | None:
+    """Return (mu_lo, mu_hi) bracketing phi=0, or None if no sign change."""
+    if not has_phi_sign_change(phi_vals):
+        return None
+    pos_mask = phi_vals > 0
+    neg_mask = phi_vals < 0
+    mu_pos = float(mu_vals[pos_mask][np.argmin(np.abs(phi_vals[pos_mask]))])
+    mu_neg = float(mu_vals[neg_mask][np.argmin(np.abs(phi_vals[neg_mask]))])
+    return min(mu_pos, mu_neg), max(mu_pos, mu_neg)
+
+
+def unsampled_mus(candidate_mus: list[float], mu_vals: np.ndarray) -> list[float]:
+    return [
+        m for m in candidate_mus
+        if not any(abs(m - float(existing)) < 1e-6 for existing in mu_vals)
+    ]
+
+
+def count_in_bracket(mu_vals: np.ndarray, mu_lo: float, mu_hi: float) -> int:
+    return int(np.sum((mu_vals >= mu_lo) & (mu_vals <= mu_hi)))
+
+
+def extension_window(
+    mu_vals: np.ndarray,
+    phi_vals: np.ndarray,
+    *,
+    toward_edge: int | None = None,
+) -> tuple[float, float]:
+    """Return (mu_lo, mu_hi) for a window extension.
+
+    If toward_edge is 0, extend below the current range; if len(mu)-1, extend above.
+    Otherwise infer direction from phi sign (all positive -> lower mu, else higher).
+    """
+    window = float(mu_vals[-1] - mu_vals[0])
+    if toward_edge == 0:
+        return float(mu_vals[0] - window), float(mu_vals[0])
+    if toward_edge is not None and toward_edge == len(mu_vals) - 1:
+        return float(mu_vals[-1]), float(mu_vals[-1] + window)
+    if np.all(phi_vals > 0):
+        return float(mu_vals[0] - window), float(mu_vals[0])
+    return float(mu_vals[-1]), float(mu_vals[-1] + window)
+
+
 def compute_mu_coex_sim_error(
     mu_vals: np.ndarray,
     phi_errs: np.ndarray,
     psi_vals: np.ndarray,
 ) -> float:
-    """Neighbor phi_err scale at min(psi), matching is_coex_resolved geometry."""
-    min_idx = int(np.argmin(psi_vals))
+    """Replica-scatter scale at mu neighbors bracketing argmin(psi).
+
+    This is a phi uncertainty proxy used for resolution checks, not a Delta-mu
+    error bar on mu_coex_SIM.
+    """
+    min_idx = psi_min_index(psi_vals)
     if min_idx == 0 or min_idx == len(mu_vals) - 1:
         return float(phi_errs[min_idx])
     return float(max(phi_errs[min_idx - 1], phi_errs[min_idx + 1]))
@@ -449,142 +516,79 @@ def _request_more_data(
     return True
 
 
-def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
-                  results_dir: str, samples_dir: str, manifest_path: str,
-                  pending_points: dict[tuple, int]):
-    job = data["job"]
-    points = data["points"]
-
-    combo = {f: job[f] for f in COMBO_KEY_FIELDS}
-    tag = combo_dir_name(job)
-
-    mu_vals, phi_vals, phi_errs, psi_vals, psi_errs = build_curves(points)
-    n_points = len(mu_vals)
-
-    # Check manage row for current request count
-    rows = read_manage(manage_path)
-    idx = find_manage_row(rows, combo)
-    if idx is None:
+def _analyze_sign_change(
+    *,
+    combo_key: tuple,
+    combo: dict,
+    tag: str,
+    job: dict,
+    mu_vals: np.ndarray,
+    phi_vals: np.ndarray,
+    phi_errs: np.ndarray,
+    psi_vals: np.ndarray,
+    psi_errs: np.ndarray,
+    manage_path: str,
+    results_dir: str,
+    samples_dir: str,
+    manifest_path: str,
+    pending_points: dict[tuple, int],
+    rows: list[dict],
+    idx: int,
+    n_requests: int,
+    n_points: int,
+) -> None:
+    """Phi changes sign: refine bracket, then finalize with argmin(psi)."""
+    bracket = sign_change_bracket(mu_vals, phi_vals)
+    if bracket is None:
         return
-    n_requests = int(rows[idx].get("RequestForAdditionalData", 0))
+    mu_lo, mu_hi = bracket
 
-    # Already analyzed
-    if rows[idx].get("isAnalyzed", ""):
+    if is_coex_resolved(mu_vals, phi_vals, phi_errs, psi_vals):
+        finalize_combo(
+            combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+            psi_vals, psi_errs, manage_path, results_dir, n_requests,
+            reason="neighbors resolved",
+        )
         return
 
-    # After restart, anchor follow-up wait to the current result count.
-    if n_requests > 0 and combo_key not in pending_points:
-        pending_points[combo_key] = n_points
+    in_bracket = count_in_bracket(mu_vals, mu_lo, mu_hi)
+    bracket_dense = in_bracket >= N_REFINEMENT_POINTS
+    interior_min = interior_psi_minimum(psi_vals)
 
-    # Wait for the full initial mu sweep before any analysis or follow-up requests.
-    if n_requests == 0 and n_points < N_INITIAL_MU_POINTS:
-        print(f"[analyzer] {tag}: waiting for initial batch "
-              f"({n_points}/{N_INITIAL_MU_POINTS})")
+    if bracket_dense and interior_min:
+        finalize_combo(
+            combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+            psi_vals, psi_errs, manage_path, results_dir, n_requests,
+            reason="dense bracket",
+        )
         return
 
-    # After a follow-up request, wait for new results before acting again.
-    if n_requests > 0:
-        points_at_request = pending_points.get(combo_key)
-        if points_at_request is not None and n_points <= points_at_request:
-            return
-
-    # Check for sign change in phi
-    signs = np.sign(phi_vals)
-    has_sign_change = not np.all(signs == signs[0])
-
-    if has_sign_change:
-        # Find bracketing pair: closest phi to 0 from each side
-        pos_mask = phi_vals > 0
-        neg_mask = phi_vals < 0
-
-        mu_pos = mu_vals[pos_mask][np.argmin(np.abs(phi_vals[pos_mask]))]
-        mu_neg = mu_vals[neg_mask][np.argmin(np.abs(phi_vals[neg_mask]))]
-
-        mu_lo = min(mu_pos, mu_neg)
-        mu_hi = max(mu_pos, mu_neg)
-
-        if is_coex_resolved(mu_vals, phi_vals, phi_errs, psi_vals):
-            finalize_combo(
-                combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-                psi_vals, psi_errs, manage_path, results_dir, n_requests,
-                reason="neighbors resolved",
-            )
-            return
-
-        # Check if we already have refined points in this bracket
-        existing_in_bracket = np.sum((mu_vals >= mu_lo) & (mu_vals <= mu_hi))
-
-        if existing_in_bracket < N_REFINEMENT_POINTS and n_requests < MAX_ADDITIONAL_REQUESTS:
-            # Refine
-            new_mus = list(np.linspace(mu_lo, mu_hi, N_REFINEMENT_POINTS))
-            # Filter out mu values already sampled (within tolerance)
-            new_mus = [m for m in new_mus
-                       if not any(abs(m - existing) < 1e-6 for existing in mu_vals)]
-            if new_mus:
-                print(f"[analyzer] {tag}: sign change found, refining "
-                      f"[{mu_lo:.4f}, {mu_hi:.4f}] with {len(new_mus)} points")
-                if _request_more_data(
-                    tag=tag,
-                    combo_key=combo_key,
-                    combo=combo,
-                    new_mus=new_mus,
-                    job=job,
-                    manage_path=manage_path,
-                    rows=rows,
-                    idx=idx,
-                    n_requests=n_requests,
-                    n_points=n_points,
-                    samples_dir=samples_dir,
-                    manifest_path=manifest_path,
-                    pending_points=pending_points,
-                    action="refining",
-                ):
-                    return  # re-analyze after new data arrives
-                return
-
-        if n_requests >= MAX_ADDITIONAL_REQUESTS and not is_coex_resolved(
-            mu_vals, phi_vals, phi_errs, psi_vals
-        ):
-            finalize_unstable(
-                combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-                psi_vals, psi_errs, manage_path, results_dir, n_requests,
-                reason="max requests without resolution",
-            )
-        else:
-            finalize_combo(
-                combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-                psi_vals, psi_errs, manage_path, results_dir, n_requests,
-                reason="bracket filled or max requests",
-            )
-
-    else:
-        # No sign change — need to extend the mu window
+    if not interior_min:
         if n_requests >= MAX_ADDITIONAL_REQUESTS:
             finalize_unstable(
                 combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
                 psi_vals, psi_errs, manage_path, results_dir, n_requests,
-                reason="max requests, no sign change",
+                reason="min(psi) at edge of mu window",
             )
             return
 
-        window = mu_vals[-1] - mu_vals[0]
-        if np.all(signs > 0):
-            # All phi > 0: active phase dominates everywhere, need lower mu
-            new_lo = mu_vals[0] - window
-            new_hi = mu_vals[0]
-            print(f"[analyzer] {tag}: all phi>0, extending window lower "
-                  f"[{new_lo:.4f}, {new_hi:.4f}]")
-        else:
-            # All phi < 0: need higher mu
-            new_lo = mu_vals[-1]
-            new_hi = mu_vals[-1] + window
-            print(f"[analyzer] {tag}: all phi<0, extending window higher "
-                  f"[{new_lo:.4f}, {new_hi:.4f}]")
+        min_idx = psi_min_index(psi_vals)
+        new_lo, new_hi = extension_window(mu_vals, phi_vals, toward_edge=min_idx)
+        new_mus = unsampled_mus(
+            list(np.linspace(new_lo, new_hi, N_REFINEMENT_POINTS)),
+            mu_vals,
+        )
+        if not new_mus:
+            finalize_combo(
+                combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+                psi_vals, psi_errs, manage_path, results_dir, n_requests,
+                reason="argmin(psi)",
+            )
+            return
 
-        new_mus = list(np.linspace(new_lo, new_hi, N_REFINEMENT_POINTS))
-        new_mus = [m for m in new_mus
-                   if not any(abs(m - existing) < 1e-6 for existing in mu_vals)]
-
+        direction = "lower" if min_idx == 0 else "higher"
+        print(f"[analyzer] {tag}: min(psi) at {direction} edge, extending "
+              f"[{new_lo:.4f}, {new_hi:.4f}]")
         _request_more_data(
             tag=tag,
             combo_key=combo_key,
@@ -599,8 +603,173 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
             samples_dir=samples_dir,
             manifest_path=manifest_path,
             pending_points=pending_points,
-            action="extending window",
+            action="extending toward edge",
         )
+        return
+
+    # Interior minimum: try refinement while bracket is sparse and budget remains.
+    if not bracket_dense and n_requests < MAX_ADDITIONAL_REQUESTS:
+        new_mus = unsampled_mus(
+            list(np.linspace(mu_lo, mu_hi, N_REFINEMENT_POINTS)),
+            mu_vals,
+        )
+        if new_mus:
+            print(f"[analyzer] {tag}: sign change, refining "
+                  f"[{mu_lo:.4f}, {mu_hi:.4f}] with {len(new_mus)} points "
+                  f"({in_bracket}/{N_REFINEMENT_POINTS} in bracket)")
+            queued = _request_more_data(
+                tag=tag,
+                combo_key=combo_key,
+                combo=combo,
+                new_mus=new_mus,
+                job=job,
+                manage_path=manage_path,
+                rows=rows,
+                idx=idx,
+                n_requests=n_requests,
+                n_points=n_points,
+                samples_dir=samples_dir,
+                manifest_path=manifest_path,
+                pending_points=pending_points,
+                action="refining",
+            )
+            if queued:
+                return
+            if not bracket_dense:
+                print(f"[analyzer] {tag}: refinement jobs already queued, waiting")
+                return
+
+    finalize_combo(
+        combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+        psi_vals, psi_errs, manage_path, results_dir, n_requests,
+        reason="argmin(psi)",
+    )
+
+
+def _analyze_no_sign_change(
+    *,
+    combo_key: tuple,
+    combo: dict,
+    tag: str,
+    job: dict,
+    mu_vals: np.ndarray,
+    phi_vals: np.ndarray,
+    phi_errs: np.ndarray,
+    psi_vals: np.ndarray,
+    psi_errs: np.ndarray,
+    manage_path: str,
+    results_dir: str,
+    samples_dir: str,
+    manifest_path: str,
+    pending_points: dict[tuple, int],
+    rows: list[dict],
+    idx: int,
+    n_requests: int,
+    n_points: int,
+) -> None:
+    """Phi same sign everywhere: extend mu window until sign change or budget exhausted."""
+    if n_requests >= MAX_ADDITIONAL_REQUESTS:
+        finalize_unstable(
+            combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+            psi_vals, psi_errs, manage_path, results_dir, n_requests,
+            reason="max requests, no sign change",
+        )
+        return
+
+    new_lo, new_hi = extension_window(mu_vals, phi_vals)
+    if np.all(phi_vals > 0):
+        print(f"[analyzer] {tag}: all phi>0, extending window lower "
+              f"[{new_lo:.4f}, {new_hi:.4f}]")
+    else:
+        print(f"[analyzer] {tag}: all phi<0, extending window higher "
+              f"[{new_lo:.4f}, {new_hi:.4f}]")
+
+    new_mus = unsampled_mus(list(np.linspace(new_lo, new_hi, N_REFINEMENT_POINTS)), mu_vals)
+    if not new_mus:
+        finalize_unstable(
+            combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+            psi_vals, psi_errs, manage_path, results_dir, n_requests,
+            reason="no unsampled mu in extension window",
+        )
+        return
+
+    _request_more_data(
+        tag=tag,
+        combo_key=combo_key,
+        combo=combo,
+        new_mus=new_mus,
+        job=job,
+        manage_path=manage_path,
+        rows=rows,
+        idx=idx,
+        n_requests=n_requests,
+        n_points=n_points,
+        samples_dir=samples_dir,
+        manifest_path=manifest_path,
+        pending_points=pending_points,
+        action="extending window",
+    )
+
+
+def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
+                  results_dir: str, samples_dir: str, manifest_path: str,
+                  pending_points: dict[tuple, int]):
+    job = data["job"]
+    points = data["points"]
+
+    combo = {f: job[f] for f in COMBO_KEY_FIELDS}
+    tag = combo_dir_name(job)
+
+    mu_vals, phi_vals, phi_errs, psi_vals, psi_errs = build_curves(points)
+    n_points = len(mu_vals)
+
+    rows = read_manage(manage_path)
+    idx = find_manage_row(rows, combo)
+    if idx is None:
+        return
+    n_requests = int(rows[idx].get("RequestForAdditionalData", 0))
+
+    if rows[idx].get("isAnalyzed", ""):
+        return
+
+    if n_requests > 0 and combo_key not in pending_points:
+        pending_points[combo_key] = n_points
+
+    if n_requests == 0 and n_points < N_INITIAL_MU_POINTS:
+        print(f"[analyzer] {tag}: waiting for initial batch "
+              f"({n_points}/{N_INITIAL_MU_POINTS})")
+        return
+
+    if n_requests > 0:
+        points_at_request = pending_points.get(combo_key)
+        if points_at_request is not None and n_points <= points_at_request:
+            return
+
+    common = dict(
+        combo_key=combo_key,
+        combo=combo,
+        tag=tag,
+        job=job,
+        mu_vals=mu_vals,
+        phi_vals=phi_vals,
+        phi_errs=phi_errs,
+        psi_vals=psi_vals,
+        psi_errs=psi_errs,
+        manage_path=manage_path,
+        results_dir=results_dir,
+        samples_dir=samples_dir,
+        manifest_path=manifest_path,
+        pending_points=pending_points,
+        rows=rows,
+        idx=idx,
+        n_requests=n_requests,
+        n_points=n_points,
+    )
+
+    if has_phi_sign_change(phi_vals):
+        _analyze_sign_change(**common)
+    else:
+        _analyze_no_sign_change(**common)
 
 
 # ---------------------------------------------------------------------------

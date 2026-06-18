@@ -3,10 +3,11 @@
 Re-run analyzer on manage.csv rows marked mu_coex_SIM=NaN.
 
 NaN usually means the analyzer hit RequestForAdditionalData >= 5 without
-passing is_coex_resolved — not that there is too little data. Many NaN combos
-(like a clear sigmoid with a sharp psi minimum) can be recovered by resetting
-the request budget and re-analyzing; argmin(psi) is then written via
-finalize_combo.
+finding a usable coexistence — not that there is too little data. Many NaN
+combos (clear sigmoid with interior min(psi)) are recovered by resetting the
+request budget and re-analyzing; the updated analyzer finalizes with
+argmin(psi) when the sign-change bracket is dense even if is_coex_resolved
+is still False.
 
 Usage (on Della):
     # Diagnose only — no file changes
@@ -51,12 +52,17 @@ from analyzer import (
     analyze_combo,
     build_curves,
     combo_dir_name,
+    count_in_bracket,
     discover_combo_results,
     finalize_combo,
     find_manage_row,
+    has_phi_sign_change,
+    interior_psi_minimum,
     is_coex_resolved,
     phi_is_close_to_zero,
+    psi_min_index,
     read_manage,
+    sign_change_bracket,
     write_manage,
 )
 from combo_paths import RESULTS_DIR, combo_key_from_dict
@@ -100,19 +106,20 @@ def diagnose_nan_combo(row: dict, data: dict) -> list[str]:
         lines.append("  NO RESULT DATA — need simulation jobs, not re-analysis")
         return lines
 
-    min_idx = int(np.argmin(psi_vals))
+    min_idx = psi_min_index(psi_vals)
     mu_at_min = float(mu_vals[min_idx])
     lines.append(
         f"  argmin(psi): mu={mu_at_min:.6f}  psi={psi_vals[min_idx]:.4f}  "
         f"phi={phi_vals[min_idx]:.4f}"
     )
 
-    signs = np.sign(phi_vals)
-    has_sign_change = not np.all(signs == signs[0])
+    has_sign_change = has_phi_sign_change(phi_vals)
     lines.append(f"  phi sign change across mu sweep: {has_sign_change}")
 
     resolved = is_coex_resolved(mu_vals, phi_vals, phi_errs, psi_vals)
     lines.append(f"  is_coex_resolved (strict neighbor test): {resolved}")
+    interior_min = interior_psi_minimum(psi_vals)
+    lines.append(f"  interior min(psi): {interior_min}")
 
     if n_points >= 3:
         if min_idx == 0 or min_idx == len(mu_vals) - 1:
@@ -151,16 +158,14 @@ def diagnose_nan_combo(row: dict, data: dict) -> list[str]:
                 )
 
     if has_sign_change:
-        pos_mask = phi_vals > 0
-        neg_mask = phi_vals < 0
-        mu_pos = float(mu_vals[pos_mask][np.argmin(np.abs(phi_vals[pos_mask]))])
-        mu_neg = float(mu_vals[neg_mask][np.argmin(np.abs(phi_vals[neg_mask]))])
-        mu_lo, mu_hi = min(mu_pos, mu_neg), max(mu_pos, mu_neg)
-        in_bracket = int(np.sum((mu_vals >= mu_lo) & (mu_vals <= mu_hi)))
-        lines.append(
-            f"  sign-change bracket [{mu_lo:.4f}, {mu_hi:.4f}]: {in_bracket} mu points "
-            f"(refinement target {N_REFINEMENT_POINTS})"
-        )
+        bracket = sign_change_bracket(mu_vals, phi_vals)
+        if bracket is not None:
+            mu_lo, mu_hi = bracket
+            in_bracket = count_in_bracket(mu_vals, mu_lo, mu_hi)
+            lines.append(
+                f"  sign-change bracket [{mu_lo:.4f}, {mu_hi:.4f}]: {in_bracket} mu points "
+                f"(refinement target {N_REFINEMENT_POINTS})"
+            )
 
     # What happens after reset (RequestForAdditionalData -> 0)?
     if n_points < N_INITIAL_MU_POINTS:
@@ -170,22 +175,28 @@ def diagnose_nan_combo(row: dict, data: dict) -> list[str]:
     elif has_sign_change:
         if resolved:
             lines.append("  after reset: should finalize_combo immediately (neighbors resolved)")
-        elif has_sign_change and n_points >= N_INITIAL_MU_POINTS:
-            pos_mask = phi_vals > 0
-            neg_mask = phi_vals < 0
-            mu_pos = float(mu_vals[pos_mask][np.argmin(np.abs(phi_vals[pos_mask]))])
-            mu_neg = float(mu_vals[neg_mask][np.argmin(np.abs(phi_vals[neg_mask]))])
-            mu_lo, mu_hi = min(mu_pos, mu_neg), max(mu_pos, mu_neg)
-            in_bracket = int(np.sum((mu_vals >= mu_lo) & (mu_vals <= mu_hi)))
+        elif interior_min:
+            bracket = sign_change_bracket(mu_vals, phi_vals)
+            in_bracket = (
+                count_in_bracket(mu_vals, bracket[0], bracket[1])
+                if bracket is not None
+                else 0
+            )
             if in_bracket >= N_REFINEMENT_POINTS:
                 lines.append(
                     f"  after reset: should finalize_combo with mu={mu_at_min:.6f} "
-                    "(bracket already dense — no new Slurm jobs)"
+                    "(dense bracket — argmin(psi), no new Slurm jobs)"
                 )
             else:
                 lines.append(
-                    "  after reset: analyzer will enqueue refinement mu jobs via run_all.py"
+                    "  after reset: analyzer will refine bracket (may enqueue Slurm jobs), "
+                    "then finalize with argmin(psi) once dense or budget exhausted"
                 )
+        else:
+            lines.append(
+                "  after reset: min(psi) at edge — analyzer will extend mu window "
+                "(may enqueue Slurm jobs)"
+            )
     elif n_requests >= MAX_ADDITIONAL_REQUESTS:
         lines.append(
             "  after reset: no sign change — may enqueue window-extension jobs "
@@ -193,11 +204,17 @@ def diagnose_nan_combo(row: dict, data: dict) -> list[str]:
         )
 
     if n_requests >= MAX_ADDITIONAL_REQUESTS and not resolved:
-        lines.append(
-            f"  WHY NaN NOW: hit max refinement requests ({n_requests}) while "
-            "is_coex_resolved was still False. Resetting request count to 0 fixes "
-            "most cases with dense brackets."
-        )
+        if has_sign_change and interior_min:
+            lines.append(
+                f"  WHY NaN NOW (legacy): hit max refinement requests ({n_requests}) "
+                "before analyzer accepted argmin(psi). Resetting request count to 0 "
+                "should yield a numeric mu_coex_SIM."
+            )
+        else:
+            lines.append(
+                f"  WHY NaN NOW: hit max refinement requests ({n_requests}) without "
+                "a resolvable coexistence (edge minimum or no sign change)."
+            )
 
     return lines
 
@@ -214,7 +231,7 @@ def force_min_psi_finalize(
     combo = {f: job[f] for f in COMBO_KEY_FIELDS}
     tag = combo_dir_name(job)
     mu_vals, phi_vals, phi_errs, psi_vals, psi_errs = build_curves(data["points"])
-    min_idx = int(np.argmin(psi_vals))
+    min_idx = psi_min_index(psi_vals)
     if min_idx == 0 or min_idx == len(mu_vals) - 1:
         print(f"  SKIP force: min(psi) at edge for {tag}")
         return
