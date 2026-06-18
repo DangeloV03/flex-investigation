@@ -66,7 +66,7 @@ MANAGE_CSV = "test_manage.csv"
 
 COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
 MANAGE_FIELDS = COMBO_KEY_FIELDS + [
-    "mu_coex_flex",
+    "mu_coex_FLEX",
     "isSubmitted",
     "isRan",
     "isAnalyzed",
@@ -128,7 +128,7 @@ def main():
                     "scheme": scheme,
                     "Lx": Lx,
                     "Ly": Ly,
-                    "mu_coex_flex": mu_coex_flex,
+                    "mu_coex_FLEX": mu_coex_flex,
                     "isSubmitted": timestamp,
                     "isRan": "",
                     "isAnalyzed": "",
@@ -146,7 +146,7 @@ def main():
                         "Lx": Lx,
                         "Ly": Ly,
                         "mu": mu,
-                        "mu_coex_flex": mu_coex_flex,
+                        "mu_coex_FLEX": mu_coex_flex,
                         "run_settings": run_settings,
                     }
 

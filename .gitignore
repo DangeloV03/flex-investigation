@@ -16,12 +16,15 @@ build/
 venv/
 env/
 
-# IDE / OS / Jupyter
+# IDE / OS
 .idea/
 .vscode/
 *.swp
 *.swo
 .DS_Store
+
+# Jupyter (not used in this repo)
+*.ipynb
 .ipynb_checkpoints/
 
 # Local tooling caches
@@ -35,10 +38,11 @@ results/
 plots/
 test_run_out/
 
-# Run tracking CSVs (generated / local state)
+# Run tracking and queue state (generated / local)
 manage.csv
 test_manage.csv
 *_manage.csv
+run_all_queue.json
 
 # Simulation scratch dirs (if any remain outside results/)
 _scratch_*/
