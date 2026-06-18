@@ -97,8 +97,8 @@ The tmux session has two windows: `run_all` (Slurm dispatcher) and `analyzer` (r
 - Reads `run_all_queue.json` (`pending` + `in_flight`)
 - Submits up to **100 concurrent** Slurm jobs via [simple_slurm](https://pypi.org/project/simple-slurm/)
 - Polls `squeue` every 30s and submits more as slots free up
-- Archives completed JSON files to `samples/done/`
-- Re-queues failed jobs at the front of `pending`
+- Archives completed JSON files to `samples/done/` (staging copies protect in-flight jobs)
+- Re-queues failed jobs at the front; restores missing JSON from `samples/done/` when possible
 
 `analyzer.py` never calls Slurm directly. When it needs more μ points, it writes JSON to `samples/` and **prepends** those paths to `run_all_queue.json` so refinement jobs run first.
 
@@ -140,7 +140,11 @@ flex-investigation/
 ├── requirements.txt
 ├── flex_coex_chemical_potential_prediction.py
 ├── analyzer.py
-├── notes.md
+├── scripts/
+│   ├── start_daemons.sh
+│   ├── stop_daemons.sh
+│   ├── repair_queue.py       # restore missing JSON, clear stale in_flight
+│   └── estimate_runtime.py
 ├── run_all_queue.json        # job queue (gitignored)
 ├── samples/                  # pending job JSON (gitignored)
 ├── samples/done/             # archived JSON after successful runs

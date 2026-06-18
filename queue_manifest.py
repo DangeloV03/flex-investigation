@@ -15,11 +15,13 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import shutil
 from contextlib import contextmanager
 from typing import Iterator
 
 MANIFEST_PATH = "run_all_queue.json"
 DONE_DIR = "samples/done"
+STAGING_DIR = "samples/staging"
 
 
 def _empty_manifest() -> dict:
@@ -126,3 +128,36 @@ def archive_json(json_path: str, done_dir: str = DONE_DIR) -> None:
     if os.path.exists(dest):
         os.remove(dest)
     os.rename(json_path, dest)
+
+
+def restore_json_from_done(json_path: str, done_dir: str = DONE_DIR) -> bool:
+    """Copy a job JSON back from samples/done/ if the pending path is missing."""
+    if os.path.isfile(json_path):
+        return True
+    src = os.path.join(done_dir, os.path.basename(json_path))
+    if not os.path.isfile(src):
+        return False
+    os.makedirs(os.path.dirname(json_path) or ".", exist_ok=True)
+    shutil.copy2(src, json_path)
+    return True
+
+
+def ensure_job_json(json_path: str, done_dir: str = DONE_DIR) -> bool:
+    """Ensure the canonical queue JSON exists, restoring from done/ when needed."""
+    return os.path.isfile(json_path) or restore_json_from_done(json_path, done_dir)
+
+
+def stage_job_json(json_path: str, staging_dir: str = STAGING_DIR) -> str:
+    """Copy JSON to a staging path so archiving samples/ cannot break running jobs."""
+    os.makedirs(staging_dir, exist_ok=True)
+    staged = os.path.join(staging_dir, os.path.basename(json_path))
+    shutil.copy2(json_path, staged)
+    return os.path.abspath(staged)
+
+
+def cleanup_staged_json(staged_path: str) -> None:
+    """Remove a staged JSON copy after the job finishes."""
+    try:
+        os.remove(staged_path)
+    except FileNotFoundError:
+        pass

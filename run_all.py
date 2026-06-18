@@ -18,6 +18,7 @@ Local testing (no Slurm):
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -27,18 +28,35 @@ import time
 import queue_manifest as qm
 from queue_manifest import (
     archive_json,
+    cleanup_staged_json,
+    ensure_job_json,
     mark_in_flight,
     pop_next_pending,
     read_manifest,
     requeue_front,
     remove_in_flight,
+    stage_job_json,
 )
 
 MAX_CONCURRENT = 100
 POLL_INTERVAL = 30.0
 SLURM_CONFIG = "slurm_config.yml"
 SUCCESS_STATES = {"COMPLETED", "COMPLETING"}
-FAILURE_STATES = {"FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY", "PREEMPTED"}
+FAILURE_STATES = {
+    "FAILED",
+    "CANCELLED",
+    "TIMEOUT",
+    "NODE_FAIL",
+    "OUT_OF_MEMORY",
+    "PREEMPTED",
+}
+# Ly -> Slurm wall time (current campaign is Ly=32-heavy)
+LY_WALLTIME = {
+    8: "02:00:00",
+    16: "04:00:00",
+    32: "08:00:00",
+}
+DEFAULT_WALLTIME = "08:00:00"
 
 
 def load_slurm_config(path: str) -> tuple[dict, list[str], str | None]:
@@ -51,10 +69,12 @@ def load_slurm_config(path: str) -> tuple[dict, list[str], str | None]:
     return raw, setup_cmds, report_dir
 
 
-def build_slurm(config_path: str = SLURM_CONFIG):
+def build_slurm(config_path: str = SLURM_CONFIG, *, time: str | None = None):
     from simple_slurm import Slurm
 
     slurm_kwargs, setup_cmds, report_dir = load_slurm_config(config_path)
+    if time is not None:
+        slurm_kwargs["time"] = time
     if report_dir:
         os.makedirs(report_dir, exist_ok=True)
     elif slurm_kwargs.get("output"):
@@ -67,6 +87,13 @@ def build_slurm(config_path: str = SLURM_CONFIG):
 
 def slurm_available() -> bool:
     return shutil.which("sbatch") is not None
+
+
+def normalize_sacct_state(state: str | None) -> str | None:
+    if not state:
+        return None
+    # sacct may return "TIMEOUT+" or "FAILED|0"
+    return state.split()[0].split("|")[0].rstrip("+")
 
 
 def sacct_state(job_id: str) -> str | None:
@@ -82,7 +109,7 @@ def sacct_state(job_id: str) -> str | None:
     if result.returncode != 0:
         return None
     lines = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
-    return lines[0] if lines else None
+    return normalize_sacct_state(lines[0] if lines else None)
 
 
 def active_slurm_ids(slurm) -> set[str]:
@@ -90,7 +117,25 @@ def active_slurm_ids(slurm) -> set[str]:
     return {str(job_id) for job_id in slurm.squeue.jobs}
 
 
-def submit_slurm_job(slurm, json_path: str, python: str) -> str:
+def walltime_for_json(json_path: str, config_path: str = SLURM_CONFIG) -> str:
+    """Pick Slurm wall time from Ly in the job JSON, else config default."""
+    try:
+        with open(json_path) as f:
+            params = json.load(f)
+        ly = int(params["Ly"])
+        return LY_WALLTIME.get(ly, DEFAULT_WALLTIME)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        slurm_kwargs, _, _ = load_slurm_config(config_path)
+        return slurm_kwargs.get("time", DEFAULT_WALLTIME)
+
+
+def submit_slurm_job(
+    json_path: str,
+    python: str,
+    config_path: str = SLURM_CONFIG,
+) -> str:
+    walltime = walltime_for_json(json_path, config_path)
+    slurm = build_slurm(config_path, time=walltime)
     abs_json = os.path.abspath(json_path)
     job_id = slurm.sbatch(f"{python} -u json_runner.py {abs_json}")
     return str(job_id)
@@ -101,11 +146,18 @@ def run_local_job(json_path: str, python: str) -> bool:
     return result.returncode == 0
 
 
+def cleanup_job_staging(canonical_path: str) -> None:
+    staged = os.path.join(qm.STAGING_DIR, os.path.basename(canonical_path))
+    cleanup_staged_json(staged)
+
+
 def finish_job(json_path: str, success: bool) -> None:
+    cleanup_job_staging(json_path)
     if success:
         archive_json(json_path)
         print(f"[run_all] Completed: {json_path}")
     else:
+        ensure_job_json(json_path)
         requeue_front(json_path)
         print(f"[run_all] Failed, re-queued: {json_path}")
 
@@ -136,14 +188,16 @@ def reconcile_in_flight(slurm=None, local_jobs: dict[str, subprocess.Popen] | No
             continue
 
         state = sacct_state(job_id)
+        if state is None:
+            print(
+                f"[run_all] sacct unknown for job {job_id}, "
+                f"leaving in_flight (will retry): {json_path}"
+            )
+            continue
         if state in SUCCESS_STATES:
             finish_job(json_path, success=True)
         elif state in FAILURE_STATES:
             finish_job(json_path, success=False)
-        elif state is None:
-            # sacct unavailable or job record not ready yet — assume success
-            print(f"[run_all] sacct unknown for job {job_id}, archiving {json_path}")
-            finish_job(json_path, success=True)
         else:
             print(f"[run_all] job {job_id} state={state!r}, re-queuing {json_path}")
             finish_job(json_path, success=False)
@@ -157,6 +211,7 @@ def submit_up_to_cap(
     local_jobs: dict[str, subprocess.Popen] | None = None,
     python: str,
     max_concurrent: int,
+    config_path: str = SLURM_CONFIG,
 ) -> int:
     """Submit jobs until in_flight reaches max_concurrent. Returns count submitted."""
     submitted = 0
@@ -172,20 +227,27 @@ def submit_up_to_cap(
         json_path = pop_next_pending()
         if json_path is None:
             break
-        if not os.path.isfile(json_path):
-            print(f"[run_all] WARNING: missing JSON, skipping: {json_path}")
+
+        if not ensure_job_json(json_path):
+            print(
+                f"[run_all] WARNING: missing JSON (not in samples/ or done/), "
+                f"re-queuing for later: {json_path}"
+            )
+            requeue_front(json_path)
             continue
 
+        staged_path = stage_job_json(json_path)
+
         if local_jobs is not None:
-            proc = subprocess.Popen([python, "-u", "json_runner.py", json_path])
+            proc = subprocess.Popen([python, "-u", "json_runner.py", staged_path])
             job_id = f"local-{proc.pid}"
             mark_in_flight(job_id, json_path)
             local_jobs[job_id] = proc
         else:
-            job_id = submit_slurm_job(slurm, json_path, python)
+            job_id = submit_slurm_job(staged_path, python, config_path)
             mark_in_flight(job_id, json_path)
 
-        print(f"[run_all] Submitted job {job_id}: {json_path}")
+        print(f"[run_all] Submitted job {job_id}: {json_path} (staged: {staged_path})")
         submitted += 1
 
     return submitted
@@ -197,6 +259,7 @@ def dispatch_once(
     local_jobs: dict[str, subprocess.Popen] | None = None,
     python: str,
     max_concurrent: int,
+    config_path: str = SLURM_CONFIG,
 ) -> tuple[int, int, int]:
     reconcile_in_flight(slurm=slurm, local_jobs=local_jobs)
     n_submitted = submit_up_to_cap(
@@ -204,6 +267,7 @@ def dispatch_once(
         local_jobs=local_jobs,
         python=python,
         max_concurrent=max_concurrent,
+        config_path=config_path,
     )
     manifest = read_manifest()
     pending = len(manifest.get("pending", []))
@@ -253,6 +317,7 @@ def main():
             local_jobs=local_jobs,
             python=python,
             max_concurrent=args.max_concurrent,
+            config_path=args.config,
         )
         print(
             f"[run_all] cycle: submitted={n_submitted}, "

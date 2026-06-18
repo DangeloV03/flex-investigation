@@ -45,6 +45,10 @@ tmux attach -t flex-investigation       # reattach to watch logs
 python scripts/clean_wrong_npy.py --dry-run
 python scripts/clean_wrong_npy.py --mode premature --reset-manage   # NaN + max requests, re-analyze
 
+# Repair queue after failures (restore JSON from samples/done/, clear stale in_flight)
+python scripts/repair_queue.py --dry-run
+python scripts/repair_queue.py
+
 # Estimate job / campaign wall time (uses sacct + queue on Della)
 python scripts/estimate_runtime.py
 python scripts/estimate_runtime.py --job-id JOBID

@@ -4,7 +4,7 @@
 job_name: flex_sim
 cpus_per_task: 4
 mem: 8G
-time: "02:00:00"
+time: "08:00:00"
 partition: cpu
 # account: your_account   # uncomment if required
 report_dir: /home/vd7294/slurm_reports
