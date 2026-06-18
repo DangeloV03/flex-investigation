@@ -160,7 +160,8 @@ def queue_counts(manifest_path: str) -> tuple[int, int]:
 
 
 def count_finished_results(results_dir: str) -> int:
-    return len(glob.glob(os.path.join(results_dir, "*", "*", "output.csv")))
+    from combo_paths import iter_output_csvs
+    return sum(1 for _ in iter_output_csvs(results_dir))
 
 
 def summarize_elapsed(jobs: list[dict], state_filter: set[str] | None = None) -> list[float]:

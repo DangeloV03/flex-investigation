@@ -2,19 +2,12 @@
 """
 Migrate results/ and plots/ to the unified combo folder layout.
 
-New layout per combo:
-    results/{Lx}x{Ly}_{scheme}_deltaF{df}_dmu{dmu}_epsilon{eps}/
-        phi_psi.png
-        phi_psi.csv   (regenerated if --replot)
-        mu{tag}/output.csv
-        mu{tag}/final_lattice_*.npy
-
-Also backfills manage.csv combo_path.
+For campaigns already on the combo-folder layout, use nest_mu_sweeps.py instead.
 
 Usage:
     python scripts/migrate_combo_layout.py --dry-run
-    python scripts/migrate_combo_layout.py
-    python scripts/migrate_combo_layout.py --replot   # regenerate phi/psi artifacts
+    python scripts/migrate_combo_layout.py --replot
+    python scripts/nest_mu_sweeps.py --dry-run   # mu_sweeps/ only (typical fix)
 """
 
 from __future__ import annotations
@@ -27,21 +20,19 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import matplotlib
-
-matplotlib.use("Agg")
-
-from analyzer import build_curves, plot_combo, read_manage, write_manage, MANAGE_FIELDS
+from analyzer import read_manage, write_manage
 from combo_paths import (
     COMBO_KEY_FIELDS,
+    MU_SWEEPS_DIR,
     PHI_PSI_PNG,
     combo_dir,
     combo_dir_name,
     combo_key_from_dict,
-    discover_combo_results,
     iter_output_csvs,
     legacy_plot_basenames,
     mu_dir_name,
+    mu_sweeps_dir,
+    nest_flat_mu_dirs,
     read_combo_from_output_csv,
 )
 from generate_samples import MANAGE_CSV, RESULTS_DIR
@@ -77,6 +68,42 @@ def move_mu_dir(src: Path, dst: Path, *, dry_run: bool) -> None:
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dst))
+
+
+def migrate_legacy_to_combo(results_dir: Path, plots_dir: Path, *, dry_run: bool) -> int:
+    seen_mu: set[tuple[tuple[str, ...], str]] = set()
+    moved = 0
+
+    for csv_path in iter_output_csvs(str(results_dir)):
+        params = read_combo_from_output_csv(csv_path)
+        if params is None:
+            continue
+        combo_key = combo_key_from_dict(params)
+        mu_name = mu_dir_name(params["mu"])
+        key = (combo_key, mu_name)
+        if key in seen_mu:
+            continue
+        seen_mu.add(key)
+
+        src = csv_path.parent
+        dst = Path(mu_sweeps_dir(params, str(results_dir))) / mu_name
+        if src.resolve() == dst.resolve():
+            continue
+
+        tag = combo_dir_name(params)
+        print(f"{tag}/{MU_SWEEPS_DIR}/{mu_name}: from {src}")
+        move_mu_dir(src, dst, dry_run=dry_run)
+        moved += 1
+
+        dest_combo = dst.parent.parent
+        if not dry_run:
+            dest_combo.mkdir(parents=True, exist_ok=True)
+            legacy_plot = find_legacy_plot(plots_dir, params)
+            if legacy_plot and not (dest_combo / PHI_PSI_PNG).exists():
+                shutil.copy2(legacy_plot, dest_combo / PHI_PSI_PNG)
+                print(f"  copied plot {legacy_plot.name}")
+
+    return moved
 
 
 def migrate_manage_paths(manage_path: str, results_dir: str, *, dry_run: bool) -> int:
@@ -116,46 +143,23 @@ def main() -> int:
         print(f"No results directory: {results_dir}", file=sys.stderr)
         return 1
 
-    seen_mu: set[tuple[tuple[str, ...], str]] = set()
-    moved = 0
+    print("=== nesting flat mu dirs under mu_sweeps/ ===")
+    n_nested = nest_flat_mu_dirs(str(results_dir), dry_run=args.dry_run)
+    print(f"nested: {n_nested}")
 
-    print("=== migrating mu run directories ===")
-    for csv_path in iter_output_csvs(args.results):
-        params = read_combo_from_output_csv(csv_path)
-        if params is None:
-            continue
-        combo_key = combo_key_from_dict(params)
-        mu_name = mu_dir_name(params["mu"])
-        key = (combo_key, mu_name)
-        if key in seen_mu:
-            continue
-        seen_mu.add(key)
-
-        src = csv_path.parent
-        dst = Path(combo_dir(params, args.results)) / mu_name
-        if src.resolve() == dst.resolve():
-            continue
-
-        tag = combo_dir_name(params)
-        print(f"{tag}/{mu_name}: {src.name}")
-        move_mu_dir(src, dst, dry_run=args.dry_run)
-        moved += 1
-
-        dest_combo = dst.parent
-        if not args.dry_run:
-            dest_combo.mkdir(parents=True, exist_ok=True)
-            legacy_plot = find_legacy_plot(plots_dir, params)
-            if legacy_plot and not (dest_combo / PHI_PSI_PNG).exists():
-                shutil.copy2(legacy_plot, dest_combo / PHI_PSI_PNG)
-                print(f"  copied plot {legacy_plot.name}")
-
-    print(f"\nmu dirs processed: {moved}")
+    print("\n=== migrating legacy mu run directories ===")
+    n_migrated = migrate_legacy_to_combo(results_dir, plots_dir, dry_run=args.dry_run)
+    print(f"legacy mu dirs processed: {n_migrated}")
 
     print("\n=== backfilling manage.csv combo_path ===")
     n_manage = migrate_manage_paths(args.manage, args.results, dry_run=args.dry_run)
     print(f"manage rows updated: {n_manage}")
 
     if args.replot:
+        import matplotlib
+        matplotlib.use("Agg")
+        from analyzer import build_curves, discover_combo_results, plot_combo
+
         print("\n=== regenerating phi/psi artifacts ===")
         grouped = discover_combo_results(args.results)
         for combo_key, data in sorted(grouped.items()):
@@ -173,7 +177,7 @@ def main() -> int:
     if args.dry_run:
         print("\n(dry run — no files changed)")
     else:
-        print("\nDone. Legacy empty dirs under results/ and plots/ can be removed manually.")
+        print("\nDone.")
 
     return 0
 

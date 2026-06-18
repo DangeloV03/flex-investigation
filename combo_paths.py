@@ -6,8 +6,9 @@ Canonical directory layout for each parameter combo:
     results/{size}_{scheme}_deltaF{df}_dmu{dmu}_epsilon{eps}/
         phi_psi.png
         phi_psi.csv
-        mu{tag}/output.csv
-        mu{tag}/final_lattice_*.npy
+        mu_sweeps/
+            mu{tag}/output.csv
+            mu{tag}/final_lattice_*.npy
 
 Example:
     results/320x32_homo_deltaF0p0_dmu2p5_epsilonm2p4/
@@ -18,6 +19,8 @@ from __future__ import annotations
 import csv
 import os
 import pathlib
+import re
+import shutil
 from typing import Iterator
 
 import pandas as pd
@@ -26,6 +29,8 @@ RESULTS_DIR = "results"
 COMBO_KEY_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme", "Lx", "Ly"]
 PHI_PSI_PNG = "phi_psi.png"
 PHI_PSI_CSV = "phi_psi.csv"
+MU_SWEEPS_DIR = "mu_sweeps"
+MU_RUN_DIR_PATTERN = re.compile(r"^mu\d")
 
 
 def param_tag(value: float) -> str:
@@ -60,8 +65,12 @@ def mu_dir_name(mu: float) -> str:
     return f"mu{round(abs(float(mu)) * 1_000_000):07d}"
 
 
+def mu_sweeps_dir(params: dict, base: str = RESULTS_DIR) -> str:
+    return os.path.join(combo_dir(params, base), MU_SWEEPS_DIR)
+
+
 def mu_dir(params: dict, base: str = RESULTS_DIR) -> str:
-    return os.path.join(combo_dir(params, base), mu_dir_name(params["mu"]))
+    return os.path.join(mu_sweeps_dir(params, base), mu_dir_name(params["mu"]))
 
 
 def phi_psi_png_path(params: dict, base: str = RESULTS_DIR) -> str:
@@ -100,13 +109,79 @@ def legacy_plot_basenames(params: dict) -> list[str]:
     return names
 
 
+def _move_mu_dir(src: pathlib.Path, dst: pathlib.Path, *, dry_run: bool) -> None:
+    if src.resolve() == dst.resolve():
+        return
+    if dst.exists():
+        if dry_run:
+            return
+        for item in src.iterdir():
+            target = dst / item.name
+            if target.exists():
+                continue
+            shutil.move(str(item), str(target))
+        if src.is_dir() and not any(src.iterdir()):
+            src.rmdir()
+        return
+    if dry_run:
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+
+
+def nest_flat_mu_dirs(results_dir: str, *, dry_run: bool = False) -> int:
+    """Move combo/mu* run dirs into combo/mu_sweeps/mu* (one-time fix)."""
+    root = pathlib.Path(results_dir)
+    if not root.is_dir():
+        return 0
+    moved = 0
+    for combo_path in sorted(root.iterdir()):
+        if not combo_path.is_dir():
+            continue
+        sweeps = combo_path / MU_SWEEPS_DIR
+        for child in sorted(combo_path.iterdir()):
+            if not child.is_dir() or not MU_RUN_DIR_PATTERN.match(child.name):
+                continue
+            dst = sweeps / child.name
+            if child.resolve() == dst.resolve():
+                continue
+            print(f"nest {combo_path.name}/{child.name} -> {MU_SWEEPS_DIR}/")
+            _move_mu_dir(child, dst, dry_run=dry_run)
+            moved += 1
+    return moved
+
+
 def iter_output_csvs(results_dir: str) -> Iterator[pathlib.Path]:
-    """Yield every mu-level output.csv under results_dir."""
+    """Yield every mu-level output.csv (current and legacy layouts)."""
     root = pathlib.Path(results_dir)
     if not root.is_dir():
         return
-    for csv_path in sorted(root.glob("*/*/output.csv")):
-        yield csv_path
+
+    seen: set[pathlib.Path] = set()
+    patterns = (
+        f"*/{MU_SWEEPS_DIR}/*/output.csv",  # combo/mu_sweeps/mu.../output.csv
+        "*/*/output.csv",                     # legacy flat or pre-migration
+    )
+    for pattern in patterns:
+        for csv_path in sorted(root.glob(pattern)):
+            if csv_path.parent.name == MU_SWEEPS_DIR:
+                continue
+            resolved = csv_path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            yield csv_path
+
+
+def _combo_has_mu_csv(combo_path: pathlib.Path) -> bool:
+    sweeps = combo_path / MU_SWEEPS_DIR
+    if sweeps.is_dir() and any(sweeps.glob("*/output.csv")):
+        return True
+    for child in combo_path.iterdir():
+        if child.is_dir() and MU_RUN_DIR_PATTERN.match(child.name):
+            if (child / "output.csv").is_file():
+                return True
+    return False
 
 
 def read_combo_from_output_csv(csv_path: os.PathLike | str) -> dict | None:
@@ -175,13 +250,12 @@ def discover_combo_results(results_dir: str) -> dict:
 
 def combo_has_results(params: dict, base: str = RESULTS_DIR) -> bool:
     """True if any mu output.csv exists for this combo (new or legacy layout)."""
-    new_dir = combo_dir(params, base)
-    if pathlib.Path(new_dir).is_dir():
-        if any(pathlib.Path(new_dir).glob("*/output.csv")):
-            return True
+    new_dir = pathlib.Path(combo_dir(params, base))
+    if new_dir.is_dir() and _combo_has_mu_csv(new_dir):
+        return True
     for legacy in legacy_combo_dir_names(params):
         legacy_path = pathlib.Path(base) / legacy
-        if legacy_path.is_dir() and any(legacy_path.glob("*/output.csv")):
+        if legacy_path.is_dir() and _combo_has_mu_csv(legacy_path):
             return True
     return False
 

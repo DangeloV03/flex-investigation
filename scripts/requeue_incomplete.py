@@ -35,7 +35,7 @@ from generate_samples import (
     read_manage,
     write_manage,
 )
-from combo_paths import combo_dir, mu_dir, combo_has_results
+from combo_paths import combo_dir, mu_dir, combo_has_results, legacy_combo_dir_names, mu_dir_name
 from queue_manifest import merge_pending, read_manifest
 
 MANAGE_CSV = "manage.csv"
@@ -54,16 +54,18 @@ def count_completed_mus(row: dict) -> tuple[int, set[float]]:
         csv_path = os.path.join(mu_dir(params), "output.csv")
         if os.path.isfile(csv_path):
             completed.add(mu)
-        else:
-            # Also accept legacy layout paths during migration
-            from combo_paths import legacy_combo_dir_names, mu_dir_name
-            for legacy in legacy_combo_dir_names(combo):
-                legacy_csv = os.path.join(
-                    RESULTS_DIR, legacy, mu_dir_name(mu), "output.csv",
-                )
-                if os.path.isfile(legacy_csv):
-                    completed.add(mu)
-                    break
+            continue
+        flat_csv = os.path.join(combo_dir(combo), mu_dir_name(mu), "output.csv")
+        if os.path.isfile(flat_csv):
+            completed.add(mu)
+            continue
+        for legacy in legacy_combo_dir_names(combo):
+            legacy_csv = os.path.join(
+                RESULTS_DIR, legacy, mu_dir_name(mu), "output.csv",
+            )
+            if os.path.isfile(legacy_csv):
+                completed.add(mu)
+                break
     return len(completed), completed
 
 

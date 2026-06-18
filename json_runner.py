@@ -29,7 +29,7 @@ import multiprocessing as mp
 
 import numpy as np
 
-from combo_paths import COMBO_KEY_FIELDS, combo_dir, mu_dir
+from combo_paths import COMBO_KEY_FIELDS, combo_dir, mu_dir, mu_sweeps_dir
 from lattice_gas.markov_chain import HeteroChain
 from lattice_gas.boundary_condition import Periodic
 from lattice_gas.ending_criterion import Time
@@ -241,8 +241,9 @@ def main():
         outdir = args.outdir
     else:
         outdir = mu_dir(params)
-    os.makedirs(outdir, exist_ok=True)
     os.makedirs(combo_dir(params), exist_ok=True)
+    os.makedirs(mu_sweeps_dir(params), exist_ok=True)
+    os.makedirs(outdir, exist_ok=True)
 
     eps = params["epsilon"]
     dmu = params["delta_mu"]

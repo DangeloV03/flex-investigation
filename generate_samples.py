@@ -24,7 +24,7 @@ import pandas as pd
 from scipy.stats import qmc
 
 from flex_coex_chemical_potential_prediction import coex_chemical_potential
-from combo_paths import COMBO_KEY_FIELDS, combo_dir, combo_has_results, combo_key_from_dict
+from combo_paths import COMBO_KEY_FIELDS, combo_dir, combo_has_results, combo_key_from_dict, iter_output_csvs
 from queue_manifest import merge_pending, read_manifest
 
 # ---------------------------------------------------------------------------
@@ -187,8 +187,7 @@ def collect_active_combo_keys(
         if key is not None:
             active.setdefault(key, "samples")
 
-    results_path = pathlib.Path(results_dir)
-    for csv_path in results_path.glob("*/*/output.csv"):
+    for csv_path in iter_output_csvs(results_dir):
         try:
             df = pd.read_csv(csv_path, nrows=1)
             if not all(col in df.columns for col in COMBO_KEY_FIELDS):
