@@ -11,6 +11,9 @@ set -euo pipefail
 SESSION="flex-investigation"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Non-interactive tmux panes need conda.sh sourced before `conda activate`.
+DAEMON_SETUP='module load anaconda3/2024.10 2>/dev/null; source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate lattice; export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"; export PYTHONUNBUFFERED=1'
+
 if tmux has-session -t "$SESSION" 2>/dev/null; then
   echo "Session '$SESSION' already exists."
   echo "  attach:  tmux attach -t $SESSION"
@@ -20,11 +23,11 @@ fi
 
 tmux new-session -d -s "$SESSION" -n run_all -c "$PROJECT_DIR"
 tmux send-keys -t "$SESSION:run_all" \
-  "module load anaconda3/2024.10 2>/dev/null; conda activate lattice; export LD_LIBRARY_PATH=\"\${CONDA_PREFIX}/lib:\${LD_LIBRARY_PATH:-}\"; python -u run_all.py" C-m
+  "${DAEMON_SETUP}; python -u run_all.py" C-m
 
 tmux new-window -t "$SESSION" -n analyzer -c "$PROJECT_DIR"
 tmux send-keys -t "$SESSION:analyzer" \
-  "module load anaconda3/2024.10 2>/dev/null; conda activate lattice; export LD_LIBRARY_PATH=\"\${CONDA_PREFIX}/lib:\${LD_LIBRARY_PATH:-}\"; python -u analyzer.py" C-m
+  "${DAEMON_SETUP}; python -u analyzer.py" C-m
 
 echo "Started tmux session '$SESSION' with windows: run_all, analyzer"
 echo "  attach:  tmux attach -t $SESSION"
