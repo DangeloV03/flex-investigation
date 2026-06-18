@@ -3,7 +3,7 @@ generate_samples.py
 
 Full grid campaign over (epsilon, delta_mu) for homo scheme 1 / K=1 / Ly=32:
   1. Enumerate every (epsilon, delta_mu) on the configured grid.
-  2. Skip combos already in manage.csv, queue, samples/, or results/.
+  2. Skip combos already finished (analyzed, ran, or with results/) or in the queue.
   3. Compute mu_coex_FLEX per combo; skip if mu_coex_FLEX > 0.
   4. Sweep mu over mu_coex_FLEX +/- 0.1 (10 points), write JSON files.
   5. Append new rows to manage.csv and merge jobs into run_all_queue.json.
@@ -16,7 +16,6 @@ Usage:
 """
 
 import csv
-import glob
 import json
 import os
 import time
@@ -171,32 +170,45 @@ def combo_from_json_path(json_path: str) -> tuple | None:
         return None
 
 
+def manage_row_is_complete(row: dict, results_dir: str) -> bool:
+    """True when this ledger row should not be regenerated."""
+    if str(row.get("isAnalyzed", "")).strip():
+        return True
+    if str(row.get("isRan", "")).strip():
+        return True
+    combo = {f: row[f] for f in COMBO_KEY_FIELDS}
+    return combo_has_results(combo, results_dir)
+
+
 def collect_active_combo_keys(
     manage_path: str,
     manifest_path: str,
     samples_dir: str,
     results_dir: str,
 ) -> dict[tuple, str]:
-    """Return combo_key -> reason for combos already known to the campaign.
+    """Return combo_key -> reason for combos that should not be regenerated.
 
-    Every manage.csv row counts as active (append-only ledger; rows are never deleted).
+    manage.csv is append-only (rows are never deleted), but incomplete ledger rows
+    without results may still receive missing sample JSONs and queue entries.
     """
     active: dict[tuple, str] = {}
 
     for row in read_manage(manage_path):
+        if not manage_row_is_complete(row, results_dir):
+            continue
         key = combo_key_from_dict(row)
-        active.setdefault(key, "manage")
+        if str(row.get("isAnalyzed", "")).strip():
+            active.setdefault(key, "manage:analyzed")
+        elif str(row.get("isRan", "")).strip():
+            active.setdefault(key, "manage:ran")
+        else:
+            active.setdefault(key, "manage:results")
 
     manifest = read_manifest(manifest_path)
     for json_path in manifest.get("pending", []) + list(manifest.get("in_flight", {}).values()):
         key = combo_from_json_path(json_path)
         if key is not None:
             active.setdefault(key, "queue")
-
-    for json_path in glob.glob(os.path.join(samples_dir, "*.json")):
-        key = combo_from_json_path(json_path)
-        if key is not None:
-            active.setdefault(key, "samples")
 
     for csv_path in iter_output_csvs(results_dir):
         try:
@@ -212,12 +224,6 @@ def collect_active_combo_keys(
             active.setdefault(key, "results")
         except Exception:
             continue
-
-    for row in read_manage(manage_path):
-        combo = {f: row[f] for f in COMBO_KEY_FIELDS}
-        if combo_has_results(combo, results_dir):
-            key = combo_key_from_dict(combo)
-            active.setdefault(key, "results")
 
     return active
 
@@ -323,10 +329,11 @@ def main():
 
     print(f"\nWrote {n_files} new JSON files to '{OUTPUT_DIR}/' "
           f"({n_existing_json} already existed, left unchanged)")
-    print(f"Merged {len(pending_paths)} jobs into '{MANIFEST_PATH}'")
+    print(f"Queued {len(pending_paths)} job path(s) into '{MANIFEST_PATH}' "
+          f"(merge_pending skips duplicates already pending/in-flight)")
     print(f"Added {n_added} new rows to '{MANAGE_CSV}' "
           f"({len(existing_rows)} existing, unchanged)")
-    print(f"Skipped {skipped_dedup} dedup, {skipped_flex} FLEX filter")
+    print(f"Skipped {skipped_dedup} complete dedup, {skipped_flex} FLEX filter")
 
 
 if __name__ == "__main__":
