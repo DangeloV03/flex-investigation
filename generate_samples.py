@@ -1,7 +1,10 @@
 """
 generate_samples.py
 
-Full grid campaign over (epsilon, delta_mu) for homo scheme 1 / K=1 / Ly=32:
+Full grid campaign over (epsilon, delta_mu) for homo scheme 1 / K=1 / Ly=32.
+Grid: epsilon in [-2.5, -1.5] step 0.1, delta_mu in [-1, 5] step 0.25 (275 combos).
+Re-runs backfill holes left by the earlier LHS campaign without overwriting finished work.
+
   1. Enumerate every (epsilon, delta_mu) on the configured grid.
   2. Skip combos already finished (analyzed, ran, or with results/) or in the queue.
   3. Compute mu_coex_FLEX per combo; skip if mu_coex_FLEX > 0.
@@ -38,10 +41,10 @@ LX = 320
 DELTA_F = 0.0
 K = 1.0
 
-EPS_MIN = -2.3
+EPS_MIN = -2.5
 EPS_MAX = -1.5
 EPS_STEP = 0.1
-DMU_MIN = 2.0
+DMU_MIN = -1.0
 DMU_MAX = 5.0
 DMU_STEP = 0.25
 
