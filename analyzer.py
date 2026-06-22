@@ -71,10 +71,20 @@ def read_manage(manage_path: str) -> list[dict]:
     if not os.path.isfile(manage_path):
         return []
     with open(manage_path, "r", newline="") as f:
-        rows = list(csv.DictReader(f))
-    for row in rows:
+        raw_rows = list(csv.DictReader(f))
+    rows: list[dict] = []
+    for line_no, row in enumerate(raw_rows, start=2):
         row.setdefault("mu_coex_SIM_error", "")
         row.setdefault("combo_path", "")
+        missing = [f for f in COMBO_KEY_FIELDS if f not in row or row[f] is None]
+        if missing:
+            print(
+                f"[analyzer] WARNING: skipping malformed manage.csv line {line_no} "
+                f"(missing {missing})",
+                file=sys.stderr,
+            )
+            continue
+        rows.append(row)
     return rows
 
 
@@ -89,7 +99,7 @@ def write_manage(manage_path: str, rows: list[dict]):
 def find_manage_row(rows: list[dict], combo: dict) -> int | None:
     """Return index of the manage row matching this combo, or None."""
     for i, row in enumerate(rows):
-        if all(str(row[f]) == str(combo[f]) for f in COMBO_KEY_FIELDS):
+        if all(str(row.get(f, "")) == str(combo.get(f, "")) for f in COMBO_KEY_FIELDS):
             return i
     return None
 

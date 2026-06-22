@@ -126,10 +126,19 @@ def read_manage(manage_path: str) -> list[dict]:
     if not os.path.isfile(manage_path):
         return []
     with open(manage_path, "r", newline="") as f:
-        rows = list(csv.DictReader(f))
-    for row in rows:
+        raw_rows = list(csv.DictReader(f))
+    rows: list[dict] = []
+    for line_no, row in enumerate(raw_rows, start=2):
         row.setdefault("mu_coex_SIM_error", "")
         row.setdefault("combo_path", "")
+        missing = [f for f in COMBO_KEY_FIELDS if f not in row or row[f] is None]
+        if missing:
+            print(
+                f"WARNING: skipping malformed manage.csv line {line_no} "
+                f"(missing {missing})"
+            )
+            continue
+        rows.append(row)
     return rows
 
 
