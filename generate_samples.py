@@ -1,11 +1,11 @@
 """
 generate_samples.py
 
-Full grid campaign over (epsilon, delta_mu) for homo scheme 1 / K=1 / Ly=32.
-Grid: epsilon in [-2.5, -1.5] step 0.1, delta_mu in [-1, 5] step 0.25 (275 combos).
-Re-runs backfill holes left by the earlier LHS campaign without overwriting finished work.
+Full grid campaign over (epsilon, delta_mu) for homo scheme 1 / K=1.
+Grid: epsilon in [-2.5, -1.5] step 0.1, delta_mu in [-1, 5] step 0.25.
+Default chain sizes: Ly in {8, 16} with Lx = 10 * Ly (override with --ly).
 
-  1. Enumerate every (epsilon, delta_mu) on the configured grid.
+  1. Enumerate every (epsilon, delta_mu, Ly) on the configured grid.
   2. Skip combos already finished (analyzed, ran, or with results/) or in the queue.
   3. Compute mu_coex_FLEX per combo; skip if mu_coex_FLEX > 0.
   4. Sweep mu over mu_coex_FLEX +/- 0.1 (10 points), write JSON files.
@@ -16,8 +16,11 @@ only append missing combos/files.
 
 Usage:
     python generate_samples.py
+    python generate_samples.py --ly 8 16
+    python generate_samples.py --ly 32
 """
 
+import argparse
 import csv
 import json
 import os
@@ -36,8 +39,8 @@ from queue_manifest import merge_pending, read_manifest
 
 SCHEME = "homo"
 FLEX_INDEX = 1
-LY = 32
-LX = 320
+DEFAULT_LY_VALUES = [8, 16]
+LX_MULTIPLIER = 10  # Lx = LX_MULTIPLIER * Ly
 DELTA_F = 0.0
 K = 1.0
 
@@ -94,15 +97,15 @@ def grid_outer_combos() -> list[tuple[float, float]]:
     return pairs
 
 
-def combo_dict(epsilon: float, delta_mu: float) -> dict:
+def combo_dict(epsilon: float, delta_mu: float, ly: int, lx: int) -> dict:
     return {
         "epsilon": epsilon,
         "delta_f": DELTA_F,
         "delta_mu": delta_mu,
         "k": K,
         "scheme": SCHEME,
-        "Lx": LX,
-        "Ly": LY,
+        "Lx": lx,
+        "Ly": ly,
     }
 
 
@@ -241,6 +244,17 @@ def collect_active_combo_keys(
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Generate grid campaign sample JSONs")
+    parser.add_argument(
+        "--ly",
+        type=int,
+        nargs="+",
+        default=DEFAULT_LY_VALUES,
+        help="Chain lengths Ly (Lx = 10 * Ly). Default: 8 16",
+    )
+    args = parser.parse_args()
+    ly_values = sorted(set(args.ly))
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     outer_pairs = grid_outer_combos()
@@ -249,8 +263,9 @@ def main():
     print(
         f"Grid: epsilon [{EPS_MIN}, {EPS_MAX}] step {EPS_STEP} ({n_eps} pts) x "
         f"delta_mu [{DMU_MIN}, {DMU_MAX}] step {DMU_STEP} ({n_dmu} pts) "
-        f"-> {len(outer_pairs)} (epsilon, delta_mu) pairs"
+        f"-> {len(outer_pairs)} (epsilon, delta_mu) pairs per Ly"
     )
+    print(f"Ly values: {ly_values}  (Lx = {LX_MULTIPLIER} * Ly)")
 
     active_combos = collect_active_combo_keys(
         MANAGE_CSV, MANIFEST_PATH, OUTPUT_DIR, RESULTS_DIR,
@@ -266,75 +281,82 @@ def main():
     skipped_flex = 0
     skipped_dedup = 0
 
-    for epsilon, delta_mu in outer_pairs:
-        combo = combo_dict(epsilon, delta_mu)
-        key = combo_key_from_dict(combo)
+    for ly in ly_values:
+        lx = LX_MULTIPLIER * ly
+        print(f"\n--- Ly={ly}, Lx={lx} ---")
 
-        if key in active_combos:
-            print(f"[skip dedup:{active_combos[key]}] eps={epsilon}, dmu={delta_mu}")
-            skipped_dedup += 1
-            continue
+        for epsilon, delta_mu in outer_pairs:
+            combo = combo_dict(epsilon, delta_mu, ly, lx)
+            key = combo_key_from_dict(combo)
 
-        try:
-            mu_coex_flex = coex_chemical_potential(
-                epsilon=epsilon,
-                df=DELTA_F,
-                dmu=delta_mu,
-                chem_rec_baserate=K,
-                DRIVEN=True,
-                scheme=FLEX_INDEX,
-            )
-            mu_coex_flex = float(np.asarray(mu_coex_flex).ravel()[0])
-        except Exception as exc:
-            print(f"[skip flex] eps={epsilon}, dmu={delta_mu}: {exc}")
-            skipped_flex += 1
-            continue
+            if key in active_combos:
+                print(f"[skip dedup:{active_combos[key]}] Ly={ly} eps={epsilon}, dmu={delta_mu}")
+                skipped_dedup += 1
+                continue
 
-        if mu_coex_flex > 0:
-            print(f"[skip flex] eps={epsilon}, dmu={delta_mu}: mu_coex_FLEX={mu_coex_flex:.6f} > 0")
-            skipped_flex += 1
-            continue
+            try:
+                mu_coex_flex = coex_chemical_potential(
+                    epsilon=epsilon,
+                    df=DELTA_F,
+                    dmu=delta_mu,
+                    chem_rec_baserate=K,
+                    DRIVEN=True,
+                    scheme=FLEX_INDEX,
+                )
+                mu_coex_flex = float(np.asarray(mu_coex_flex).ravel()[0])
+            except Exception as exc:
+                print(f"[skip flex] Ly={ly} eps={epsilon}, dmu={delta_mu}: {exc}")
+                skipped_flex += 1
+                continue
 
-        print(f"eps={epsilon}, dmu={delta_mu}: mu_coex_FLEX={mu_coex_flex:.6f}")
-        mu_values = mu_sweep(mu_coex_flex)
+            if mu_coex_flex > 0:
+                print(
+                    f"[skip flex] Ly={ly} eps={epsilon}, dmu={delta_mu}: "
+                    f"mu_coex_FLEX={mu_coex_flex:.6f} > 0"
+                )
+                skipped_flex += 1
+                continue
 
-        if key not in existing_keys:
-            new_manage_rows.append({
-                "epsilon": epsilon,
-                "delta_f": DELTA_F,
-                "delta_mu": delta_mu,
-                "k": K,
-                "scheme": SCHEME,
-                "Lx": LX,
-                "Ly": LY,
-                "mu_coex_FLEX": mu_coex_flex,
-                "isSubmitted": timestamp,
-                "isRan": "",
-                "isAnalyzed": "",
-                "mu_coex_SIM": "",
-                "mu_coex_SIM_error": "",
-                "RequestForAdditionalData": 0,
-                "combo_path": combo_dir(combo),
-            })
-            existing_keys.add(key)
+            print(f"Ly={ly} eps={epsilon}, dmu={delta_mu}: mu_coex_FLEX={mu_coex_flex:.6f}")
+            mu_values = mu_sweep(mu_coex_flex)
 
-        outer_tag = f"{eps_filename_tag(epsilon)}_{dmu_filename_tag(delta_mu)}"
-        for idx, mu in enumerate(mu_values):
-            job = {
-                **combo,
-                "mu": mu,
-                "mu_coex_FLEX": mu_coex_flex,
-                "run_settings": RUN_SETTINGS,
-            }
-            filename = f"{SCHEME}_{outer_tag}_Ly{LY}_mu{idx:02d}.json"
-            filepath = os.path.join(OUTPUT_DIR, filename)
-            if os.path.isfile(filepath):
-                n_existing_json += 1
-            else:
-                with open(filepath, "w") as f:
-                    json.dump(job, f, indent=2)
-                n_files += 1
-            pending_paths.append(filepath)
+            if key not in existing_keys:
+                new_manage_rows.append({
+                    "epsilon": epsilon,
+                    "delta_f": DELTA_F,
+                    "delta_mu": delta_mu,
+                    "k": K,
+                    "scheme": SCHEME,
+                    "Lx": lx,
+                    "Ly": ly,
+                    "mu_coex_FLEX": mu_coex_flex,
+                    "isSubmitted": timestamp,
+                    "isRan": "",
+                    "isAnalyzed": "",
+                    "mu_coex_SIM": "",
+                    "mu_coex_SIM_error": "",
+                    "RequestForAdditionalData": 0,
+                    "combo_path": combo_dir(combo),
+                })
+                existing_keys.add(key)
+
+            outer_tag = f"{eps_filename_tag(epsilon)}_{dmu_filename_tag(delta_mu)}"
+            for idx, mu in enumerate(mu_values):
+                job = {
+                    **combo,
+                    "mu": mu,
+                    "mu_coex_FLEX": mu_coex_flex,
+                    "run_settings": RUN_SETTINGS,
+                }
+                filename = f"{SCHEME}_{outer_tag}_Ly{ly}_mu{idx:02d}.json"
+                filepath = os.path.join(OUTPUT_DIR, filename)
+                if os.path.isfile(filepath):
+                    n_existing_json += 1
+                else:
+                    with open(filepath, "w") as f:
+                        json.dump(job, f, indent=2)
+                    n_files += 1
+                pending_paths.append(filepath)
 
     merge_pending(pending_paths, path=MANIFEST_PATH)
     n_added = append_manage_rows(MANAGE_CSV, new_manage_rows)
