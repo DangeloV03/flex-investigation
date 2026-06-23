@@ -1000,6 +1000,32 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
         _analyze_no_sign_change(**common)
 
 
+def select_depth_first_combo(
+    grouped: dict,
+    manage_path: str,
+) -> tuple[str, ...] | None:
+    """Pick one unfinished combo: finish in-flight refinements first, else lowest epsilon."""
+    rows = read_manage(manage_path)
+    open_combos: list[tuple[float, tuple[str, ...], bool]] = []
+
+    for combo_key, data in grouped.items():
+        combo = {f: data["job"][f] for f in COMBO_KEY_FIELDS}
+        idx = find_manage_row(rows, combo)
+        if idx is None or rows[idx].get("isAnalyzed", ""):
+            continue
+        n_requests = int(rows[idx].get("RequestForAdditionalData", 0) or 0)
+        open_combos.append((float(combo["epsilon"]), combo_key, n_requests > 0))
+
+    if not open_combos:
+        return None
+
+    in_refinement = [(eps, key) for eps, key, active in open_combos if active]
+    if in_refinement:
+        return min(in_refinement, key=lambda item: item[0])[1]
+
+    return min(open_combos, key=lambda item: item[0])[1]
+
+
 # ---------------------------------------------------------------------------
 # Main watch loop
 # ---------------------------------------------------------------------------
@@ -1014,18 +1040,40 @@ def main():
     parser.add_argument("--interval", type=float, default=POLL_INTERVAL)
     parser.add_argument("--manifest", default="run_all_queue.json",
                         help="Queue manifest for run_all.py")
+    parser.add_argument(
+        "--depth-first",
+        action="store_true",
+        help="Finish mu refinement for one epsilon before starting the next",
+    )
     args = parser.parse_args()
 
+    mode = "depth-first" if args.depth_first else "breadth-first"
     print(f"[analyzer] Watching '{args.results}' every {args.interval}s "
-          f"(Ctrl-C to stop)")
+          f"({mode}, Ctrl-C to stop)")
 
     processed_combos = set()  # combo_keys that are fully analyzed
     pending_points: dict[tuple, int] = {}  # point count when last follow-up was queued
+    last_focus_key: tuple[str, ...] | None = None
 
     while True:
         grouped = discover_combo_results(args.results)
 
+        active_key = None
+        if args.depth_first:
+            active_key = select_depth_first_combo(grouped, args.manage)
+            if active_key is None:
+                time.sleep(args.interval)
+                continue
+            if active_key != last_focus_key:
+                print(
+                    f"[analyzer] depth-first: focusing "
+                    f"epsilon={grouped[active_key]['job']['epsilon']}",
+                )
+                last_focus_key = active_key
+
         for combo_key, data in grouped.items():
+            if args.depth_first and combo_key != active_key:
+                continue
             if combo_key in processed_combos:
                 continue
 
