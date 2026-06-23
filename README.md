@@ -283,12 +283,35 @@ Finite-size susceptibility scan at βΔf = −20, k = 0, βΔμ = 0. Coexistence
 
 ```bash
 python generate_susceptibility_coex.py
-python run_susceptibility_all.py --phase coex --local --max-concurrent 2   # or Slurm on Della
-python analyzer.py --manage susceptibility_manage.csv --results susceptibility_results/coex
+python run_susceptibility_all.py --phase coex          # tmux on Della
+python analyzer.py \
+  --manage susceptibility_manage.csv \
+  --results susceptibility_results/coex \
+  --samples susceptibility_samples/coex \
+  --manifest susceptibility_coex_queue.json
 python generate_susceptibility_jobs.py
-python run_susceptibility_all.py --phase prod --local --max-concurrent 2
+python run_susceptibility_all.py --phase prod          # tmux on Della
 python plot_susceptibility.py
 ```
+
+If the analyzer previously stalled with `RequestForAdditionalData=1` and empty `mu_coex_SIM`, reset counters once then re-run the analyzer (or use `scripts/finalize_susceptibility_coex.py`):
+
+```bash
+python - <<'PY'
+import csv
+path = "susceptibility_manage.csv"
+with open(path, newline="") as f:
+    r = csv.DictReader(f); fields = r.fieldnames; rows = list(r)
+for row in rows:
+    if not str(row.get("isAnalyzed", "")).strip():
+        row["RequestForAdditionalData"] = "0"
+with open(path, "w", newline="") as f:
+    w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(rows)
+PY
+python scripts/finalize_susceptibility_coex.py   # only if analyzer still cannot finalize
+```
+
+**Prod CSV columns** include `m_mean`, `m_mean_err`, `m2_mean`, `m2_mean_err`, `m4_mean`, `m4_mean_err`, `chi`, `chi_err` (SEM over production chunks per replica).
 
 **Naming:** coex JSONs match the main campaign (`homo_eps2p0_dm0p0_Ly16_mu03.json`). Prod JSONs add a `susceptibility_` prefix (`susceptibility_homo_eps1p76_dm0p0_L64.json`). Results land under `susceptibility_results/susceptibility_{L}x{L}_.../susceptibility_data.csv`.
 

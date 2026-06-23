@@ -660,8 +660,10 @@ def _analyze_sign_change(
             if queued:
                 return
             if not bracket_dense:
-                print(f"[analyzer] {tag}: refinement jobs already queued, waiting")
-                return
+                print(
+                    f"[analyzer] {tag}: refinement already queued; "
+                    f"finalizing with argmin(psi)",
+                )
 
     finalize_combo(
         combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
@@ -761,9 +763,6 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
     if rows[idx].get("isAnalyzed", ""):
         return
 
-    if n_requests > 0 and combo_key not in pending_points:
-        pending_points[combo_key] = n_points
-
     if n_requests == 0 and n_points < N_INITIAL_MU_POINTS:
         print(f"[analyzer] {tag}: waiting for initial batch "
               f"({n_points}/{N_INITIAL_MU_POINTS})")
@@ -772,6 +771,17 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
     if n_requests > 0:
         points_at_request = pending_points.get(combo_key)
         if points_at_request is not None and n_points <= points_at_request:
+            if (
+                n_points >= N_INITIAL_MU_POINTS
+                and has_phi_sign_change(phi_vals)
+                and interior_psi_minimum(psi_vals)
+            ):
+                finalize_combo(
+                    combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+                    psi_vals, psi_errs, manage_path, results_dir, n_requests,
+                    reason="initial batch complete (no new refinement data)",
+                )
+                pending_points.pop(combo_key, None)
             return
 
     common = dict(

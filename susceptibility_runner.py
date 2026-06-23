@@ -52,9 +52,13 @@ CSV_FIELDNAMES = [
     "mu",
     "mu_coex_SIM",
     "m_mean",
+    "m_mean_err",
     "m2_mean",
+    "m2_mean_err",
     "m4_mean",
+    "m4_mean_err",
     "chi",
+    "chi_err",
     "beta",
     "eq_time",
     "prod_time",
@@ -87,6 +91,28 @@ def build_initial_state(Lx: int, Ly: int, fraction: float, seed: int) -> np.ndar
         idx = rng.choice(Lx * Ly, n_active, replace=False)
         state.ravel()[idx] = BONDING
     return state
+
+
+def sem(values: np.ndarray) -> float:
+    """Standard error of the mean (production time series)."""
+    n = len(values)
+    if n <= 1:
+        return 0.0
+    return float(np.std(values, ddof=1) / np.sqrt(n))
+
+
+def compute_chi_err(
+    m_mean: float,
+    m_mean_err: float,
+    m2_mean: float,
+    m2_mean_err: float,
+    n_sites: int,
+    beta: float,
+) -> float:
+    """Delta-method SEM for chi = (N/T)(<m²> - <m>²)."""
+    factor = n_sites / (1.0 / beta)
+    var = (factor * m2_mean_err) ** 2 + (2.0 * factor * m_mean * m_mean_err) ** 2
+    return float(np.sqrt(var))
 
 
 def compute_chi(m2_mean: float, m_mean: float, n_sites: int, beta: float) -> float:
@@ -181,10 +207,16 @@ def run_replica(args: tuple) -> dict:
         )
 
     m_arr = np.asarray(m_samples, dtype=float)
+    m2_arr = m_arr**2
+    m4_arr = m_arr**4
     m_mean = float(np.mean(m_arr))
-    m2_mean = float(np.mean(m_arr**2))
-    m4_mean = float(np.mean(m_arr**4))
+    m2_mean = float(np.mean(m2_arr))
+    m4_mean = float(np.mean(m4_arr))
+    m_mean_err = sem(m_arr)
+    m2_mean_err = sem(m2_arr)
+    m4_mean_err = sem(m4_arr)
     chi = compute_chi(m2_mean, m_mean, n_sites, beta)
+    chi_err = compute_chi_err(m_mean, m_mean_err, m2_mean, m2_mean_err, n_sites, beta)
 
     np.save(os.path.join(outdir, f"final_lattice_{run_id}.npy"), state)
     shutil.rmtree(scratch_dir, ignore_errors=True)
@@ -203,9 +235,13 @@ def run_replica(args: tuple) -> dict:
         "mu": mu,
         "mu_coex_SIM": params.get("mu_coex_SIM", mu),
         "m_mean": m_mean,
+        "m_mean_err": m_mean_err,
         "m2_mean": m2_mean,
+        "m2_mean_err": m2_mean_err,
         "m4_mean": m4_mean,
+        "m4_mean_err": m4_mean_err,
         "chi": chi,
+        "chi_err": chi_err,
         "beta": beta,
         "eq_time": eq_time,
         "prod_time": prod_time,
@@ -278,8 +314,8 @@ def main() -> None:
     print(f"Wrote {len(results)} rows to {csv_path}", flush=True)
     for r in results:
         print(
-            f"  replica {r['replica_id']}: m={r['m_mean']:.4f} "
-            f"m2={r['m2_mean']:.4f} chi={r['chi']:.4f}",
+            f"  replica {r['replica_id']}: m={r['m_mean']:.4f}±{r['m_mean_err']:.4f} "
+            f"chi={r['chi']:.4f}±{r['chi_err']:.4f}",
             flush=True,
         )
 

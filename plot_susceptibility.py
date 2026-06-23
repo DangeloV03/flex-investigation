@@ -31,17 +31,22 @@ def collect_susceptibility_data(results_dir: str) -> pd.DataFrame:
 
 
 def aggregate(df: pd.DataFrame) -> pd.DataFrame:
-    grouped = (
-        df.groupby(["L", "epsilon"], as_index=False)
-        .agg(
-            chi_mean=("chi", "mean"),
-            chi_stderr=("chi", lambda s: s.std(ddof=1) / np.sqrt(len(s)) if len(s) > 1 else 0.0),
-            m_mean=("m_mean", "mean"),
-            n_replicas=("chi", "count"),
-        )
-        .sort_values(["L", "epsilon"])
-    )
-    return grouped
+    def _stderr(series: pd.Series) -> float:
+        return float(series.std(ddof=1) / np.sqrt(len(series))) if len(series) > 1 else 0.0
+
+    rows = []
+    for (l_val, eps), sub in df.groupby(["L", "epsilon"]):
+        chi_stderr = float(sub["chi_err"].mean()) if "chi_err" in sub.columns else _stderr(sub["chi"])
+        rows.append({
+            "L": l_val,
+            "epsilon": eps,
+            "chi_mean": float(sub["chi"].mean()),
+            "chi_stderr": chi_stderr,
+            "m_mean": float(sub["m_mean"].mean()),
+            "m_mean_stderr": float(sub["m_mean_err"].mean()) if "m_mean_err" in sub.columns else _stderr(sub["m_mean"]),
+            "n_replicas": len(sub),
+        })
+    return pd.DataFrame(rows).sort_values(["L", "epsilon"])
 
 
 def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
