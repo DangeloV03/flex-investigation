@@ -75,6 +75,7 @@ def read_manage(manage_path: str) -> list[dict]:
         raw_rows = list(csv.DictReader(f))
     rows: list[dict] = []
     for line_no, row in enumerate(raw_rows, start=2):
+        row = {str(k).lstrip("\ufeff"): v for k, v in row.items()}
         row.setdefault("mu_coex_SIM_error", "")
         row.setdefault("combo_path", "")
         missing = [f for f in COMBO_KEY_FIELDS if f not in row or row[f] is None]
