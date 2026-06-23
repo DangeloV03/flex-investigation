@@ -96,10 +96,24 @@ def write_manage(manage_path: str, rows: list[dict]):
             writer.writerow({field: row.get(field, "") for field in MANAGE_FIELDS})
 
 
+def _combo_field_match(row_val, combo_val) -> bool:
+    """Match manage.csv strings to job dict values (exact or numeric)."""
+    if row_val == combo_val:
+        return True
+    rs = str(row_val).strip()
+    cs = str(combo_val).strip()
+    if rs == cs:
+        return True
+    try:
+        return float(rs) == float(cs)
+    except (TypeError, ValueError):
+        return False
+
+
 def find_manage_row(rows: list[dict], combo: dict) -> int | None:
     """Return index of the manage row matching this combo, or None."""
     for i, row in enumerate(rows):
-        if all(str(row.get(f, "")) == str(combo.get(f, "")) for f in COMBO_KEY_FIELDS):
+        if all(_combo_field_match(row.get(f, ""), combo.get(f, "")) for f in COMBO_KEY_FIELDS):
             return i
     return None
 
@@ -736,6 +750,11 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
     rows = read_manage(manage_path)
     idx = find_manage_row(rows, combo)
     if idx is None:
+        print(
+            f"[analyzer] WARNING: {tag}: no manage.csv row for combo "
+            f"{ {f: combo[f] for f in COMBO_KEY_FIELDS} }",
+            file=sys.stderr,
+        )
         return
     n_requests = int(rows[idx].get("RequestForAdditionalData", 0))
 
