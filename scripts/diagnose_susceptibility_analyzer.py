@@ -15,11 +15,15 @@ from analyzer import (
     N_INITIAL_MU_POINTS,
     PSI_COEX_MAX,
     build_curves,
+    count_in_bracket,
     find_manage_row,
     has_phi_sign_change,
     is_psi_minimum_acceptable,
     min_psi_value,
+    N_REFINEMENT_POINTS,
     read_manage,
+    refinement_mus,
+    sign_change_bracket,
 )
 from combo_paths import COMBO_KEY_FIELDS, combo_dir_name, discover_combo_results
 
@@ -104,12 +108,28 @@ def main() -> None:
             and not analyzed
             and n_points <= N_INITIAL_MU_POINTS
         )
+        bracket = sign_change_bracket(mu_vals, phi_vals) if sign_change else None
+        in_bracket = (
+            count_in_bracket(mu_vals, bracket[0], bracket[1])
+            if bracket is not None
+            else 0
+        )
+        bracket_dense = in_bracket >= N_REFINEMENT_POINTS
+        refine_n = 0
+        if bracket is not None and not psi_ok and not analyzed:
+            refine_n = len(refinement_mus(bracket[0], bracket[1], mu_vals))
 
         print(f"{tag}")
         print(f"  eps={job['epsilon']}  n_mu={n_points}/{N_INITIAL_MU_POINTS}  "
               f"manage_row={idx}  n_requests={n_req}  analyzed={analyzed}  "
               f"phi_sign_change={sign_change}  min_psi={psi_min:.4f}  "
               f"psi_ok(<={PSI_COEX_MAX})={psi_ok}")
+        if sign_change and bracket is not None:
+            print(
+                f"  bracket=[{bracket[0]:.4f}, {bracket[1]:.4f}]  "
+                f"in_bracket={in_bracket}/{N_REFINEMENT_POINTS}  "
+                f"dense={bracket_dense}  would_enqueue={refine_n} mu job(s)",
+            )
         if stalled:
             print(
                 "  STALL: n_requests>0 but mu count not growing — "

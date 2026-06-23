@@ -312,6 +312,9 @@ def enqueue_jobs(
     paths = []
     for mu in mu_values:
         json_path = make_job_json(job_template, mu, samples_dir)
+        done_json = os.path.join(samples_dir, "done", os.path.basename(json_path))
+        if os.path.isfile(done_json):
+            os.remove(done_json)
         paths.append(json_path)
 
     manifest = read_manifest(manifest_path)
@@ -421,6 +424,24 @@ def unsampled_mus(candidate_mus: list[float], mu_vals: np.ndarray) -> list[float
         m for m in candidate_mus
         if not any(abs(m - float(existing)) < 1e-6 for existing in mu_vals)
     ]
+
+
+def refinement_mus(mu_lo: float, mu_hi: float, mu_vals: np.ndarray) -> list[float]:
+    """Return new mu points inside [mu_lo, mu_hi], subdividing when coarse grid fills bracket."""
+    for n in (N_REFINEMENT_POINTS, 2 * N_REFINEMENT_POINTS, 4 * N_REFINEMENT_POINTS):
+        candidates = [round(float(m), 6) for m in np.linspace(mu_lo, mu_hi, n)]
+        new_mus = unsampled_mus(candidates, mu_vals)
+        if new_mus:
+            return new_mus
+
+    in_bracket = sorted(
+        float(m) for m in mu_vals if mu_lo - 1e-9 <= float(m) <= mu_hi + 1e-9
+    )
+    midpoints = [
+        round(0.5 * (in_bracket[i] + in_bracket[i + 1]), 6)
+        for i in range(len(in_bracket) - 1)
+    ]
+    return unsampled_mus(midpoints, mu_vals)
 
 
 def count_in_bracket(mu_vals: np.ndarray, mu_lo: float, mu_hi: float) -> int:
@@ -606,10 +627,7 @@ def _request_psi_improvement(
     bracket = sign_change_bracket(mu_vals, phi_vals)
     if bracket is not None and interior_psi_minimum(psi_vals):
         mu_lo, mu_hi = bracket
-        new_mus = unsampled_mus(
-            list(np.linspace(mu_lo, mu_hi, N_REFINEMENT_POINTS)),
-            mu_vals,
-        )
+        new_mus = refinement_mus(mu_lo, mu_hi, mu_vals)
         if new_mus:
             return _request_more_data(
                 tag=tag,
@@ -631,10 +649,7 @@ def _request_psi_improvement(
     min_idx = psi_min_index(psi_vals)
     toward_edge = min_idx if not interior_psi_minimum(psi_vals) else None
     new_lo, new_hi = extension_window(mu_vals, phi_vals, toward_edge=toward_edge)
-    new_mus = unsampled_mus(
-        list(np.linspace(new_lo, new_hi, N_REFINEMENT_POINTS)),
-        mu_vals,
-    )
+    new_mus = refinement_mus(new_lo, new_hi, mu_vals)
     if new_mus:
         return _request_more_data(
             tag=tag,
@@ -799,10 +814,7 @@ def _analyze_sign_change(
 
         min_idx = psi_min_index(psi_vals)
         new_lo, new_hi = extension_window(mu_vals, phi_vals, toward_edge=min_idx)
-        new_mus = unsampled_mus(
-            list(np.linspace(new_lo, new_hi, N_REFINEMENT_POINTS)),
-            mu_vals,
-        )
+        new_mus = refinement_mus(new_lo, new_hi, mu_vals)
         if not new_mus:
             _finalize_if_psi_acceptable(
                 **finalize_kwargs,
@@ -834,10 +846,7 @@ def _analyze_sign_change(
 
     # Interior minimum: try refinement while bracket is sparse and budget remains.
     if not bracket_dense and n_requests < MAX_ADDITIONAL_REQUESTS:
-        new_mus = unsampled_mus(
-            list(np.linspace(mu_lo, mu_hi, N_REFINEMENT_POINTS)),
-            mu_vals,
-        )
+        new_mus = refinement_mus(mu_lo, mu_hi, mu_vals)
         if new_mus:
             print(f"[analyzer] {tag}: sign change, refining "
                   f"[{mu_lo:.4f}, {mu_hi:.4f}] with {len(new_mus)} points "
@@ -912,7 +921,7 @@ def _analyze_no_sign_change(
         print(f"[analyzer] {tag}: all phi<0, extending window higher "
               f"[{new_lo:.4f}, {new_hi:.4f}]")
 
-    new_mus = unsampled_mus(list(np.linspace(new_lo, new_hi, N_REFINEMENT_POINTS)), mu_vals)
+    new_mus = refinement_mus(new_lo, new_hi, mu_vals)
     if not new_mus:
         finalize_unstable(
             combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
