@@ -43,7 +43,14 @@ from run_all import (
     slurm_available,
     walltime_for_json,
 )
-from susceptibility_paths import COEX_MANIFEST, COEX_SAMPLES_DIR, PROD_MANIFEST, PROD_SAMPLES_DIR
+from susceptibility_paths import (
+    COEX_MANIFEST,
+    COEX_SAMPLES_DIR,
+    PROD_MANIFEST,
+    PROD_SAMPLES_DIR,
+    patch_coex_job_json,
+    patch_prod_job_json,
+)
 
 MAX_CONCURRENT = 100
 
@@ -122,6 +129,7 @@ def submit_up_to_cap(
     staging_dir: str,
     runner: str,
     python: str,
+    phase: str,
     slurm=None,
     local_jobs: dict[str, subprocess.Popen] | None = None,
     max_concurrent: int,
@@ -147,6 +155,10 @@ def submit_up_to_cap(
             print(f"[run_susceptibility_all] missing JSON, re-queuing: {json_path}")
             requeue_front(json_path, path=manifest)
             continue
+
+        patch_job = patch_coex_job_json if phase == "coex" else patch_prod_job_json
+        if patch_job(json_path):
+            print(f"[run_susceptibility_all] patched paths in {json_path}")
 
         staged_path = stage_job_json(json_path, staging_dir=staging_dir)
 
@@ -226,6 +238,7 @@ def main() -> None:
             staging_dir=staging_dir,
             runner=runner,
             python=python,
+            phase=args.phase,
             slurm=slurm,
             local_jobs=local_jobs,
             max_concurrent=args.max_concurrent,

@@ -133,6 +133,52 @@ def coex_job_filename(scheme: str, epsilon: float, delta_mu: float, ly: int, mu_
     return f"{scheme}_{outer_tag}_Ly{ly}_mu{mu_idx:02d}.json"
 
 
+def patch_coex_job_json(json_path: str) -> bool:
+    """Ensure coex job JSON writes under susceptibility_results/coex (not results/).
+
+    Stale copies restored from samples/coex/done/ often lack these fields.
+    Returns True if the file was updated.
+    """
+    import json
+
+    with open(json_path, encoding="utf-8") as f:
+        job = json.load(f)
+    changed = False
+    if job.get("results_base") != COEX_RESULTS_DIR:
+        job["results_base"] = COEX_RESULTS_DIR
+        changed = True
+    if job.get("manage_csv") != MANAGE_CSV:
+        job["manage_csv"] = MANAGE_CSV
+        changed = True
+    if not changed:
+        return False
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(job, f, indent=2)
+        f.write("\n")
+    return True
+
+
+def patch_prod_job_json(json_path: str) -> bool:
+    """Ensure prod susceptibility jobs use the campaign results base and manage.csv."""
+    import json
+
+    with open(json_path, encoding="utf-8") as f:
+        job = json.load(f)
+    changed = False
+    if job.get("results_base") != PROD_RESULTS_BASE:
+        job["results_base"] = PROD_RESULTS_BASE
+        changed = True
+    if job.get("manage_csv") != MANAGE_CSV:
+        job["manage_csv"] = MANAGE_CSV
+        changed = True
+    if not changed:
+        return False
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(job, f, indent=2)
+        f.write("\n")
+    return True
+
+
 def prod_job_filename(scheme: str, epsilon: float, delta_mu: float, l: int) -> str:
     outer_tag = f"{eps_filename_tag(epsilon)}_{dmu_filename_tag(delta_mu)}"
     return f"susceptibility_{scheme}_{outer_tag}_L{l}.json"

@@ -276,7 +276,14 @@ def plot_combo(combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
 # Job dispatching
 # ---------------------------------------------------------------------------
 
-def make_job_json(job_template: dict, mu: float, samples_dir: str) -> str:
+def make_job_json(
+    job_template: dict,
+    mu: float,
+    samples_dir: str,
+    *,
+    results_base: str | None = None,
+    manage_csv: str | None = None,
+) -> str:
     """Write a new JSON job file for a given mu and return its path."""
     scheme = str(job_template["scheme"])
     Ly = int(job_template["Ly"])
@@ -293,6 +300,10 @@ def make_job_json(job_template: dict, mu: float, samples_dir: str) -> str:
 
     job = {k: to_native(v) for k, v in job_template.items()}
     job["mu"] = round(float(mu), 6)
+    if results_base is not None:
+        job["results_base"] = results_base
+    if manage_csv is not None:
+        job["manage_csv"] = manage_csv
 
     with open(filepath, "w") as f:
         json.dump(job, f, indent=2)
@@ -304,6 +315,9 @@ def enqueue_jobs(
     job_template: dict,
     samples_dir: str,
     manifest_path: str = "run_all_queue.json",
+    *,
+    results_dir: str | None = None,
+    manage_path: str | None = None,
 ) -> tuple[int, list[str]]:
     """Write JSON files and prepend them to the run_all queue (priority stack).
 
@@ -311,7 +325,13 @@ def enqueue_jobs(
     """
     paths = []
     for mu in mu_values:
-        json_path = make_job_json(job_template, mu, samples_dir)
+        json_path = make_job_json(
+            job_template,
+            mu,
+            samples_dir,
+            results_base=results_dir,
+            manage_csv=manage_path,
+        )
         done_json = os.path.join(samples_dir, "done", os.path.basename(json_path))
         if os.path.isfile(done_json):
             os.remove(done_json)
@@ -568,6 +588,7 @@ def _request_more_data(
     n_points: int,
     samples_dir: str,
     manifest_path: str,
+    results_dir: str,
     pending_points: dict[tuple, int],
     action: str,
 ) -> bool:
@@ -575,7 +596,14 @@ def _request_more_data(
     if not new_mus:
         return False
 
-    n_added, paths = enqueue_jobs(new_mus, job, samples_dir, manifest_path)
+    n_added, paths = enqueue_jobs(
+        new_mus,
+        job,
+        samples_dir,
+        manifest_path,
+        results_dir=results_dir,
+        manage_path=manage_path,
+    )
     if n_added == 0:
         if _jobs_already_in_manifest(paths, manifest_path):
             if n_requests == 0:
@@ -618,6 +646,7 @@ def _request_psi_improvement(
     n_points: int,
     samples_dir: str,
     manifest_path: str,
+    results_dir: str,
     pending_points: dict[tuple, int],
 ) -> bool:
     """Queue refinement/extension when min(psi) is still above PSI_COEX_MAX."""
@@ -642,6 +671,7 @@ def _request_psi_improvement(
                 n_points=n_points,
                 samples_dir=samples_dir,
                 manifest_path=manifest_path,
+                results_dir=results_dir,
                 pending_points=pending_points,
                 action="refining (min psi above threshold)",
             )
@@ -664,6 +694,7 @@ def _request_psi_improvement(
             n_points=n_points,
             samples_dir=samples_dir,
             manifest_path=manifest_path,
+            results_dir=results_dir,
             pending_points=pending_points,
             action="extending (min psi above threshold)",
         )
@@ -722,6 +753,7 @@ def _finalize_if_psi_acceptable(
         n_points=n_points,
         samples_dir=samples_dir,
         manifest_path=manifest_path,
+        results_dir=results_dir,
         pending_points=pending_points,
     ):
         return True
@@ -839,6 +871,7 @@ def _analyze_sign_change(
             n_points=n_points,
             samples_dir=samples_dir,
             manifest_path=manifest_path,
+            results_dir=results_dir,
             pending_points=pending_points,
             action="extending toward edge",
         )
@@ -864,6 +897,7 @@ def _analyze_sign_change(
                 n_points=n_points,
                 samples_dir=samples_dir,
                 manifest_path=manifest_path,
+                results_dir=results_dir,
                 pending_points=pending_points,
                 action="refining",
             )
@@ -943,6 +977,7 @@ def _analyze_no_sign_change(
         n_points=n_points,
         samples_dir=samples_dir,
         manifest_path=manifest_path,
+        results_dir=results_dir,
         pending_points=pending_points,
         action="extending window",
     )
