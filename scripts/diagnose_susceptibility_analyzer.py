@@ -24,11 +24,30 @@ from analyzer import (
 from combo_paths import COMBO_KEY_FIELDS, combo_dir_name, discover_combo_results
 
 
+def print_queue_summary(manifest_path: str = "susceptibility_coex_queue.json") -> None:
+    import json
+    import os
+
+    if not os.path.isfile(manifest_path):
+        print(f"Queue manifest not found: {manifest_path}\n")
+        return
+    with open(manifest_path) as f:
+        m = json.load(f)
+    pending = m.get("pending", [])
+    in_flight = m.get("in_flight", {})
+    print(
+        f"Queue {manifest_path}: pending={len(pending)}  "
+        f"in_flight={len(in_flight)}\n"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Diagnose susceptibility analyzer readiness")
     parser.add_argument("--manage", default="susceptibility_manage.csv")
     parser.add_argument("--results", default="susceptibility_results/coex")
     args = parser.parse_args()
+
+    print_queue_summary("susceptibility_coex_queue.json")
 
     grouped = discover_combo_results(args.results)
     rows = read_manage(args.manage)

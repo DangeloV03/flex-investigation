@@ -41,7 +41,7 @@ from combo_paths import (
     phi_psi_png_path,
     write_phi_psi_csv,
 )
-from queue_manifest import prepend_pending
+from queue_manifest import prepend_pending, read_manifest
 
 MANAGE_CSV = "manage.csv"
 SAMPLES_DIR = "samples"
@@ -304,24 +304,41 @@ def enqueue_jobs(
     job_template: dict,
     samples_dir: str,
     manifest_path: str = "run_all_queue.json",
-) -> int:
+) -> tuple[int, list[str]]:
     """Write JSON files and prepend them to the run_all queue (priority stack).
 
-    Returns the number of jobs actually added to the queue (duplicates skipped).
+    Returns (number of paths newly added to pending, all json paths).
     """
     paths = []
     for mu in mu_values:
         json_path = make_job_json(job_template, mu, samples_dir)
         paths.append(json_path)
-        print(f"[analyzer] Enqueued {json_path} (mu={mu:.6f})")
+
+    manifest = read_manifest(manifest_path)
+    known = set(manifest.get("pending", [])) | set(manifest.get("in_flight", {}).values())
+
     import queue_manifest as qm
 
     prev = qm.MANIFEST_PATH
     qm.MANIFEST_PATH = manifest_path
     try:
-        return prepend_pending(paths)
+        n_added = prepend_pending(paths)
     finally:
         qm.MANIFEST_PATH = prev
+
+    for json_path, mu in zip(paths, mu_values):
+        if json_path not in known and n_added > 0:
+            print(f"[analyzer] Enqueued {json_path} (mu={mu:.6f})")
+    return n_added, paths
+
+
+def _jobs_already_in_manifest(paths: list[str], manifest_path: str) -> bool:
+    """True when every path is already pending or in flight."""
+    if not paths:
+        return False
+    manifest = read_manifest(manifest_path)
+    known = set(manifest.get("pending", [])) | set(manifest.get("in_flight", {}).values())
+    return all(p in known for p in paths)
 
 
 # ---------------------------------------------------------------------------
@@ -537,9 +554,22 @@ def _request_more_data(
     if not new_mus:
         return False
 
-    n_added = enqueue_jobs(new_mus, job, samples_dir, manifest_path)
+    n_added, paths = enqueue_jobs(new_mus, job, samples_dir, manifest_path)
     if n_added == 0:
-        print(f"[analyzer] {tag}: {action} jobs already queued, waiting")
+        if _jobs_already_in_manifest(paths, manifest_path):
+            if n_requests == 0:
+                rows[idx]["RequestForAdditionalData"] = 1
+                write_manage(manage_path, rows)
+                pending_points[combo_key] = n_points
+                print(
+                    f"[analyzer] {tag}: {action} jobs already in queue; "
+                    f"synced RequestForAdditionalData=1",
+                )
+            else:
+                pending_points.setdefault(combo_key, n_points)
+                print(f"[analyzer] {tag}: {action} jobs already queued, waiting")
+            return True
+        print(f"[analyzer] {tag}: failed to queue {action} jobs")
         return False
 
     n_requests += 1
