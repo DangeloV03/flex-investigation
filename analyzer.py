@@ -327,7 +327,7 @@ def enqueue_jobs(
         qm.MANIFEST_PATH = prev
 
     for json_path, mu in zip(paths, mu_values):
-        if json_path not in known and n_added > 0:
+        if json_path not in known:
             print(f"[analyzer] Enqueued {json_path} (mu={mu:.6f})")
     return n_added, paths
 
@@ -939,10 +939,23 @@ def _analyze_no_sign_change(
     )
 
 
+def _enrich_job_template(job: dict, results_dir: str, manage_path: str) -> dict:
+    """Ensure refinement JSONs carry the same paths as initial susceptibility jobs."""
+    enriched = dict(job)
+    enriched["results_base"] = results_dir
+    enriched["manage_csv"] = manage_path
+    return enriched
+
+
+def _manifest_has_activity(manifest_path: str) -> bool:
+    manifest = read_manifest(manifest_path)
+    return bool(manifest.get("pending")) or bool(manifest.get("in_flight"))
+
+
 def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
                   results_dir: str, samples_dir: str, manifest_path: str,
                   pending_points: dict[tuple, int]):
-    job = data["job"]
+    job = _enrich_job_template(data["job"], results_dir, manage_path)
     points = data["points"]
 
     combo = {f: job[f] for f in COMBO_KEY_FIELDS}
@@ -973,7 +986,13 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
     if n_requests > 0:
         points_at_request = pending_points.get(combo_key)
         if points_at_request is not None and n_points <= points_at_request:
-            if (
+            if not _manifest_has_activity(manifest_path):
+                print(
+                    f"[analyzer] {tag}: refinement stalled (queue empty, "
+                    f"still {n_points} mu points); re-analyzing",
+                )
+                pending_points.pop(combo_key, None)
+            elif (
                 n_points >= N_INITIAL_MU_POINTS
                 and has_phi_sign_change(phi_vals)
                 and interior_psi_minimum(psi_vals)
@@ -1001,7 +1020,9 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
                     unstable_reason=f"min(psi) > {PSI_COEX_MAX} after max requests",
                 )
                 pending_points.pop(combo_key, None)
-            return
+                return
+            else:
+                return
 
     common = dict(
         combo_key=combo_key,

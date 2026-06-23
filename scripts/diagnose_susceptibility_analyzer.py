@@ -41,6 +41,26 @@ def print_queue_summary(manifest_path: str = "susceptibility_coex_queue.json") -
     )
 
 
+def count_stray_coex_outputs(results_dir: str = "results") -> int:
+    """Count mu-level output.csv under default results/ (wrong dir for susceptibility)."""
+    from combo_paths import iter_output_csvs
+
+    n = 0
+    for csv_path in iter_output_csvs(results_dir):
+        try:
+            import pandas as pd
+
+            df = pd.read_csv(csv_path, nrows=1)
+            if df.empty:
+                continue
+            if float(df["delta_f"].iloc[0]) == -20.0 and float(df["k"].iloc[0]) == 0.0:
+                if int(df["Ly"].iloc[0]) == 16 and int(df["Lx"].iloc[0]) == 160:
+                    n += 1
+        except Exception:
+            continue
+    return n
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Diagnose susceptibility analyzer readiness")
     parser.add_argument("--manage", default="susceptibility_manage.csv")
@@ -48,6 +68,13 @@ def main() -> None:
     args = parser.parse_args()
 
     print_queue_summary("susceptibility_coex_queue.json")
+
+    stray = count_stray_coex_outputs("results")
+    if stray:
+        print(
+            f"WARNING: found {stray} susceptibility-like output.csv under results/ "
+            f"(refinement jobs likely wrote to the wrong directory).\n"
+        )
 
     grouped = discover_combo_results(args.results)
     rows = read_manage(args.manage)
@@ -72,12 +99,22 @@ def main() -> None:
         sign_change = has_phi_sign_change(phi_vals) if n_points else False
         psi_min = min_psi_value(psi_vals) if n_points else float("nan")
         psi_ok = is_psi_minimum_acceptable(psi_vals) if n_points else False
+        stalled = (
+            n_req > 0
+            and not analyzed
+            and n_points <= N_INITIAL_MU_POINTS
+        )
 
         print(f"{tag}")
         print(f"  eps={job['epsilon']}  n_mu={n_points}/{N_INITIAL_MU_POINTS}  "
               f"manage_row={idx}  n_requests={n_req}  analyzed={analyzed}  "
               f"phi_sign_change={sign_change}  min_psi={psi_min:.4f}  "
               f"psi_ok(<={PSI_COEX_MAX})={psi_ok}")
+        if stalled:
+            print(
+                "  STALL: n_requests>0 but mu count not growing — "
+                "pull latest analyzer.py fix and reset RequestForAdditionalData",
+            )
         if idx is None and rows:
             sample = rows[0]
             print(f"  manage sample: eps={sample.get('epsilon')} Lx={sample.get('Lx')} "
