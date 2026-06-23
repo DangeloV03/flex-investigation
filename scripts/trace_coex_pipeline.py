@@ -186,7 +186,7 @@ def count_outputs() -> None:
         or 0
     )
     print(f"  {COEX_RESULTS_DIR}/.../output.csv  count={coex}")
-    print(f"  results/.../160x16.../output.csv   count={stray} (should be 0 after migration)")
+    print(f"  results/.../160x16.../output.csv   count={stray} (coex stray; main campaign also uses results/)")
     print(
         f"\n  json_runner resolves outdir as:\n"
         f"    {{results_base}}/{{combo_dir}}/mu_sweeps/mu{{tag}}/output.csv\n"
@@ -267,6 +267,11 @@ def check_manage_and_plans() -> None:
             f"\n  Summary: {n_open} open row(s), "
             f"{n_enqueue} need Slurm, {n_finalize} need finalize-only"
         )
+        if n_enqueue:
+            print(
+                "\n  If pending=0 but rows need Slurm, restart analyzer after git pull "
+                "(old process may have stale in-memory skip state; fixed in latest analyzer.py)."
+            )
         if n_finalize and not n_enqueue:
             print(
                 "\n  NOTE: Empty queue + no flex_sim is EXPECTED right now.\n"

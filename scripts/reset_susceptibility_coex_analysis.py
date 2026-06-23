@@ -6,6 +6,10 @@ IMPORTANT: Stop the coex analyzer first or it will re-mark rows analyzed within
 one poll cycle:
     tmux kill-session -t sus-coex
 
+After reset, restart daemons (a long-running analyzer caches nothing in manage,
+but restart clears pending_points wait state):
+    ./scripts/start_sus_coex_daemons.sh
+
 Keeps coex simulation output.csv files; only resets manage.csv analysis state.
 
 Usage:

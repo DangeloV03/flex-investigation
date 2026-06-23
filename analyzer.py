@@ -1151,7 +1151,6 @@ def main():
     print(f"[analyzer] Watching '{args.results}' every {args.interval}s "
           f"({mode}, Ctrl-C to stop)")
 
-    processed_combos = set()  # combo_keys that are fully analyzed
     pending_points: dict[tuple, int] = {}  # point count when last follow-up was queued
     last_focus_key: tuple[str, ...] | None = None
 
@@ -1174,15 +1173,11 @@ def main():
         for combo_key, data in grouped.items():
             if args.depth_first and combo_key != active_key:
                 continue
-            if combo_key in processed_combos:
-                continue
 
-            # Check if this combo is already marked analyzed in manage.csv
             rows = read_manage(args.manage)
             combo = {f: data["job"][f] for f in COMBO_KEY_FIELDS}
             idx = find_manage_row(rows, combo)
             if idx is not None and rows[idx].get("isAnalyzed", ""):
-                processed_combos.add(combo_key)
                 pending_points.pop(combo_key, None)
                 continue
 
@@ -1190,11 +1185,6 @@ def main():
                 combo_key, data, args.manage, args.results, args.samples, args.manifest,
                 pending_points,
             )
-
-            # Re-check if now analyzed
-            rows = read_manage(args.manage)
-            if idx is not None and rows[idx].get("isAnalyzed", ""):
-                processed_combos.add(combo_key)
 
         if args.once:
             break
