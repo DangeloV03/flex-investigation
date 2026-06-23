@@ -221,9 +221,16 @@ def main() -> None:
 
     print(
         f"[run_susceptibility_all] phase={args.phase} runner={runner} "
-        f"manifest={manifest} samples={samples_root} "
+        f"manifest={manifest} samples={samples_root} cwd={os.getcwd()} "
+        f"mode={'local' if use_local else 'slurm'} "
         f"(max {args.max_concurrent} concurrent)"
     )
+    if use_local:
+        print(
+            "[run_susceptibility_all] WARNING: local mode — jobs run on this node, "
+            "not via sbatch; squeue will stay empty.",
+            file=sys.stderr,
+        )
 
     while True:
         reconcile_in_flight(
@@ -251,6 +258,12 @@ def main() -> None:
             f"[run_susceptibility_all] cycle: submitted={n_submitted}, "
             f"pending={pending}, in_flight={in_flight}"
         )
+        if pending > 0 and n_submitted == 0 and in_flight == 0 and not use_local:
+            print(
+                "[run_susceptibility_all] NOTE: pending>0 but nothing submitted this cycle "
+                f"(manifest={os.path.abspath(manifest)})",
+                file=sys.stderr,
+            )
 
         if args.once:
             break

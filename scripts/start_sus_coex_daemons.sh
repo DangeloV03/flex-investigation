@@ -19,6 +19,11 @@ else
   DAEMON_SETUP='module load anaconda3/2024.10 2>/dev/null; source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate lattice; export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"; export PYTHONUNBUFFERED=1'
 fi
 
+if ! command -v sbatch >/dev/null 2>&1; then
+  echo "WARNING: sbatch not in PATH — coex dispatcher will use LOCAL mode (no flex_sim in squeue)."
+  echo "  Load Slurm on Della or start dispatcher from a login shell with sbatch available."
+fi
+
 if tmux has-session -t "$SESSION" 2>/dev/null; then
   echo "Session '$SESSION' already exists."
   if ! pgrep -f "run_susceptibility_all.py --phase coex" >/dev/null \

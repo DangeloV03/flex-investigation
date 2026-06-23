@@ -119,7 +119,7 @@ def check_code_version() -> None:
 
 def check_queue() -> dict:
     section("3. Queue manifest (analyzer → dispatcher handoff)")
-    print(f"  File: {COEX_MANIFEST}")
+    print(f"  File: {os.path.abspath(COEX_MANIFEST)}")
     m = read_manifest(COEX_MANIFEST)
     pending = m.get("pending", [])
     in_flight = m.get("in_flight", {})
