@@ -21,6 +21,13 @@ fi
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
   echo "Session '$SESSION' already exists."
+  if ! pgrep -f "run_susceptibility_all.py --phase coex" >/dev/null \
+     || ! pgrep -f "susceptibility_coex_queue.json" >/dev/null; then
+    echo "  WARNING: sus-coex tmux exists but dispatcher and/or analyzer process is missing."
+    echo "  The session is probably stale. Kill and restart:"
+    echo "    tmux kill-session -t $SESSION"
+    echo "    $0"
+  fi
   echo "  attach:  tmux attach -t $SESSION"
   exit 1
 fi

@@ -1140,6 +1140,11 @@ def main():
         action="store_true",
         help="Finish mu refinement for one epsilon before starting the next",
     )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run one poll cycle then exit (debugging)",
+    )
     args = parser.parse_args()
 
     mode = "depth-first" if args.depth_first else "breadth-first"
@@ -1191,6 +1196,8 @@ def main():
             if idx is not None and rows[idx].get("isAnalyzed", ""):
                 processed_combos.add(combo_key)
 
+        if args.once:
+            break
         time.sleep(args.interval)
 
 
