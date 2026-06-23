@@ -1,7 +1,7 @@
 """
 plot_susceptibility.py
 
-Plot susceptibility χ vs ε and peak χ vs L from susceptibility_data.csv files.
+Plot susceptibility χ vs ε, order parameter m vs ε, and peak χ vs L from susceptibility_data.csv files.
 
 Usage:
     python plot_susceptibility.py
@@ -65,11 +65,23 @@ def aggregate(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values(["L", "epsilon"])
 
 
-def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
+def _plot_l_curves_vs_epsilon(
+    agg: pd.DataFrame,
+    outdir: str,
+    *,
+    y_col: str,
+    yerr_col: str,
+    ylabel: str,
+    title: str,
+    filename: str,
+    log_y: bool = False,
+    y_filter: pd.DataFrame | None = None,
+) -> None:
     os.makedirs(outdir, exist_ok=True)
-    plot_df = agg[agg["chi_mean"] > 0].copy()
+    plot_df = y_filter if y_filter is not None else agg
     if plot_df.empty:
-        raise ValueError("No positive chi values to plot on log scale")
+        raise ValueError(f"No data to plot for {filename}")
+
     fig, ax = plt.subplots(figsize=(8, 5))
     for l_val, sub in plot_df.groupby("L"):
         l_int = int(l_val)
@@ -77,8 +89,8 @@ def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
         color = style["color"]
         ax.errorbar(
             sub["epsilon"],
-            sub["chi_mean"],
-            yerr=sub["chi_stderr"],
+            sub[y_col],
+            yerr=sub[yerr_col],
             fmt=f"{style['marker']}-",
             color=color,
             markerfacecolor="none",
@@ -87,17 +99,47 @@ def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
             capsize=3,
             label=f"L = {l_int}",
         )
-    ax.set_yscale("log")
+    if y_col == "m_mean":
+        ax.axhline(0.0, color="0.5", linewidth=0.8, linestyle="--")
+    if log_y:
+        ax.set_yscale("log")
     ax.set_xlabel(r"$\varepsilon$")
-    ax.set_ylabel(r"$\chi$")
-    ax.set_title(r"Susceptibility vs $\varepsilon$")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
     ax.legend(fontsize=8, ncol=2)
-    ax.grid(True, which="both", alpha=0.3)
-    path = os.path.join(outdir, "chi_vs_epsilon.png")
+    ax.grid(True, which="both" if log_y else "major", alpha=0.3)
+    path = os.path.join(outdir, filename)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"Wrote {path}")
+
+
+def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
+    plot_df = agg[agg["chi_mean"] > 0].copy()
+    _plot_l_curves_vs_epsilon(
+        agg,
+        outdir,
+        y_col="chi_mean",
+        yerr_col="chi_stderr",
+        ylabel=r"$\chi$",
+        title=r"Susceptibility vs $\varepsilon$",
+        filename="chi_vs_epsilon.png",
+        log_y=True,
+        y_filter=plot_df,
+    )
+
+
+def plot_m_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
+    _plot_l_curves_vs_epsilon(
+        agg,
+        outdir,
+        y_col="m_mean",
+        yerr_col="m_mean_stderr",
+        ylabel=r"$m$",
+        title=r"Order parameter vs $\varepsilon$",
+        filename="m_vs_epsilon.png",
+    )
 
 
 def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str) -> None:
@@ -132,6 +174,7 @@ def main() -> None:
     df = collect_susceptibility_data(args.results)
     agg = aggregate(df)
     plot_chi_vs_epsilon(agg, args.outdir)
+    plot_m_vs_epsilon(agg, args.outdir)
     plot_peak_chi_vs_L(agg, args.outdir)
 
 
