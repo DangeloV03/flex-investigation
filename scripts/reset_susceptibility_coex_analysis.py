@@ -101,13 +101,17 @@ def main() -> None:
     write_manage(args.manage, rows)
     after_rows = read_manage(args.manage)
     after = count_analyzed(after_rows)
+    expected_after = before - n_reset
     print(f"Reset {n_reset} row(s) in {args.manage} (isAnalyzed: {before} -> {after})")
-    if after > 0:
+    if after != expected_after:
         print(
-            "WARNING: isAnalyzed still non-zero after reset. "
-            "An analyzer may still be running — run:\n"
-            "  tmux kill-session -t sus-coex",
+            "WARNING: isAnalyzed count unexpected after reset. "
+            "An analyzer may still be running — check:\n"
+            "  pgrep -af 'analyzer.py.*susceptibility'\n"
+            "  tmux kill-session -t sus-analyzer   # or sus-analysis, sus-coex",
         )
+    elif args.bad_psi_only and after > 0:
+        print(f"Left {after} row(s) analyzed (min(psi) already OK).")
 
 
 if __name__ == "__main__":
