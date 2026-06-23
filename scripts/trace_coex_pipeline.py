@@ -138,6 +138,22 @@ def check_queue() -> dict:
         print("  in_flight:")
         for jid, p in list(in_flight.items())[:5]:
             print(f"    job {jid}: {p}")
+
+    wrong = read_manifest("run_all_queue.json")
+    leaked = [
+        p for p in wrong.get("pending", []) + list(wrong.get("in_flight", {}).values())
+        if "susceptibility_samples/coex" in p or "homo_Ly16_mu" in p
+    ]
+    if leaked:
+        print(
+            f"\n  LEAK: {len(leaked)} coex job path(s) found in run_all_queue.json "
+            f"(analyzer prepend bug — coex dispatcher never sees these):"
+        )
+        for p in leaked[:5]:
+            print(f"    {p}")
+        print(
+            "  Fix: git pull (prepend_pending path= fix), restart sus-coex, re-run analyzer once."
+        )
     return m
 
 

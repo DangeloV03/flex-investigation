@@ -340,18 +340,17 @@ def enqueue_jobs(
     manifest = read_manifest(manifest_path)
     known = set(manifest.get("pending", [])) | set(manifest.get("in_flight", {}).values())
 
-    import queue_manifest as qm
-
-    prev = qm.MANIFEST_PATH
-    qm.MANIFEST_PATH = manifest_path
-    try:
-        n_added = prepend_pending(paths)
-    finally:
-        qm.MANIFEST_PATH = prev
+    n_added = prepend_pending(paths, path=manifest_path)
 
     for json_path, mu in zip(paths, mu_values):
-        if json_path not in known:
+        if json_path not in known and n_added > 0:
             print(f"[analyzer] Enqueued {json_path} (mu={mu:.6f})")
+    if n_added == 0 and paths and not all(p in known for p in paths):
+        print(
+            f"[analyzer] WARNING: wrote {len(paths)} JSON(s) but added 0 to "
+            f"'{manifest_path}' (paths may be duplicates in that manifest)",
+            file=sys.stderr,
+        )
     return n_added, paths
 
 
