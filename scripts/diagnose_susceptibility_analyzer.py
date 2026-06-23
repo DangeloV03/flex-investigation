@@ -13,9 +13,12 @@ if str(ROOT) not in sys.path:
 
 from analyzer import (
     N_INITIAL_MU_POINTS,
+    PSI_COEX_MAX,
     build_curves,
     find_manage_row,
     has_phi_sign_change,
+    is_psi_minimum_acceptable,
+    min_psi_value,
     read_manage,
 )
 from combo_paths import COMBO_KEY_FIELDS, combo_dir_name, discover_combo_results
@@ -46,13 +49,16 @@ def main() -> None:
         n_req = int(rows[idx].get("RequestForAdditionalData", 0)) if idx is not None else -1
         analyzed = bool(idx is not None and str(rows[idx].get("isAnalyzed", "")).strip())
 
-        mu_vals, phi_vals, _, _, _ = build_curves(data["points"])
+        mu_vals, phi_vals, _, psi_vals, _ = build_curves(data["points"])
         sign_change = has_phi_sign_change(phi_vals) if n_points else False
+        psi_min = min_psi_value(psi_vals) if n_points else float("nan")
+        psi_ok = is_psi_minimum_acceptable(psi_vals) if n_points else False
 
         print(f"{tag}")
         print(f"  eps={job['epsilon']}  n_mu={n_points}/{N_INITIAL_MU_POINTS}  "
               f"manage_row={idx}  n_requests={n_req}  analyzed={analyzed}  "
-              f"phi_sign_change={sign_change}")
+              f"phi_sign_change={sign_change}  min_psi={psi_min:.4f}  "
+              f"psi_ok(<={PSI_COEX_MAX})={psi_ok}")
         if idx is None and rows:
             sample = rows[0]
             print(f"  manage sample: eps={sample.get('epsilon')} Lx={sample.get('Lx')} "

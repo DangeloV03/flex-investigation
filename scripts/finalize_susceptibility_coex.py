@@ -22,12 +22,15 @@ if str(ROOT) not in sys.path:
 
 from analyzer import (
     N_INITIAL_MU_POINTS,
+    PSI_COEX_MAX,
     build_curves,
     combo_dir_name,
     finalize_combo,
     find_manage_row,
     has_phi_sign_change,
     interior_psi_minimum,
+    is_psi_minimum_acceptable,
+    min_psi_value,
     read_manage,
 )
 from combo_paths import COMBO_KEY_FIELDS, discover_combo_results
@@ -40,6 +43,11 @@ def main() -> None:
     parser.add_argument("--manage", default="susceptibility_manage.csv")
     parser.add_argument("--results", default="susceptibility_results/coex")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=f"Finalize even when min(psi) > {PSI_COEX_MAX}",
+    )
     args = parser.parse_args()
 
     grouped = discover_combo_results(args.results)
@@ -69,6 +77,12 @@ def main() -> None:
             continue
         if not interior_psi_minimum(psi_vals):
             print(f"[skip] {tag}: min(psi) at edge of mu window")
+            continue
+        if not args.force and not is_psi_minimum_acceptable(psi_vals):
+            print(
+                f"[skip] {tag}: min(psi)={min_psi_value(psi_vals):.4f} > {PSI_COEX_MAX} "
+                f"(use --force to override)",
+            )
             continue
 
         n_requests = int(rows[idx].get("RequestForAdditionalData", 0))

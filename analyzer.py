@@ -8,9 +8,9 @@ Long-running watcher that:
   4. Waits for all N_INITIAL_MU_POINTS (10) initial mu jobs before analyzing.
   5. Checks for sign change in phi:
        - Sign change found  -> refine mu in the bracket until dense or budget exhausted.
-       - Neighbors of min(psi) near zero -> finalize (resolved).
+       - Neighbors of min(psi) near zero -> finalize (resolved) if min(psi) <= PSI_COEX_MAX.
        - Interior min(psi) with sign change -> finalize with argmin(psi) once bracket
-         is dense or no new mu values remain (never NaN for this case).
+         is dense or no new mu values remain, and min(psi) <= PSI_COEX_MAX.
        - No sign change     -> extend mu window; NaN only if budget exhausted.
      Max MAX_ADDITIONAL_REQUESTS additional data requests per combo.
   6. Finds min(psi) -> mu_coex_SIM.
@@ -51,6 +51,7 @@ N_INITIAL_MU_POINTS = 10  # must match generate_samples.N_MU_POINTS
 N_REFINEMENT_POINTS = 10
 PHI_NEIGHBOR_SIGMA_K = 2.0  # |phi| <= k * max(phi_err, PHI_ABS_TOL) counts as "close"
 PHI_ABS_TOL = 0.05
+PSI_COEX_MAX = 0.05  # min(psi) must be at or below this to accept mu_coex_SIM
 MANAGE_FIELDS = COMBO_KEY_FIELDS + [
     "mu_coex_FLEX",
     "isSubmitted",
@@ -361,6 +362,15 @@ def psi_min_index(psi_vals: np.ndarray) -> int:
     return int(np.argmin(psi_vals))
 
 
+def min_psi_value(psi_vals: np.ndarray) -> float:
+    return float(np.min(psi_vals))
+
+
+def is_psi_minimum_acceptable(psi_vals: np.ndarray) -> bool:
+    """True when argmin(psi) is small enough to trust mu_coex_SIM."""
+    return min_psi_value(psi_vals) <= PSI_COEX_MAX
+
+
 def interior_psi_minimum(psi_vals: np.ndarray) -> bool:
     """True when argmin(psi) is not at the edge of the sampled mu range."""
     if len(psi_vals) < 3:
@@ -540,6 +550,145 @@ def _request_more_data(
     return True
 
 
+def _request_psi_improvement(
+    *,
+    tag: str,
+    combo_key: tuple,
+    combo: dict,
+    job: dict,
+    mu_vals: np.ndarray,
+    phi_vals: np.ndarray,
+    psi_vals: np.ndarray,
+    manage_path: str,
+    rows: list[dict],
+    idx: int,
+    n_requests: int,
+    n_points: int,
+    samples_dir: str,
+    manifest_path: str,
+    pending_points: dict[tuple, int],
+) -> bool:
+    """Queue refinement/extension when min(psi) is still above PSI_COEX_MAX."""
+    if n_requests >= MAX_ADDITIONAL_REQUESTS:
+        return False
+
+    bracket = sign_change_bracket(mu_vals, phi_vals)
+    if bracket is not None and interior_psi_minimum(psi_vals):
+        mu_lo, mu_hi = bracket
+        new_mus = unsampled_mus(
+            list(np.linspace(mu_lo, mu_hi, N_REFINEMENT_POINTS)),
+            mu_vals,
+        )
+        if new_mus:
+            return _request_more_data(
+                tag=tag,
+                combo_key=combo_key,
+                combo=combo,
+                new_mus=new_mus,
+                job=job,
+                manage_path=manage_path,
+                rows=rows,
+                idx=idx,
+                n_requests=n_requests,
+                n_points=n_points,
+                samples_dir=samples_dir,
+                manifest_path=manifest_path,
+                pending_points=pending_points,
+                action="refining (min psi above threshold)",
+            )
+
+    min_idx = psi_min_index(psi_vals)
+    toward_edge = min_idx if not interior_psi_minimum(psi_vals) else None
+    new_lo, new_hi = extension_window(mu_vals, phi_vals, toward_edge=toward_edge)
+    new_mus = unsampled_mus(
+        list(np.linspace(new_lo, new_hi, N_REFINEMENT_POINTS)),
+        mu_vals,
+    )
+    if new_mus:
+        return _request_more_data(
+            tag=tag,
+            combo_key=combo_key,
+            combo=combo,
+            new_mus=new_mus,
+            job=job,
+            manage_path=manage_path,
+            rows=rows,
+            idx=idx,
+            n_requests=n_requests,
+            n_points=n_points,
+            samples_dir=samples_dir,
+            manifest_path=manifest_path,
+            pending_points=pending_points,
+            action="extending (min psi above threshold)",
+        )
+    return False
+
+
+def _finalize_if_psi_acceptable(
+    *,
+    finalize_reason: str,
+    unstable_reason: str,
+    combo_key: tuple,
+    combo: dict,
+    tag: str,
+    job: dict,
+    mu_vals: np.ndarray,
+    phi_vals: np.ndarray,
+    phi_errs: np.ndarray,
+    psi_vals: np.ndarray,
+    psi_errs: np.ndarray,
+    manage_path: str,
+    results_dir: str,
+    samples_dir: str,
+    manifest_path: str,
+    pending_points: dict[tuple, int],
+    rows: list[dict],
+    idx: int,
+    n_requests: int,
+    n_points: int,
+) -> bool:
+    """Finalize when min(psi) is acceptable; otherwise refine or mark unstable."""
+    if is_psi_minimum_acceptable(psi_vals):
+        finalize_combo(
+            combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+            psi_vals, psi_errs, manage_path, results_dir, n_requests,
+            reason=finalize_reason,
+        )
+        return True
+
+    psi_min = min_psi_value(psi_vals)
+    print(
+        f"[analyzer] {tag}: min(psi)={psi_min:.4f} > {PSI_COEX_MAX}, "
+        f"rejecting {finalize_reason!r}",
+    )
+    if _request_psi_improvement(
+        tag=tag,
+        combo_key=combo_key,
+        combo=combo,
+        job=job,
+        mu_vals=mu_vals,
+        phi_vals=phi_vals,
+        psi_vals=psi_vals,
+        manage_path=manage_path,
+        rows=rows,
+        idx=idx,
+        n_requests=n_requests,
+        n_points=n_points,
+        samples_dir=samples_dir,
+        manifest_path=manifest_path,
+        pending_points=pending_points,
+    ):
+        return True
+
+    reason = unstable_reason or f"min(psi)={psi_min:.4f} > {PSI_COEX_MAX}"
+    finalize_unstable(
+        combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
+        psi_vals, psi_errs, manage_path, results_dir, n_requests,
+        reason=reason,
+    )
+    return True
+
+
 def _analyze_sign_change(
     *,
     combo_key: tuple,
@@ -567,11 +716,32 @@ def _analyze_sign_change(
         return
     mu_lo, mu_hi = bracket
 
+    finalize_kwargs = dict(
+        combo_key=combo_key,
+        combo=combo,
+        tag=tag,
+        job=job,
+        mu_vals=mu_vals,
+        phi_vals=phi_vals,
+        phi_errs=phi_errs,
+        psi_vals=psi_vals,
+        psi_errs=psi_errs,
+        manage_path=manage_path,
+        results_dir=results_dir,
+        samples_dir=samples_dir,
+        manifest_path=manifest_path,
+        pending_points=pending_points,
+        rows=rows,
+        idx=idx,
+        n_requests=n_requests,
+        n_points=n_points,
+    )
+
     if is_coex_resolved(mu_vals, phi_vals, phi_errs, psi_vals):
-        finalize_combo(
-            combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-            psi_vals, psi_errs, manage_path, results_dir, n_requests,
-            reason="neighbors resolved",
+        _finalize_if_psi_acceptable(
+            **finalize_kwargs,
+            finalize_reason="neighbors resolved",
+            unstable_reason=f"min(psi) > {PSI_COEX_MAX} after max requests",
         )
         return
 
@@ -580,10 +750,10 @@ def _analyze_sign_change(
     interior_min = interior_psi_minimum(psi_vals)
 
     if bracket_dense and interior_min:
-        finalize_combo(
-            combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-            psi_vals, psi_errs, manage_path, results_dir, n_requests,
-            reason="dense bracket",
+        _finalize_if_psi_acceptable(
+            **finalize_kwargs,
+            finalize_reason="dense bracket",
+            unstable_reason=f"min(psi) > {PSI_COEX_MAX} after max requests",
         )
         return
 
@@ -603,10 +773,10 @@ def _analyze_sign_change(
             mu_vals,
         )
         if not new_mus:
-            finalize_combo(
-                combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-                psi_vals, psi_errs, manage_path, results_dir, n_requests,
-                reason="argmin(psi)",
+            _finalize_if_psi_acceptable(
+                **finalize_kwargs,
+                finalize_reason="argmin(psi)",
+                unstable_reason="min(psi) at edge of mu window",
             )
             return
 
@@ -662,13 +832,14 @@ def _analyze_sign_change(
             if not bracket_dense:
                 print(
                     f"[analyzer] {tag}: refinement already queued; "
-                    f"finalizing with argmin(psi)",
+                    f"waiting for new data before finalizing",
                 )
+                return
 
-    finalize_combo(
-        combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-        psi_vals, psi_errs, manage_path, results_dir, n_requests,
-        reason="argmin(psi)",
+    _finalize_if_psi_acceptable(
+        **finalize_kwargs,
+        finalize_reason="argmin(psi)",
+        unstable_reason=f"min(psi) > {PSI_COEX_MAX} after max requests",
     )
 
 
@@ -776,10 +947,27 @@ def analyze_combo(combo_key: tuple, data: dict, manage_path: str,
                 and has_phi_sign_change(phi_vals)
                 and interior_psi_minimum(psi_vals)
             ):
-                finalize_combo(
-                    combo_key, combo, tag, mu_vals, phi_vals, phi_errs,
-                    psi_vals, psi_errs, manage_path, results_dir, n_requests,
-                    reason="initial batch complete (no new refinement data)",
+                _finalize_if_psi_acceptable(
+                    combo_key=combo_key,
+                    combo=combo,
+                    tag=tag,
+                    job=job,
+                    mu_vals=mu_vals,
+                    phi_vals=phi_vals,
+                    phi_errs=phi_errs,
+                    psi_vals=psi_vals,
+                    psi_errs=psi_errs,
+                    manage_path=manage_path,
+                    results_dir=results_dir,
+                    samples_dir=samples_dir,
+                    manifest_path=manifest_path,
+                    pending_points=pending_points,
+                    rows=rows,
+                    idx=idx,
+                    n_requests=n_requests,
+                    n_points=n_points,
+                    finalize_reason="initial batch complete (no new refinement data)",
+                    unstable_reason=f"min(psi) > {PSI_COEX_MAX} after max requests",
                 )
                 pending_points.pop(combo_key, None)
             return
