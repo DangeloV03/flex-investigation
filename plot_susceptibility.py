@@ -18,6 +18,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+# Open markers and colors matched to reference χ vs control-parameter figure.
+L_PLOT_STYLE: dict[int, dict[str, str]] = {
+    16: {"color": "black", "marker": "o"},
+    32: {"color": "red", "marker": "s"},
+    48: {"color": "#90EE90", "marker": "^"},
+    64: {"color": "blue", "marker": "D"},
+    96: {"color": "cyan", "marker": "v"},
+    128: {"color": "saddlebrown", "marker": "<"},
+    256: {"color": "orange", "marker": ">"},
+}
+
 
 def collect_susceptibility_data(results_dir: str) -> pd.DataFrame:
     pattern = os.path.join(results_dir, "**", "susceptibility_data.csv")
@@ -53,19 +64,27 @@ def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
     os.makedirs(outdir, exist_ok=True)
     fig, ax = plt.subplots(figsize=(8, 5))
     for l_val, sub in agg.groupby("L"):
+        l_int = int(l_val)
+        style = L_PLOT_STYLE.get(l_int, {"color": "gray", "marker": "o"})
+        color = style["color"]
         ax.errorbar(
             sub["epsilon"],
             sub["chi_mean"],
             yerr=sub["chi_stderr"],
-            fmt="o-",
+            fmt=f"{style['marker']}-",
+            color=color,
+            markerfacecolor="none",
+            markeredgecolor=color,
+            markeredgewidth=1.2,
             capsize=3,
-            label=f"L={int(l_val)}",
+            label=f"L = {l_int}",
         )
+    ax.set_yscale("log")
     ax.set_xlabel(r"$\varepsilon$")
     ax.set_ylabel(r"$\chi$")
     ax.set_title(r"Susceptibility vs $\varepsilon$")
     ax.legend(fontsize=8, ncol=2)
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, which="both", alpha=0.3)
     path = os.path.join(outdir, "chi_vs_epsilon.png")
     fig.tight_layout()
     fig.savefig(path, dpi=150)
