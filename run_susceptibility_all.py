@@ -178,6 +178,11 @@ def main() -> None:
     parser.add_argument("--max-concurrent", type=int, default=MAX_CONCURRENT)
     parser.add_argument("--local", action="store_true")
     parser.add_argument("--once", action="store_true")
+    parser.add_argument(
+        "--exit-when-empty",
+        action="store_true",
+        help="Exit once pending and in_flight are both zero (default: keep polling for analyzer refinements)",
+    )
     args = parser.parse_args()
 
     cfg = PHASE_CONFIG[args.phase]
@@ -236,9 +241,14 @@ def main() -> None:
 
         if args.once:
             break
-        if pending == 0 and in_flight == 0:
+        if args.exit_when_empty and pending == 0 and in_flight == 0:
             print("[run_susceptibility_all] queue empty — exiting")
             break
+        if pending == 0 and in_flight == 0:
+            print(
+                f"[run_susceptibility_all] queue idle — waiting {args.interval}s "
+                f"for analyzer refinements (Ctrl-C to stop)",
+            )
         time.sleep(args.interval)
 
 
