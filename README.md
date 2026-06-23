@@ -26,6 +26,18 @@ export LATTICE_GAS_ROOT="$HOME/software/lattice-gas"
 
 Add these to your `~/.bashrc` on Della so Slurm jobs and tmux sessions see the same paths.
 
+**Or use the startup helper** (sets paths, conda, library path, and `cd` into the repo):
+
+```bash
+# Della — add this line to ~/.bashrc (edit path if your clone lives elsewhere)
+source /scratch/gpfs/WJACOBS/$USER/flex-investigation/scripts/env.sh
+
+# Local — from anywhere inside the repo
+source scripts/env.sh
+```
+
+Run `./scripts/env.sh` once to print a status summary and verify imports.
+
 ---
 
 ### 1. One-time environment setup (local or Della)
@@ -253,10 +265,38 @@ flowchart LR
 | `queue_manifest.py` | Locked read/write helpers for `run_all_queue.json` |
 | `flex_coex_chemical_potential_prediction.py` | FLEX μ_coex solver |
 
+### Susceptibility campaign (Ising limit)
+
+Finite-size susceptibility scan at βΔf = −20, k = 0, βΔμ = 0. Coexistence uses the **same slab pipeline** as above; production runs square L×L lattices at `μ_coex_SIM`.
+
+| Script | Purpose |
+|--------|---------|
+| `generate_susceptibility_coex.py` | ε grid → slab μ-sweep JSONs in `susceptibility_samples/coex/` |
+| `run_susceptibility_all.py --phase coex` | Dispatch coex jobs via `json_runner.py` |
+| `analyzer.py --manage susceptibility_manage.csv --results susceptibility_results/coex` | Find `μ_coex_SIM` per ε |
+| `generate_susceptibility_jobs.py` | ε × L grid → prod JSONs in `susceptibility_samples/prod/` |
+| `susceptibility_runner.py` | Square L×L, 80% random fill, measure χ = (N/T)(⟨m²⟩ − ⟨m⟩²) |
+| `run_susceptibility_all.py --phase prod` | Dispatch prod jobs |
+| `plot_susceptibility.py` | Plot χ(ε) and max(χ) vs L |
+
+**Typical workflow:**
+
+```bash
+python generate_susceptibility_coex.py
+python run_susceptibility_all.py --phase coex --local --max-concurrent 2   # or Slurm on Della
+python analyzer.py --manage susceptibility_manage.csv --results susceptibility_results/coex
+python generate_susceptibility_jobs.py
+python run_susceptibility_all.py --phase prod --local --max-concurrent 2
+python plot_susceptibility.py
+```
+
+**Naming:** coex JSONs match the main campaign (`homo_eps2p0_dm0p0_Ly16_mu03.json`). Prod JSONs add a `susceptibility_` prefix (`susceptibility_homo_eps1p76_dm0p0_L64.json`). Results land under `susceptibility_results/susceptibility_{L}x{L}_.../susceptibility_data.csv`.
+
 ### Helper scripts (`scripts/`)
 
 | Script | When to use |
 |--------|-------------|
+| `env.sh` | Source on SSH login: exports, conda activate, import check |
 | `start_daemons.sh` / `stop_daemons.sh` | Start/stop tmux session on Della |
 | `repair_queue.py` | Restore missing JSON from `samples/done/`, clear stale `in_flight` |
 | `clean_wrong_npy.py` | Delete bad lattice snapshots and re-trigger analysis |
@@ -303,6 +343,12 @@ flex-investigation/
 ├── analyzer.py
 ├── queue_manifest.py
 ├── flex_coex_chemical_potential_prediction.py
+├── susceptibility_paths.py
+├── generate_susceptibility_coex.py
+├── generate_susceptibility_jobs.py
+├── susceptibility_runner.py
+├── run_susceptibility_all.py
+├── plot_susceptibility.py
 ├── slurm_config.yml
 ├── requirements.txt
 ├── scripts/
