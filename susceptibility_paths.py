@@ -7,6 +7,7 @@ Production (square L×L): susceptibility_runner, under susceptibility_results/su
 
 from __future__ import annotations
 
+import csv
 import os
 
 from combo_paths import combo_dir_name
@@ -20,6 +21,50 @@ COEX_MANIFEST = "susceptibility_coex_queue.json"
 PROD_MANIFEST = "susceptibility_prod_queue.json"
 SUSCEPTIBILITY_DATA_CSV = "susceptibility_data.csv"
 
+# Pre-SEM schema (smoke tests / early prod); current adds *_err columns after each moment/chi.
+SUSCEPTIBILITY_CSV_FIELDS_LEGACY = [
+    "id",
+    "replica_id",
+    "epsilon",
+    "delta_f",
+    "delta_mu",
+    "k",
+    "scheme",
+    "L",
+    "Lx",
+    "Ly",
+    "mu",
+    "mu_coex_SIM",
+    "m_mean",
+    "m2_mean",
+    "m4_mean",
+    "chi",
+    "beta",
+    "eq_time",
+    "prod_time",
+    "prod_chunks",
+    "initial_fraction",
+    "seed",
+    "time",
+]
+
+SUSCEPTIBILITY_CSV_FIELDS = [
+    *SUSCEPTIBILITY_CSV_FIELDS_LEGACY[:13],
+    "m_mean_err",
+    "m2_mean",
+    "m2_mean_err",
+    "m4_mean",
+    "m4_mean_err",
+    "chi",
+    "chi_err",
+    *SUSCEPTIBILITY_CSV_FIELDS_LEGACY[16:],
+]
+
+_FIELDNAMES_BY_WIDTH = {
+    len(SUSCEPTIBILITY_CSV_FIELDS): SUSCEPTIBILITY_CSV_FIELDS,
+    len(SUSCEPTIBILITY_CSV_FIELDS_LEGACY): SUSCEPTIBILITY_CSV_FIELDS_LEGACY,
+}
+
 # Join prod jobs to coex manage rows (μ_coex is independent of square L).
 COEX_LOOKUP_FIELDS = ["epsilon", "delta_f", "delta_mu", "k", "scheme"]
 
@@ -30,6 +75,33 @@ ISING_DELTA_F = -20.0
 ISING_K = 0.0
 ISING_DELTA_MU = 0.0
 ISING_SCHEME = "homo"
+
+
+def read_susceptibility_csv(path: str) -> list[dict]:
+    """Load prod CSV rows, tolerating mixed legacy (23-col) and current (27-col) lines."""
+    if not os.path.isfile(path):
+        return []
+
+    rows: list[dict] = []
+    with open(path, newline="") as f:
+        reader = csv.reader(f)
+        next(reader, None)  # skip header (may not match data rows after schema upgrade)
+        for line_no, row in enumerate(reader, start=2):
+            if not row or not any(cell.strip() for cell in row):
+                continue
+            width = len(row)
+            fieldnames = _FIELDNAMES_BY_WIDTH.get(width)
+            if fieldnames is None:
+                print(
+                    f"Warning: skip {path}:{line_no} ({width} fields, expected "
+                    f"{len(SUSCEPTIBILITY_CSV_FIELDS)} or "
+                    f"{len(SUSCEPTIBILITY_CSV_FIELDS_LEGACY)})",
+                    flush=True,
+                )
+                continue
+            record = dict(zip(fieldnames, row))
+            rows.append({field: record.get(field, "") for field in SUSCEPTIBILITY_CSV_FIELDS})
+    return rows
 
 
 def eps_filename_tag(epsilon: float) -> str:

@@ -34,39 +34,17 @@ from lattice_gas.ending_criterion import Time
 from lattice_gas.markov_chain import HeteroChain
 from lattice_gas.simulate import simulate
 
-from susceptibility_paths import PROD_RESULTS_BASE, SUSCEPTIBILITY_DATA_CSV, susceptibility_prod_dir
+from susceptibility_paths import (
+    PROD_RESULTS_BASE,
+    SUSCEPTIBILITY_CSV_FIELDS,
+    SUSCEPTIBILITY_DATA_CSV,
+    read_susceptibility_csv,
+    susceptibility_prod_dir,
+)
 
 EMPTY, INERT, BONDING = 0, 1, 2
 
-CSV_FIELDNAMES = [
-    "id",
-    "replica_id",
-    "epsilon",
-    "delta_f",
-    "delta_mu",
-    "k",
-    "scheme",
-    "L",
-    "Lx",
-    "Ly",
-    "mu",
-    "mu_coex_SIM",
-    "m_mean",
-    "m_mean_err",
-    "m2_mean",
-    "m2_mean_err",
-    "m4_mean",
-    "m4_mean_err",
-    "chi",
-    "chi_err",
-    "beta",
-    "eq_time",
-    "prod_time",
-    "prod_chunks",
-    "initial_fraction",
-    "seed",
-    "time",
-]
+CSV_FIELDNAMES = SUSCEPTIBILITY_CSV_FIELDS
 
 
 def compute_densities(state: np.ndarray) -> tuple[float, float, float]:
@@ -122,22 +100,22 @@ def compute_chi(m2_mean: float, m_mean: float, n_sites: int, beta: float) -> flo
 
 
 def get_next_id(csv_path: str) -> int:
-    if not os.path.isfile(csv_path):
-        return 0
-    with open(csv_path, newline="") as f:
-        reader = csv.DictReader(f)
-        existing_ids = [int(r["id"]) for r in reader if r.get("id", "").strip()]
+    existing_ids = [
+        int(r["id"])
+        for r in read_susceptibility_csv(csv_path)
+        if str(r.get("id", "")).strip()
+    ]
     return max(existing_ids) + 1 if existing_ids else 0
 
 
 def append_to_csv(csv_path: str, rows: list[dict]) -> None:
-    file_exists = os.path.isfile(csv_path)
-    with open(csv_path, "a", newline="") as f:
+    existing = read_susceptibility_csv(csv_path)
+    normalized = [{field: row.get(field, "") for field in CSV_FIELDNAMES} for row in rows]
+    all_rows = existing + normalized
+    with open(csv_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
-        if not file_exists:
-            writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row.get(field, "") for field in CSV_FIELDNAMES})
+        writer.writeheader()
+        writer.writerows(all_rows)
 
 
 def run_replica(args: tuple) -> dict:

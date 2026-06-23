@@ -18,6 +18,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from susceptibility_paths import read_susceptibility_csv
+
 # Open markers and colors matched to reference χ vs control-parameter figure.
 L_PLOT_STYLE: dict[int, dict[str, str]] = {
     16: {"color": "black", "marker": "o"},
@@ -36,8 +38,11 @@ def collect_susceptibility_data(results_dir: str) -> pd.DataFrame:
     if not paths:
         raise FileNotFoundError(f"No susceptibility_data.csv under {results_dir}")
 
-    frames = [pd.read_csv(p) for p in paths]
+    frames = [pd.DataFrame(read_susceptibility_csv(p)) for p in paths]
     df = pd.concat(frames, ignore_index=True)
+    for col in ("L", "epsilon", "chi", "chi_err", "m_mean", "m_mean_err"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 
@@ -62,8 +67,11 @@ def aggregate(df: pd.DataFrame) -> pd.DataFrame:
 
 def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
     os.makedirs(outdir, exist_ok=True)
+    plot_df = agg[agg["chi_mean"] > 0].copy()
+    if plot_df.empty:
+        raise ValueError("No positive chi values to plot on log scale")
     fig, ax = plt.subplots(figsize=(8, 5))
-    for l_val, sub in agg.groupby("L"):
+    for l_val, sub in plot_df.groupby("L"):
         l_int = int(l_val)
         style = L_PLOT_STYLE.get(l_int, {"color": "gray", "marker": "o"})
         color = style["color"]
