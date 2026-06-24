@@ -52,7 +52,7 @@ def aggregate(df: pd.DataFrame) -> pd.DataFrame:
 
     rows = []
     for (l_val, eps), sub in df.groupby(["L", "epsilon"]):
-        chi_stderr = float(sub["chi_err"].mean()) if "chi_err" in sub.columns else _stderr(sub["chi"])
+        chi_stderr = _stderr(sub["chi"]) if len(sub) > 1 else float(sub["chi_err"].mean())
         rows.append({
             "L": l_val,
             "epsilon": eps,
