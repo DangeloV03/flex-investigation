@@ -46,19 +46,19 @@ from queue_manifest import prepend_pending, read_manifest
 MANAGE_CSV = "manage.csv"
 SAMPLES_DIR = "samples"
 POLL_INTERVAL = 10.0  # seconds
-MAX_ADDITIONAL_REQUESTS = 5
+MAX_ADDITIONAL_REQUESTS = 10
 N_INITIAL_MU_POINTS = 10  # must match generate_samples.N_MU_POINTS
 N_REFINEMENT_POINTS = 10
 PHI_NEIGHBOR_SIGMA_K = 2.0  # |phi| <= k * max(phi_err, PHI_ABS_TOL) counts as "close"
 PHI_ABS_TOL = 0.05
-PSI_COEX_MAX = 0.05  # min(psi) must be at or below this to accept mu_coex_SIM
+PSI_COEX_MAX = 0.025  # min(psi) must be at or below this to accept mu_coex_FITTED
 MANAGE_FIELDS = COMBO_KEY_FIELDS + [
     "mu_coex_FLEX",
     "isSubmitted",
     "isRan",
     "isAnalyzed",
-    "mu_coex_SIM",
-    "mu_coex_SIM_error",
+    "mu_coex_FITTED",
+    "mu_coex_FITTED_error",
     "RequestForAdditionalData",
     "combo_path",
 ]
@@ -76,7 +76,7 @@ def read_manage(manage_path: str) -> list[dict]:
     rows: list[dict] = []
     for line_no, row in enumerate(raw_rows, start=2):
         row = {str(k).lstrip("\ufeff"): v for k, v in row.items()}
-        row.setdefault("mu_coex_SIM_error", "")
+        row.setdefault("mu_coex_FITTED_error", "")
         row.setdefault("combo_path", "")
         missing = [f for f in COMBO_KEY_FIELDS if f not in row or row[f] is None]
         if missing:
@@ -210,12 +210,12 @@ def mu_coex_for_plot(
     psi_vals: np.ndarray,
     manage_row: dict | None = None,
 ) -> float | None:
-    """Pick mu_coex to annotate plots: manage.csv value, else argmin(psi).
+    """Pick mu_coex to annotate plots: manage.csv fitted value, else argmin(psi).
 
-    Returns None when manage.csv explicitly records mu_coex_SIM=NaN (unstable).
+    Returns None when manage.csv explicitly records mu_coex_FITTED=NaN (unstable).
     """
     if manage_row is not None:
-        raw = str(manage_row.get("mu_coex_SIM", "")).strip()
+        raw = str(manage_row.get("mu_coex_FITTED", "")).strip()
         if raw.lower() == "nan":
             return None
         if raw:
@@ -504,6 +504,61 @@ def compute_mu_coex_sim_error(
     return float(max(phi_errs[min_idx - 1], phi_errs[min_idx + 1]))
 
 
+def fit_zero_crossing_with_error(
+    mu_vals: np.ndarray,
+    phi_vals: np.ndarray,
+    phi_errs: np.ndarray,
+) -> tuple[float, float] | tuple[None, None]:
+    """Weighted linear fit to phi(mu); return (mu_zero, mu_zero_err).
+
+    Uses points inside the sign-change bracket plus one neighbour on each side.
+    Weights are 1/phi_err^2. Error on the zero crossing is propagated from the
+    fit covariance matrix. Returns (None, None) when no sign change exists or
+    the fit is degenerate.
+    """
+    bracket = sign_change_bracket(mu_vals, phi_vals)
+    if bracket is None:
+        return None, None
+
+    mu_lo, mu_hi = bracket
+    sorted_mus = np.sort(mu_vals)
+    lo_idx = int(np.searchsorted(sorted_mus, mu_lo))
+    hi_idx = int(np.searchsorted(sorted_mus, mu_hi))
+    expanded_lo = float(sorted_mus[max(0, lo_idx - 1)])
+    expanded_hi = float(sorted_mus[min(len(sorted_mus) - 1, hi_idx + 1)])
+
+    mask = (mu_vals >= expanded_lo - 1e-9) & (mu_vals <= expanded_hi + 1e-9)
+    mu_fit = mu_vals[mask]
+    phi_fit = phi_vals[mask]
+    err_fit = phi_errs[mask]
+
+    if len(mu_fit) < 2:
+        return None, None
+
+    w = np.where(err_fit > 0, 1.0 / (err_fit ** 2), 1.0)
+    try:
+        coeffs, cov = np.polyfit(mu_fit, phi_fit, deg=1, w=np.sqrt(w), cov=True)
+    except (np.linalg.LinAlgError, ValueError):
+        return None, None
+
+    slope, intercept = coeffs
+    if abs(slope) < 1e-12:
+        return None, None
+
+    mu_zero = float(-intercept / slope)
+
+    # Error propagation: var(mu_zero) via delta method
+    var_s, var_i = float(cov[0, 0]), float(cov[1, 1])
+    cov_si = float(cov[0, 1])
+    var_mu = (
+        (intercept / slope ** 2) ** 2 * var_s
+        + (1.0 / slope) ** 2 * var_i
+        - 2.0 * (intercept / slope ** 3) * cov_si
+    )
+    mu_zero_err = float(np.sqrt(max(0.0, var_mu)))
+    return mu_zero, mu_zero_err
+
+
 def finalize_combo(
     combo_key: tuple,
     combo: dict,
@@ -518,21 +573,24 @@ def finalize_combo(
     n_requests: int,
     reason: str = "",
 ):
-    """Set mu_coex_SIM, save plot/csv, and mark combo analyzed."""
-    min_idx = int(np.argmin(psi_vals))
-    mu_coex_sim = float(mu_vals[min_idx])
-    sim_error = compute_mu_coex_sim_error(mu_vals, phi_errs, psi_vals)
+    """Set mu_coex_FITTED via linear fit zero crossing, save plot, mark combo analyzed."""
+    mu_coex_fitted, fitted_error = fit_zero_crossing_with_error(mu_vals, phi_vals, phi_errs)
+    if mu_coex_fitted is None:
+        # fallback to argmin(psi) if fit fails (e.g. only 1 bracket point)
+        min_idx = int(np.argmin(psi_vals))
+        mu_coex_fitted = float(mu_vals[min_idx])
+        fitted_error = compute_mu_coex_sim_error(mu_vals, phi_errs, psi_vals)
     suffix = f" ({reason})" if reason else ""
-    print(f"[analyzer] {tag}: mu_coex_SIM = {mu_coex_sim:.6f}, "
-          f"error = {sim_error:.6f}{suffix}")
+    print(f"[analyzer] {tag}: mu_coex_FITTED = {mu_coex_fitted:.6f}, "
+          f"error = {fitted_error:.6f}{suffix}")
 
     plot_combo(
         combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
-        mu_coex_sim=mu_coex_sim, results_dir=results_dir,
+        mu_coex_sim=mu_coex_fitted, results_dir=results_dir,
     )
     update_manage_field(manage_path, combo, {
-        "mu_coex_SIM": mu_coex_sim,
-        "mu_coex_SIM_error": sim_error,
+        "mu_coex_FITTED": mu_coex_fitted,
+        "mu_coex_FITTED_error": fitted_error,
         "isAnalyzed": time.strftime("%Y-%m-%d %H:%M:%S"),
         "RequestForAdditionalData": n_requests,
         "combo_path": combo_dir(combo, results_dir),
@@ -553,16 +611,16 @@ def finalize_unstable(
     n_requests: int,
     reason: str = "",
 ):
-    """Mark unstable combo analyzed with mu_coex_SIM=NaN after max refinement requests."""
+    """Mark unstable combo analyzed with mu_coex_FITTED=NaN after max refinement requests."""
     suffix = f" ({reason})" if reason else ""
-    print(f"[analyzer] {tag}: unstable, mu_coex_SIM=NaN{suffix}")
+    print(f"[analyzer] {tag}: unstable, mu_coex_FITTED=NaN{suffix}")
     plot_combo(
         combo_key, mu_vals, phi_vals, phi_errs, psi_vals, psi_errs,
         mu_coex_sim=None, results_dir=results_dir,
     )
     update_manage_field(manage_path, combo, {
-        "mu_coex_SIM": "NaN",
-        "mu_coex_SIM_error": "NaN",
+        "mu_coex_FITTED": "NaN",
+        "mu_coex_FITTED_error": "NaN",
         "isAnalyzed": time.strftime("%Y-%m-%d %H:%M:%S"),
         "RequestForAdditionalData": n_requests,
         "combo_path": combo_dir(combo, results_dir),

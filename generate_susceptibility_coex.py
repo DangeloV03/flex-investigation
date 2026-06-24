@@ -53,8 +53,8 @@ RUN_SETTINGS = {
     "beta": 1.0,
     "k": ISING_K,
     "initial_condition": "slab_half_active_half_empty",
-    "num_parallel_runs": 4,
-    "eq_time": 10000.0,
+    "num_parallel_runs": 8,
+    "eq_time": 100000.0,
     "prod_time": 10000.0,
     "seed_base": 2000,
 }
@@ -64,8 +64,8 @@ MANAGE_FIELDS = COMBO_KEY_FIELDS + [
     "isSubmitted",
     "isRan",
     "isAnalyzed",
-    "mu_coex_SIM",
-    "mu_coex_SIM_error",
+    "mu_coex_FITTED",
+    "mu_coex_FITTED_error",
     "RequestForAdditionalData",
     "combo_path",
 ]
@@ -163,8 +163,8 @@ def main() -> None:
                 "isSubmitted": timestamp,
                 "isRan": "",
                 "isAnalyzed": "",
-                "mu_coex_SIM": "",
-                "mu_coex_SIM_error": "",
+                "mu_coex_FITTED": "",
+                "mu_coex_FITTED_error": "",
                 "RequestForAdditionalData": 0,
                 "combo_path": coex_combo_dir(combo),
             })

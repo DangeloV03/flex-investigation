@@ -211,7 +211,7 @@ def run_replica(args: tuple) -> dict:
         "Lx": Lx,
         "Ly": Ly,
         "mu": mu,
-        "mu_coex_SIM": params.get("mu_coex_SIM", mu),
+        "mu_coex_FITTED": params.get("mu_coex_FITTED", mu),
         "m_mean": m_mean,
         "m_mean_err": m_mean_err,
         "m2_mean": m2_mean,

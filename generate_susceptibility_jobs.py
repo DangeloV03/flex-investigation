@@ -38,8 +38,8 @@ EPS_STEP = 0.01
 DEFAULT_RUN_SETTINGS = {
     "beta": 1.0,
     "initial_fraction": 0.8,
-    "num_parallel_runs": 8,
-    "eq_time": 50000.0,
+    "num_parallel_runs": 32,
+    "eq_time": 100000.0,
     "prod_time": 100000.0,
     "prod_chunks": 20,
     "seed_base": 5000,
@@ -58,7 +58,7 @@ def read_coex_rows(manage_path: str) -> dict[tuple[str, ...], dict]:
     by_key: dict[tuple[str, ...], dict] = {}
     with open(manage_path, newline="") as f:
         for row in csv.DictReader(f):
-            sim = str(row.get("mu_coex_SIM", "")).strip()
+            sim = str(row.get("mu_coex_FITTED", "")).strip()
             if not sim or sim.lower() == "nan":
                 continue
             by_key[lookup_key(row)] = row
@@ -113,7 +113,7 @@ def main() -> None:
             n_skipped += 1
             continue
 
-        mu_coex_sim = float(row["mu_coex_SIM"])
+        mu_coex_sim = float(row["mu_coex_FITTED"])
 
         for l_val in l_values:
             run_settings = dict(DEFAULT_RUN_SETTINGS)
@@ -133,7 +133,7 @@ def main() -> None:
                 "Lx": l_val,
                 "Ly": l_val,
                 "mu": mu_coex_sim,
-                "mu_coex_SIM": mu_coex_sim,
+                "mu_coex_FITTED": mu_coex_sim,
                 "run_settings": run_settings,
             }
 

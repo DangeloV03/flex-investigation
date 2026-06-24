@@ -34,7 +34,7 @@ SUSCEPTIBILITY_CSV_FIELDS_LEGACY = [
     "Lx",
     "Ly",
     "mu",
-    "mu_coex_SIM",
+    "mu_coex_FITTED",
     "m_mean",
     "m2_mean",
     "m4_mean",
