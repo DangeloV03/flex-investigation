@@ -47,8 +47,7 @@ tmux send-keys -t "$SESSION:analyzer" \
   --manage susceptibility_manage.csv \
   --results susceptibility_results/coex \
   --samples susceptibility_samples/coex \
-  --manifest susceptibility_coex_queue.json \
-  --depth-first" C-m
+  --manifest susceptibility_coex_queue.json" C-m
 
 echo "Started tmux session '$SESSION' (coex dispatcher + analyzer)"
 echo "  attach:  tmux attach -t $SESSION"
