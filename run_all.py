@@ -66,6 +66,11 @@ def load_slurm_config(path: str) -> tuple[dict, list[str], str | None]:
         raw = yaml.safe_load(f) or {}
     setup_cmds = raw.pop("setup_cmds", [])
     report_dir = raw.pop("report_dir", None)
+    if report_dir:
+        report_dir = os.path.expandvars(os.path.expanduser(report_dir))
+    for key in ("output", "error"):
+        if key in raw:
+            raw[key] = os.path.expandvars(os.path.expanduser(raw[key]))
     return raw, setup_cmds, report_dir
 
 

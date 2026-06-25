@@ -23,6 +23,9 @@ _flex_env_setup() {
     # --- paths ---
     if [[ -z "${PROJECT_ROOT:-}" ]]; then
         if [[ "${host}" == della* ]] || [[ "$(hostname -f 2>/dev/null)" == *della* ]]; then
+            # Default to the vd7294 data directory. Collaborators: set PROJECT_ROOT
+            # explicitly before sourcing this script, e.g.:
+            #   export PROJECT_ROOT=/scratch/gpfs/WJACOBS/vd7294/flex-investigation
             if [[ -d "/scratch/gpfs/WJACOBS/${USER}/flex-investigation" ]]; then
                 PROJECT_ROOT="/scratch/gpfs/WJACOBS/${USER}/flex-investigation"
             else

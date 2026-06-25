@@ -26,6 +26,13 @@ export LATTICE_GAS_ROOT="$HOME/software/lattice-gas"
 
 Add these to your `~/.bashrc` on Della so Slurm jobs and tmux sessions see the same paths.
 
+> **Collaborators (e.g. mentors running as a different NetID):** all simulation data lives under `vd7294`'s scratch space. Set `PROJECT_ROOT` explicitly before sourcing `env.sh` so your session reads and writes to the right place:
+> ```bash
+> export PROJECT_ROOT=/scratch/gpfs/WJACOBS/vd7294/flex-investigation
+> source /scratch/gpfs/WJACOBS/vd7294/flex-investigation/scripts/env.sh
+> ```
+> Slurm jobs submitted under your NetID will still write outputs into that directory. Slurm log files (`.out`/`.err`) go to `~/slurm_reports` in **your** home directory.
+
 **Or use the startup helper** (sets paths, conda, library path, and `cd` into the repo):
 
 ```bash
@@ -265,55 +272,52 @@ flowchart LR
 | `queue_manifest.py` | Locked read/write helpers for `run_all_queue.json` |
 | `flex_coex_chemical_potential_prediction.py` | FLEX μ_coex solver |
 
-### Susceptibility campaign (Ising limit)
+### Susceptibility campaign (Ising limit, exact μ)
 
-Finite-size susceptibility scan at βΔf = −20, k = 0, βΔμ = 0. Coexistence uses the **same slab pipeline** as above; production runs square L×L lattices at `μ_coex_SIM`.
+Finite-size susceptibility and Binder cumulant scan at βΔf = −20, k = 0, βΔμ = 0, β = 1.
+Uses the **analytic coexistence** chemical potential μ = 2ε directly — no slab coexistence measurement needed.
+
+**Parameters:** ε ∈ [−2.0, −1.4], step 0.01 (61 values), L ∈ {16, 32, 48, 64, 96, 128, 256}, 8 replicas per (ε, L).
 
 | Script | Purpose |
 |--------|---------|
-| `generate_susceptibility_coex.py` | ε grid → slab μ-sweep JSONs in `susceptibility_samples/coex/` |
-| `run_susceptibility_all.py --phase coex` | Dispatch coex jobs via `json_runner.py` |
-| `analyzer.py --manage susceptibility_manage.csv --results susceptibility_results/coex` | Find `μ_coex_SIM` per ε |
-| `generate_susceptibility_jobs.py` | ε × L grid → prod JSONs in `susceptibility_samples/prod/` |
-| `susceptibility_runner.py` | Square L×L, 80% random fill, measure χ = (N/T)(⟨m²⟩ − ⟨m⟩²) |
-| `run_susceptibility_all.py --phase prod` | Dispatch prod jobs |
-| `plot_susceptibility.py` | Plot χ(ε) and max(χ) vs L |
+| `generate_susceptibility_exact.py` | ε × L grid → job JSONs with μ = 2ε in `susceptibility_samples/exact/` |
+| `susceptibility_runner.py` | Square L×L, 80% random IC, records ρ_B/ρ_I/ρ_E per chunk, measures χ = (1/NT)(⟨M²⟩ − ⟨M⟩²) and U₄ = 1 − ⟨m⁴⟩/3⟨m²⟩² |
+| `run_susceptibility_all.py --phase exact` | Slurm dispatcher for exact jobs |
+| `plot_susceptibility.py` | Plots χ(ε), m(ε), U₄(ε), and max(χ) vs L |
 
-**Typical workflow:**
+**Spin convention:** m̂ = (1/N)Σᵢsᵢ where BONDING = +1, INERT = EMPTY = −1.
 
-```bash
-python generate_susceptibility_coex.py
-python run_susceptibility_all.py --phase coex          # tmux on Della
-python analyzer.py \
-  --manage susceptibility_manage.csv \
-  --results susceptibility_results/coex \
-  --samples susceptibility_samples/coex \
-  --manifest susceptibility_coex_queue.json
-python generate_susceptibility_jobs.py
-python run_susceptibility_all.py --phase prod          # tmux on Della
-python plot_susceptibility.py
-```
-
-If the analyzer previously stalled with `RequestForAdditionalData=1` and empty `mu_coex_SIM`, reset counters once then re-run the analyzer (or use `scripts/finalize_susceptibility_coex.py`):
+**Workflow (run on Della in a tmux session):**
 
 ```bash
-python - <<'PY'
-import csv
-path = "susceptibility_manage.csv"
-with open(path, newline="") as f:
-    r = csv.DictReader(f); fields = r.fieldnames; rows = list(r)
-for row in rows:
-    if not str(row.get("isAnalyzed", "")).strip():
-        row["RequestForAdditionalData"] = "0"
-with open(path, "w", newline="") as f:
-    w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(rows)
-PY
-python scripts/finalize_susceptibility_coex.py   # only if analyzer still cannot finalize
+# 1. Seed all jobs (only needs to run once)
+python generate_susceptibility_exact.py
+
+# 2. Start the dispatcher (keep running until queue is empty)
+tmux new-session -d -s sus-exact
+tmux send-keys -t sus-exact "python run_susceptibility_all.py --phase exact" Enter
+tmux attach -t sus-exact   # Ctrl-b d to detach
+
+# 3. Check progress
+find susceptibility_results/exact -name susceptibility_data.csv | wc -l
+# Full run = 61 eps × 7 L values = 427 completed job directories
+
+# 4. Plot when done
+python plot_susceptibility.py --results susceptibility_results/exact --outdir plots/exact
 ```
 
-**Prod CSV columns** include `m_mean`, `m_mean_err`, `m2_mean`, `m2_mean_err`, `m4_mean`, `m4_mean_err`, `chi`, `chi_err` (SEM over production chunks per replica).
+**Output files per replica** (under `susceptibility_results/exact/.../`):
+- `susceptibility_data.csv` — one row per replica: `m_mean`, `m2_mean`, `m4_mean`, `chi`, `chi_err`, and SEM columns
+- `m_timeseries_{id}.csv` — per-chunk ρ_bonding, ρ_inert, ρ_empty, m
+- `m_timeseries_{id}.png` — m vs chunk plot
+- `final_lattice_{id}.npy` — final lattice snapshot
 
-**Naming:** coex JSONs match the main campaign (`homo_eps2p0_dm0p0_Ly16_mu03.json`). Prod JSONs add a `susceptibility_` prefix (`susceptibility_homo_eps1p76_dm0p0_L64.json`). Results land under `susceptibility_results/susceptibility_{L}x{L}_.../susceptibility_data.csv`.
+**Plots produced** (in `plots/exact/`):
+- `chi_vs_epsilon.png` — susceptibility χ(ε) per L; peak locates ε_c
+- `m_vs_epsilon.png` — order parameter m(ε)
+- `binder_vs_epsilon.png` — Binder cumulant U₄(ε); intersection of L curves = ε_c
+- `peak_chi_vs_L.png` — finite-size scaling: max(χ) vs L (log-log)
 
 ### Helper scripts (`scripts/`)
 

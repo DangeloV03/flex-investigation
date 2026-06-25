@@ -7,9 +7,9 @@ mem: 8G
 time: "24:00:00"
 partition: cpu
 # account: your_account   # uncomment if required
-report_dir: /home/vd7294/slurm_reports
-output: "/home/vd7294/slurm_reports/%j.out"
-error: "/home/vd7294/slurm_reports/%j.err"
+report_dir: ~/slurm_reports
+output: "~/slurm_reports/%j.out"
+error: "~/slurm_reports/%j.err"
 
 # Shell commands prepended to each batch script (module loads, conda activate, etc.)
 setup_cmds:
