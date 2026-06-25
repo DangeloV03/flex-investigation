@@ -46,9 +46,12 @@ from run_all import (
 from susceptibility_paths import (
     COEX_MANIFEST,
     COEX_SAMPLES_DIR,
+    EXACT_MANIFEST,
+    EXACT_SAMPLES_DIR,
     PROD_MANIFEST,
     PROD_SAMPLES_DIR,
     patch_coex_job_json,
+    patch_exact_job_json,
     patch_prod_job_json,
 )
 
@@ -64,6 +67,11 @@ PHASE_CONFIG = {
         "runner": "susceptibility_runner.py",
         "manifest": PROD_MANIFEST,
         "samples_root": PROD_SAMPLES_DIR,
+    },
+    "exact": {
+        "runner": "susceptibility_runner.py",
+        "manifest": EXACT_MANIFEST,
+        "samples_root": EXACT_SAMPLES_DIR,
     },
 }
 
@@ -156,7 +164,12 @@ def submit_up_to_cap(
             requeue_front(json_path, path=manifest)
             continue
 
-        patch_job = patch_coex_job_json if phase == "coex" else patch_prod_job_json
+        if phase == "coex":
+            patch_job = patch_coex_job_json
+        elif phase == "exact":
+            patch_job = patch_exact_job_json
+        else:
+            patch_job = patch_prod_job_json
         if patch_job(json_path):
             print(f"[run_susceptibility_all] patched paths in {json_path}")
 
