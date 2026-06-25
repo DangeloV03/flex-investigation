@@ -40,7 +40,7 @@ def collect_susceptibility_data(results_dir: str) -> pd.DataFrame:
 
     frames = [pd.DataFrame(read_susceptibility_csv(p)) for p in paths]
     df = pd.concat(frames, ignore_index=True)
-    for col in ("L", "epsilon", "chi", "chi_err", "m_mean", "m_mean_err"):
+    for col in ("L", "epsilon", "chi", "chi_err", "m_mean", "m_mean_err", "m2_mean", "m4_mean"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
@@ -53,6 +53,17 @@ def aggregate(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for (l_val, eps), sub in df.groupby(["L", "epsilon"]):
         chi_stderr = _stderr(sub["chi"]) if len(sub) > 1 else float(sub["chi_err"].mean())
+
+        m2 = float(sub["m2_mean"].mean())
+        m4 = float(sub["m4_mean"].mean())
+        m2_err = _stderr(sub["m2_mean"])
+        m4_err = _stderr(sub["m4_mean"])
+        u4 = 1.0 - m4 / (3.0 * m2 ** 2) if m2 != 0 else float("nan")
+        # delta method: σ_U4² = (σ_m4 / (3m2²))² + (2*m4*σ_m2 / (3*m2³))²
+        u4_err = float(np.sqrt(
+            (m4_err / (3.0 * m2 ** 2)) ** 2 + (2.0 * m4 * m2_err / (3.0 * m2 ** 3)) ** 2
+        )) if m2 != 0 else float("nan")
+
         rows.append({
             "L": l_val,
             "epsilon": eps,
@@ -60,6 +71,10 @@ def aggregate(df: pd.DataFrame) -> pd.DataFrame:
             "chi_stderr": chi_stderr,
             "m_mean": float(sub["m_mean"].mean()),
             "m_mean_stderr": float(sub["m_mean_err"].mean()) if "m_mean_err" in sub.columns else _stderr(sub["m_mean"]),
+            "m2_mean": m2,
+            "m4_mean": m4,
+            "u4": u4,
+            "u4_err": u4_err,
             "n_replicas": len(sub),
         })
     return pd.DataFrame(rows).sort_values(["L", "epsilon"])
@@ -142,6 +157,18 @@ def plot_m_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
     )
 
 
+def plot_binder_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
+    _plot_l_curves_vs_epsilon(
+        agg,
+        outdir,
+        y_col="u4",
+        yerr_col="u4_err",
+        ylabel=r"$U_4(T, L)$",
+        title=r"Binder cumulant vs $\varepsilon$",
+        filename="binder_vs_epsilon.png",
+    )
+
+
 def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str) -> None:
     os.makedirs(outdir, exist_ok=True)
     peaks = (
@@ -175,6 +202,7 @@ def main() -> None:
     agg = aggregate(df)
     plot_chi_vs_epsilon(agg, args.outdir)
     plot_m_vs_epsilon(agg, args.outdir)
+    plot_binder_vs_epsilon(agg, args.outdir)
     plot_peak_chi_vs_L(agg, args.outdir)
 
 
