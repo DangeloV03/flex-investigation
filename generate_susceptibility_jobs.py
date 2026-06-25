@@ -38,7 +38,7 @@ EPS_STEP = 0.01
 DEFAULT_RUN_SETTINGS = {
     "beta": 1.0,
     "initial_fraction": 0.8,
-    "num_parallel_runs": 32,
+    "num_parallel_runs": 8,
     "eq_time": 100000.0,
     "prod_time": 100000.0,
     "prod_chunks": 20,

@@ -6,12 +6,17 @@ Initial condition: random 80% active (BONDING), 20% empty.
 
 For each replica:
   - Equilibrate (eq_time), discard.
-  - Production in chunks; record m = φ = ρ_active - ρ_inert - ρ_empty each chunk.
-  - Compute time-averaged <m>, <m²>, <m⁴> and χ = (N/T)(<m²> - <m>²) with N = L², T = 1/β.
+  - Production in chunks; record per-species densities (rho_bonding, rho_inert, rho_empty)
+    at the end of each chunk.
+  - Derive m = rho_bonding - rho_inert - rho_empty and M = N*m from raw densities.
+  - Compute time-averaged ⟨m⟩, ⟨m²⟩, ⟨m⁴⟩ (order parameter / Binder) and
+    χ = (N/T)(⟨m²⟩ - ⟨m⟩²) with T = 1/β.
 
 Outputs (per job directory):
-  - susceptibility_data.csv
-  - final_lattice_{id}.npy (optional snapshots)
+  - susceptibility_data.csv       — one row per replica with aggregate statistics
+  - m_timeseries_{id}.csv         — per-chunk (chunk, rho_bonding, rho_inert, rho_empty, m)
+  - m_timeseries_{id}.png         — m vs chunk plot per replica
+  - final_lattice_{id}.npy        — final lattice snapshot
 
 Usage:
     python susceptibility_runner.py susceptibility_samples/prod/susceptibility_homo_eps1p76_dm0p0_L64.json
@@ -26,6 +31,9 @@ import multiprocessing as mp
 import os
 import shutil
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 
 from lattice_gas import load
@@ -46,18 +54,17 @@ EMPTY, INERT, BONDING = 0, 1, 2
 
 CSV_FIELDNAMES = SUSCEPTIBILITY_CSV_FIELDS
 
+TIMESERIES_FIELDNAMES = ["chunk", "rho_bonding", "rho_inert", "rho_empty", "m"]
+
 
 def compute_densities(state: np.ndarray) -> tuple[float, float, float]:
-    total = state.size
-    rho_active = float(np.count_nonzero(state == BONDING)) / total
-    rho_inert = float(np.count_nonzero(state == INERT)) / total
-    rho_empty = float(np.count_nonzero(state == EMPTY)) / total
-    return rho_active, rho_inert, rho_empty
-
-
-def compute_m(state: np.ndarray) -> float:
-    rho_a, rho_i, rho_e = compute_densities(state)
-    return rho_a - rho_i - rho_e
+    """Return (rho_bonding, rho_inert, rho_empty) — fractions of each species."""
+    flat = state.ravel()
+    n = flat.size
+    rho_bonding = float(np.count_nonzero(flat == BONDING)) / n
+    rho_inert = float(np.count_nonzero(flat == INERT)) / n
+    rho_empty = float(np.count_nonzero(flat == EMPTY)) / n
+    return rho_bonding, rho_inert, rho_empty
 
 
 def build_initial_state(Lx: int, Ly: int, fraction: float, seed: int) -> np.ndarray:
@@ -72,7 +79,7 @@ def build_initial_state(Lx: int, Ly: int, fraction: float, seed: int) -> np.ndar
 
 
 def sem(values: np.ndarray) -> float:
-    """Standard error of the mean (production time series)."""
+    """Standard error of the mean."""
     n = len(values)
     if n <= 1:
         return 0.0
@@ -82,21 +89,41 @@ def sem(values: np.ndarray) -> float:
 def compute_chi_err(
     m_mean: float,
     m_mean_err: float,
-    m2_mean: float,
     m2_mean_err: float,
     n_sites: int,
     beta: float,
 ) -> float:
-    """Delta-method SEM for chi = (N/T)(<m²> - <m>²)."""
-    factor = n_sites / (1.0 / beta)
+    """Delta-method SEM for χ = (1/NT)(⟨M²⟩-⟨M⟩²) = N·β·(⟨m²⟩-⟨m⟩²)."""
+    factor = n_sites * beta
     var = (factor * m2_mean_err) ** 2 + (2.0 * factor * m_mean * m_mean_err) ** 2
     return float(np.sqrt(var))
 
 
 def compute_chi(m2_mean: float, m_mean: float, n_sites: int, beta: float) -> float:
-    """χ = (N/T)(<m²> - <m>²) with T = 1/β."""
-    temperature = 1.0 / beta
-    return (n_sites / temperature) * (m2_mean - m_mean**2)
+    """χ = (1/NT)(⟨M²⟩-⟨M⟩²) = N·β·(⟨m²⟩-⟨m⟩²), T=1/β."""
+    return n_sites * beta * (m2_mean - m_mean ** 2)
+
+
+def save_timeseries_csv(path: str, chunks: list[dict]) -> None:
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=TIMESERIES_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(chunks)
+
+
+def save_timeseries_plot(path: str, chunks: list[dict], run_id: int, epsilon: float, L: int) -> None:
+    chunk_indices = [c["chunk"] for c in chunks]
+    m_values = [c["m"] for c in chunks]
+    fig, ax = plt.subplots(figsize=(8, 3))
+    ax.plot(chunk_indices, m_values, "o-", markersize=4)
+    ax.axhline(0.0, color="0.5", linewidth=0.8, linestyle="--")
+    ax.set_xlabel("Chunk")
+    ax.set_ylabel("m")
+    ax.set_title(f"replica {run_id}  ε={epsilon}  L={L}")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
 
 
 def get_next_id(csv_path: str) -> int:
@@ -167,6 +194,10 @@ def run_replica(args: tuple) -> dict:
     print(f"[susceptibility_runner] replica={replica_id} equilibration done", flush=True)
 
     chunk_time = prod_time / n_chunks
+    chunk_records: list[dict] = []
+    rho_B_samples: list[float] = []
+    rho_I_samples: list[float] = []
+    rho_E_samples: list[float] = []
     m_samples: list[float] = []
     cumulative_time = 0.0
 
@@ -176,17 +207,29 @@ def run_replica(args: tuple) -> dict:
         state = load.final_state(scratch_dir)
         cumulative_time += load.final_time(scratch_dir)
 
-        m_t = compute_m(state)
+        rho_B, rho_I, rho_E = compute_densities(state)
+        m_t = rho_B - rho_I - rho_E
+
+        rho_B_samples.append(rho_B)
+        rho_I_samples.append(rho_I)
+        rho_E_samples.append(rho_E)
         m_samples.append(m_t)
+        chunk_records.append({
+            "chunk": chunk_idx,
+            "rho_bonding": rho_B,
+            "rho_inert": rho_I,
+            "rho_empty": rho_E,
+            "m": m_t,
+        })
         print(
             f"[susceptibility_runner] replica={replica_id} chunk {chunk_idx + 1}/{n_chunks} "
-            f"m={m_t:.4f} t={cumulative_time:.1f}",
+            f"rho_B={rho_B:.4f} rho_I={rho_I:.6f} rho_E={rho_E:.4f} m={m_t:.4f} t={cumulative_time:.1f}",
             flush=True,
         )
 
     m_arr = np.asarray(m_samples, dtype=float)
-    m2_arr = m_arr**2
-    m4_arr = m_arr**4
+    m2_arr = m_arr ** 2
+    m4_arr = m_arr ** 4
     m_mean = float(np.mean(m_arr))
     m2_mean = float(np.mean(m2_arr))
     m4_mean = float(np.mean(m4_arr))
@@ -194,10 +237,16 @@ def run_replica(args: tuple) -> dict:
     m2_mean_err = sem(m2_arr)
     m4_mean_err = sem(m4_arr)
     chi = compute_chi(m2_mean, m_mean, n_sites, beta)
-    chi_err = compute_chi_err(m_mean, m_mean_err, m2_mean, m2_mean_err, n_sites, beta)
+    chi_err = compute_chi_err(m_mean, m_mean_err, m2_mean_err, n_sites, beta)
 
     np.save(os.path.join(outdir, f"final_lattice_{run_id}.npy"), state)
     shutil.rmtree(scratch_dir, ignore_errors=True)
+
+    ts_csv = os.path.join(outdir, f"m_timeseries_{run_id}.csv")
+    save_timeseries_csv(ts_csv, chunk_records)
+
+    ts_png = os.path.join(outdir, f"m_timeseries_{run_id}.png")
+    save_timeseries_plot(ts_png, chunk_records, run_id, epsilon, Lx)
 
     return {
         "id": run_id,
