@@ -35,9 +35,16 @@ tmux new-session -d -s "$SESSION" -n prod-dispatch -c "$PROJECT_DIR"
 tmux send-keys -t "$SESSION:prod-dispatch" \
   "${DAEMON_SETUP}; python -u run_susceptibility_all.py --phase prod" C-m
 
-echo "Started tmux session '$SESSION' (prod dispatcher)"
+# Second window: re-run generate_susceptibility_jobs.py every 10 min so newly
+# finished coex eps values are queued automatically without manual intervention.
+tmux new-window -t "$SESSION" -n job-gen -c "$PROJECT_DIR"
+tmux send-keys -t "$SESSION:job-gen" \
+  "${DAEMON_SETUP}; while true; do echo \"[\$(date '+%H:%M:%S')] generating jobs...\"; python generate_susceptibility_jobs.py; echo 'sleeping 600s'; sleep 600; done" C-m
+
+echo "Started tmux session '$SESSION' (prod dispatcher + job generator)"
 echo "  attach:  tmux attach -t $SESSION"
 echo "  detach:  Ctrl-b then d"
+echo "  windows: prod-dispatch (Ctrl-b 0)  job-gen (Ctrl-b 1)"
 echo ""
 echo "Monitor:"
 echo "  squeue -u \$USER -n flex_sim"
