@@ -194,9 +194,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Dispatcher for susceptibility campaign jobs")
     parser.add_argument(
         "--phase",
-        choices=["coex", "prod"],
+        choices=["coex", "prod", "exact"],
         required=True,
-        help="coex: slab μ sweep via json_runner; prod: square L via susceptibility_runner",
+        help="coex: slab μ sweep via json_runner; prod/exact: square L via susceptibility_runner",
     )
     parser.add_argument("--config", default=SLURM_CONFIG)
     parser.add_argument("--interval", type=float, default=POLL_INTERVAL)
