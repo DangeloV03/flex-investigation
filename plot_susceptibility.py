@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -151,6 +152,121 @@ def aggregate(results_dir: str) -> pd.DataFrame:
     return pd.DataFrame(rows_agg).sort_values(["L", "epsilon"])
 
 
+def _load_traj_arrays(ts_path: str, meta: dict) -> dict | None:
+    """Load one trajectory's raw per-chunk m (and recovered E_int) arrays."""
+    if not os.path.isfile(ts_path):
+        return None
+    ts = pd.read_csv(ts_path)
+    if ts.empty or "m" not in ts.columns:
+        return None
+
+    beta = float(meta["beta"])
+    mu = float(meta["mu"])
+    delta_f = float(meta["delta_f"])
+    L = int(float(meta["L"]))
+    N = L * L
+
+    m = ts["m"].to_numpy(float)
+    e_int = None
+    if {"energy", "rho_bonding", "rho_inert"}.issubset(ts.columns):
+        rho_B = ts["rho_bonding"].to_numpy(float)
+        rho_I = ts["rho_inert"].to_numpy(float)
+        e_total = ts["energy"].to_numpy(float)
+        e_chem = -beta * mu * N * rho_B - beta * (mu + delta_f) * N * rho_I
+        e_int = e_total - e_chem
+
+    return {"L": L, "epsilon": float(meta["epsilon"]), "beta": beta, "N": N, "m": m, "e_int": e_int}
+
+
+def _jackknife(arrays: list[np.ndarray], stat_fn) -> tuple[float, float]:
+    """Leave-one-replica-out jackknife of a pooled statistic.
+
+    stat_fn maps a pooled sample array -> scalar. Returns (full_estimate, stderr),
+    where the error reflects between-replica variation — the right scale here.
+    """
+    n = len(arrays)
+    full = float(stat_fn(np.concatenate(arrays)))
+    if n < 2:
+        return full, 0.0
+    partials = np.array([
+        float(stat_fn(np.concatenate([arrays[j] for j in range(n) if j != i])))
+        for i in range(n)
+    ])
+    mean = partials.mean()
+    err = float(np.sqrt((n - 1) / n * np.sum((partials - mean) ** 2)))
+    return full, err
+
+
+def aggregate_pooled(results_dir: str) -> pd.DataFrame:
+    """Pool every replica's samples per (L, ε), then compute χ, c, U4 once.
+
+    Workaround for non-ergodic short runs: combining replicas reconstructs the full
+    P(m) the per-trajectory estimator misses. Errors are leave-one-replica-out jackknife.
+    """
+    pattern = os.path.join(results_dir, "**", "susceptibility_data.csv")
+    paths = glob.glob(pattern, recursive=True)
+    if not paths:
+        raise FileNotFoundError(f"No susceptibility_data.csv under {results_dir}")
+
+    groups: dict[tuple[int, float], list[dict]] = defaultdict(list)
+    for csv_path in paths:
+        dirpath = os.path.dirname(csv_path)
+        for meta in read_susceptibility_csv(csv_path):
+            run_id = str(meta.get("id", "")).strip()
+            if not run_id:
+                continue
+            ts_path = os.path.join(dirpath, f"m_timeseries_{run_id}.csv")
+            rec = _load_traj_arrays(ts_path, meta)
+            if rec:
+                groups[(rec["L"], rec["epsilon"])].append(rec)
+
+    if not groups:
+        raise FileNotFoundError("No timeseries files found — check that runs have completed.")
+
+    rows = []
+    for (l_val, eps), recs in groups.items():
+        beta = recs[0]["beta"]
+        N = recs[0]["N"]
+        m_arrays = [r["m"] for r in recs]
+        pooled_m = np.concatenate(m_arrays)
+
+        chi, chi_err = _jackknife(
+            m_arrays, lambda a, N=N, beta=beta: N * beta * (np.mean(a ** 2) - np.mean(a) ** 2)
+        )
+        m_mean, m_mean_err = _jackknife(m_arrays, lambda a: float(np.mean(a)))
+        u4, u4_err = _jackknife(
+            m_arrays,
+            lambda a: 1.0 - np.mean(a ** 4) / (3.0 * np.mean(a ** 2) ** 2)
+            if np.mean(a ** 2) != 0 else float("nan"),
+        )
+
+        row: dict = {
+            "L": int(l_val),
+            "epsilon": float(eps),
+            "chi_mean": chi,
+            "chi_stderr": chi_err,
+            "m_mean": m_mean,
+            "m_mean_stderr": m_mean_err,
+            "m2_mean": float(np.mean(pooled_m ** 2)),
+            "m4_mean": float(np.mean(pooled_m ** 4)),
+            "u4": u4,
+            "u4_err": u4_err,
+            "n_replicas": len(recs),
+        }
+
+        e_arrays = [r["e_int"] for r in recs if r["e_int"] is not None]
+        if e_arrays:
+            c, c_err = _jackknife(e_arrays, lambda a, N=N: (np.mean(a ** 2) - np.mean(a) ** 2) / N)
+            row["c_mean"] = c
+            row["c_stderr"] = c_err
+        else:
+            row["c_mean"] = float("nan")
+            row["c_stderr"] = float("nan")
+        rows.append(row)
+
+    return pd.DataFrame(rows).sort_values(["L", "epsilon"])
+
+
 def _plot_l_curves_vs_epsilon(
     agg: pd.DataFrame,
     outdir: str,
@@ -201,7 +317,9 @@ def _plot_l_curves_vs_epsilon(
     print(f"Wrote {path}")
 
 
-def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
+def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
+    suffix = " (pooled)" if pooled else ""
+    ftag = "_pooled" if pooled else ""
     plot_df = agg[agg["chi_mean"] > 0].copy()
     _plot_l_curves_vs_epsilon(
         agg,
@@ -209,53 +327,61 @@ def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
         y_col="chi_mean",
         yerr_col="chi_stderr",
         ylabel=r"$\chi$",
-        title=r"Susceptibility vs $\varepsilon$",
-        filename="chi_vs_epsilon.png",
+        title=r"Susceptibility vs $\varepsilon$" + suffix,
+        filename=f"chi_vs_epsilon{ftag}.png",
         log_y=True,
         y_filter=plot_df,
     )
 
 
-def plot_m_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
+def plot_m_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
+    suffix = " (pooled)" if pooled else ""
+    ftag = "_pooled" if pooled else ""
     _plot_l_curves_vs_epsilon(
         agg,
         outdir,
         y_col="m_mean",
         yerr_col="m_mean_stderr",
         ylabel=r"$m$",
-        title=r"Order parameter vs $\varepsilon$",
-        filename="m_vs_epsilon.png",
+        title=r"Order parameter vs $\varepsilon$" + suffix,
+        filename=f"m_vs_epsilon{ftag}.png",
     )
 
 
-def plot_heat_capacity_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
+def plot_heat_capacity_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
     if "c_mean" not in agg.columns or agg["c_mean"].isna().all():
         print("Skipping heat capacity plot — no energy data found.")
         return
+    suffix = " (pooled)" if pooled else ""
+    ftag = "_pooled" if pooled else ""
     _plot_l_curves_vs_epsilon(
         agg,
         outdir,
         y_col="c_mean",
         yerr_col="c_stderr",
         ylabel=r"$c(T, L)$",
-        title=r"Heat capacity vs $\varepsilon$",
-        filename="heat_capacity_vs_epsilon.png",
+        title=r"Heat capacity vs $\varepsilon$" + suffix,
+        filename=f"heat_capacity_vs_epsilon{ftag}.png",
     )
 
 
-def plot_binder_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
+def plot_binder_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
+    suffix = " (pooled)" if pooled else ""
+    ftag = "_pooled" if pooled else ""
     _plot_l_curves_vs_epsilon(
         agg,
         outdir,
         y_col="u4",
         yerr_col="u4_err",
         ylabel=r"$U_4(T, L)$",
-        title=r"Binder cumulant vs $\varepsilon$",
-        filename="binder_vs_epsilon.png",
+        title=r"Binder cumulant vs $\varepsilon$" + suffix,
+        filename=f"binder_vs_epsilon{ftag}.png",
     )
 
 
-def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str) -> None:
+def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
+    suffix = " (pooled)" if pooled else ""
+    ftag = "_pooled" if pooled else ""
     os.makedirs(outdir, exist_ok=True)
     peaks = (
         agg.loc[agg.groupby("L")["chi_mean"].idxmax()]
@@ -265,15 +391,15 @@ def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str) -> None:
     ax.loglog(peaks["L"], peaks["chi_mean"], "o-", markersize=6)
     ax.set_xlabel("L")
     ax.set_ylabel(r"max($\chi$)")
-    ax.set_title(r"Peak susceptibility vs $L$")
+    ax.set_title(r"Peak susceptibility vs $L$" + suffix)
     ax.grid(True, which="both", alpha=0.3)
-    path = os.path.join(outdir, "peak_chi_vs_L.png")
+    path = os.path.join(outdir, f"peak_chi_vs_L{ftag}.png")
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"Wrote {path}")
 
-    csv_path = os.path.join(outdir, "peak_chi_vs_L.csv")
+    csv_path = os.path.join(outdir, f"peak_chi_vs_L{ftag}.csv")
     peaks[["L", "epsilon", "chi_mean", "chi_stderr"]].to_csv(csv_path, index=False)
     print(f"Wrote {csv_path}")
 
@@ -282,14 +408,26 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Plot susceptibility campaign results")
     parser.add_argument("--results", default="susceptibility_results")
     parser.add_argument("--outdir", default="plots/susceptibility")
+    parser.add_argument(
+        "--pooled",
+        action="store_true",
+        help="Pool all replica samples per (L, ε) before computing χ/c/U4 "
+        "(vs per-trajectory then averaged). Writes *_pooled.png alongside the originals.",
+    )
     args = parser.parse_args()
 
-    agg = aggregate(args.results)
-    plot_chi_vs_epsilon(agg, args.outdir)
-    plot_m_vs_epsilon(agg, args.outdir)
-    plot_binder_vs_epsilon(agg, args.outdir)
-    plot_heat_capacity_vs_epsilon(agg, args.outdir)
-    plot_peak_chi_vs_L(agg, args.outdir)
+    if args.pooled:
+        print("Aggregation: POOLED (all replica samples combined before χ/c/U4)")
+        agg = aggregate_pooled(args.results)
+    else:
+        print("Aggregation: per-trajectory then averaged")
+        agg = aggregate(args.results)
+
+    plot_chi_vs_epsilon(agg, args.outdir, pooled=args.pooled)
+    plot_m_vs_epsilon(agg, args.outdir, pooled=args.pooled)
+    plot_binder_vs_epsilon(agg, args.outdir, pooled=args.pooled)
+    plot_heat_capacity_vs_epsilon(agg, args.outdir, pooled=args.pooled)
+    plot_peak_chi_vs_L(agg, args.outdir, pooled=args.pooled)
 
 
 if __name__ == "__main__":
