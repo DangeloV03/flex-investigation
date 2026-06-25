@@ -54,7 +54,7 @@ EMPTY, INERT, BONDING = 0, 1, 2
 
 CSV_FIELDNAMES = SUSCEPTIBILITY_CSV_FIELDS
 
-TIMESERIES_FIELDNAMES = ["chunk", "rho_bonding", "rho_inert", "rho_empty", "m"]
+TIMESERIES_FIELDNAMES = ["chunk", "rho_bonding", "rho_inert", "rho_empty", "m", "energy"]
 
 
 def compute_densities(state: np.ndarray) -> tuple[float, float, float]:
@@ -65,6 +65,30 @@ def compute_densities(state: np.ndarray) -> tuple[float, float, float]:
     rho_inert = float(np.count_nonzero(flat == INERT)) / n
     rho_empty = float(np.count_nonzero(flat == EMPTY)) / n
     return rho_bonding, rho_inert, rho_empty
+
+
+def compute_energy(
+    state: np.ndarray, beta: float, epsilon: float, mu: float, delta_f: float
+) -> float:
+    """Total dimensionless energy βE (equals E at β=1).
+
+    E = (βε/2) Σᵢ_{bonding} n_bonding_neighbors(i) − βμ·n_bonding − β(μ+Δf)·n_inert
+
+    Matches the Rust Energy::record() implementation exactly.
+    """
+    bonding = (state == BONDING).astype(np.float64)
+    bonding_neighbors = (
+        np.roll(bonding, 1, axis=0) +
+        np.roll(bonding, -1, axis=0) +
+        np.roll(bonding, 1, axis=1) +
+        np.roll(bonding, -1, axis=1)
+    )
+    e_interact = 0.5 * beta * epsilon * float(np.dot(bonding.ravel(), bonding_neighbors.ravel()))
+    flat = state.ravel()
+    n_bonding = float(np.count_nonzero(flat == BONDING))
+    n_inert = float(np.count_nonzero(flat == INERT))
+    e_chem = -beta * mu * n_bonding - beta * (mu + delta_f) * n_inert
+    return e_interact + e_chem
 
 
 def build_initial_state(Lx: int, Ly: int, fraction: float, seed: int) -> np.ndarray:
@@ -199,6 +223,7 @@ def run_replica(args: tuple) -> dict:
     rho_I_samples: list[float] = []
     rho_E_samples: list[float] = []
     m_samples: list[float] = []
+    e_samples: list[float] = []
     cumulative_time = 0.0
 
     for chunk_idx in range(n_chunks):
@@ -209,21 +234,24 @@ def run_replica(args: tuple) -> dict:
 
         rho_B, rho_I, rho_E = compute_densities(state)
         m_t = rho_B - rho_I - rho_E
+        e_t = compute_energy(state, beta, epsilon, mu, delta_f)
 
         rho_B_samples.append(rho_B)
         rho_I_samples.append(rho_I)
         rho_E_samples.append(rho_E)
         m_samples.append(m_t)
+        e_samples.append(e_t)
         chunk_records.append({
             "chunk": chunk_idx,
             "rho_bonding": rho_B,
             "rho_inert": rho_I,
             "rho_empty": rho_E,
             "m": m_t,
+            "energy": e_t,
         })
         print(
             f"[susceptibility_runner] replica={replica_id} chunk {chunk_idx + 1}/{n_chunks} "
-            f"rho_B={rho_B:.4f} rho_I={rho_I:.6f} rho_E={rho_E:.4f} m={m_t:.4f} t={cumulative_time:.1f}",
+            f"rho_B={rho_B:.4f} rho_I={rho_I:.6f} rho_E={rho_E:.4f} m={m_t:.4f} e={e_t:.2f} t={cumulative_time:.1f}",
             flush=True,
         )
 
@@ -238,6 +266,13 @@ def run_replica(args: tuple) -> dict:
     m4_mean_err = sem(m4_arr)
     chi = compute_chi(m2_mean, m_mean, n_sites, beta)
     chi_err = compute_chi_err(m_mean, m_mean_err, m2_mean_err, n_sites, beta)
+
+    e_arr = np.asarray(e_samples, dtype=float)
+    e2_arr = e_arr ** 2
+    e_mean = float(np.mean(e_arr))
+    e2_mean = float(np.mean(e2_arr))
+    e_mean_err = sem(e_arr)
+    e2_mean_err = sem(e2_arr)
 
     np.save(os.path.join(outdir, f"final_lattice_{run_id}.npy"), state)
     shutil.rmtree(scratch_dir, ignore_errors=True)
@@ -269,6 +304,10 @@ def run_replica(args: tuple) -> dict:
         "m4_mean_err": m4_mean_err,
         "chi": chi,
         "chi_err": chi_err,
+        "e_mean": e_mean,
+        "e_mean_err": e_mean_err,
+        "e2_mean": e2_mean,
+        "e2_mean_err": e2_mean_err,
         "beta": beta,
         "eq_time": eq_time,
         "prod_time": prod_time,

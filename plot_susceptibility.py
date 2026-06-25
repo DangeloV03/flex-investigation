@@ -40,7 +40,7 @@ def collect_susceptibility_data(results_dir: str) -> pd.DataFrame:
 
     frames = [pd.DataFrame(read_susceptibility_csv(p)) for p in paths]
     df = pd.concat(frames, ignore_index=True)
-    for col in ("L", "epsilon", "chi", "chi_err", "m_mean", "m_mean_err", "m2_mean", "m4_mean"):
+    for col in ("L", "epsilon", "chi", "chi_err", "m_mean", "m_mean_err", "m2_mean", "m4_mean", "e_mean", "e2_mean"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
@@ -75,6 +75,10 @@ def aggregate(df: pd.DataFrame) -> pd.DataFrame:
             "m4_mean": m4,
             "u4": u4,
             "u4_err": u4_err,
+            "e_mean": float(sub["e_mean"].mean()) if "e_mean" in sub.columns else float("nan"),
+            "e2_mean": float(sub["e2_mean"].mean()) if "e2_mean" in sub.columns else float("nan"),
+            "c_mean": float(((sub["e2_mean"] - sub["e_mean"] ** 2) / (l_val ** 2)).mean()) if "e_mean" in sub.columns else float("nan"),
+            "c_stderr": _stderr((sub["e2_mean"] - sub["e_mean"] ** 2) / (l_val ** 2)) if "e_mean" in sub.columns else float("nan"),
             "n_replicas": len(sub),
         })
     return pd.DataFrame(rows).sort_values(["L", "epsilon"])
@@ -157,6 +161,21 @@ def plot_m_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
     )
 
 
+def plot_heat_capacity_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
+    if "c_mean" not in agg.columns or agg["c_mean"].isna().all():
+        print("Skipping heat capacity plot — no energy data found.")
+        return
+    _plot_l_curves_vs_epsilon(
+        agg,
+        outdir,
+        y_col="c_mean",
+        yerr_col="c_stderr",
+        ylabel=r"$c(T, L)$",
+        title=r"Heat capacity vs $\varepsilon$",
+        filename="heat_capacity_vs_epsilon.png",
+    )
+
+
 def plot_binder_vs_epsilon(agg: pd.DataFrame, outdir: str) -> None:
     _plot_l_curves_vs_epsilon(
         agg,
@@ -203,6 +222,7 @@ def main() -> None:
     plot_chi_vs_epsilon(agg, args.outdir)
     plot_m_vs_epsilon(agg, args.outdir)
     plot_binder_vs_epsilon(agg, args.outdir)
+    plot_heat_capacity_vs_epsilon(agg, args.outdir)
     plot_peak_chi_vs_L(agg, args.outdir)
 
 
