@@ -41,7 +41,7 @@ DEFAULT_RUN_SETTINGS = {
     "num_parallel_runs": 8,
     "eq_time": 100000.0,
     "prod_time": 100000.0,
-    "prod_chunks": 20,
+    "prod_chunks": 1000,
     "seed_base": 7000,
 }
 

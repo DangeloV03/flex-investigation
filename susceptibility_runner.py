@@ -198,7 +198,7 @@ def run_replica(args: tuple) -> dict:
 
     eq_time = run_settings["eq_time"]
     prod_time = run_settings["prod_time"]
-    n_chunks = run_settings.get("prod_chunks", 20)
+    n_chunks = run_settings.get("prod_chunks", 1000)
     initial_fraction = run_settings.get("initial_fraction", 0.8)
 
     inert_fugacity = np.exp(beta * (mu + delta_f))
