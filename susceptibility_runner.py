@@ -76,6 +76,8 @@ def compute_energy(
 
     Matches the Rust Energy::record() implementation exactly.
     """
+
+    # 2d Grid of 0's and 1's where 1's are the bonding sites
     bonding = (state == BONDING).astype(np.float64)
     bonding_neighbors = (
         np.roll(bonding, 1, axis=0) +
@@ -138,13 +140,17 @@ def save_timeseries_csv(path: str, chunks: list[dict]) -> None:
 def save_timeseries_plot(path: str, chunks: list[dict], run_id: int, epsilon: float, L: int) -> None:
     chunk_indices = [c["chunk"] for c in chunks]
     m_values = [c["m"] for c in chunks]
-    fig, ax = plt.subplots(figsize=(8, 3))
-    ax.plot(chunk_indices, m_values, "o-", markersize=4)
-    ax.axhline(0.0, color="0.5", linewidth=0.8, linestyle="--")
-    ax.set_xlabel("Chunk")
-    ax.set_ylabel("m")
-    ax.set_title(f"replica {run_id}  ε={epsilon}  L={L}")
-    ax.grid(True, alpha=0.3)
+    e_values = [c["energy"] for c in chunks]
+    fig, (ax_m, ax_e) = plt.subplots(2, 1, figsize=(8, 5), sharex=True)
+    ax_m.plot(chunk_indices, m_values, "o-", markersize=4)
+    ax_m.axhline(0.0, color="0.5", linewidth=0.8, linestyle="--")
+    ax_m.set_ylabel("m")
+    ax_m.grid(True, alpha=0.3)
+    ax_e.plot(chunk_indices, e_values, "o-", markersize=4, color="tab:orange")
+    ax_e.set_xlabel("Chunk")
+    ax_e.set_ylabel("E")
+    ax_e.grid(True, alpha=0.3)
+    fig.suptitle(f"replica {run_id}  ε={epsilon}  L={L}")
     fig.tight_layout()
     fig.savefig(path, dpi=120)
     plt.close(fig)
