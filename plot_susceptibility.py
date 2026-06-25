@@ -1,11 +1,21 @@
 """
 plot_susceptibility.py
 
-Plot susceptibility χ vs ε, order parameter m vs ε, and peak χ vs L from susceptibility_data.csv files.
+Plot susceptibility χ vs ε, order parameter m vs ε, heat capacity c vs ε, and Binder U4 vs ε.
+
+Reads m_timeseries_{id}.csv files (raw time series per replica) and computes all observables
+from scratch, following the paper's ordering:
+  1. time averages ⟨m⟩, ⟨m²⟩, ⟨m⁴⟩, ⟨E_int⟩, ⟨E_int²⟩ per single trajectory
+  2. per-trajectory observables: χ, c, U4
+  3. average over replicas per (L, ε)
+
+E_interact is recovered from the stored total energy and densities:
+  e_interact = e_total − e_chem
+  e_chem     = −β·μ·N·ρ_B − β·(μ+Δf)·N·ρ_I
 
 Usage:
     python plot_susceptibility.py
-    python plot_susceptibility.py --results susceptibility_results --outdir plots/susceptibility
+    python plot_susceptibility.py --results susceptibility_results/exact --outdir plots/exact
 """
 
 from __future__ import annotations
@@ -20,7 +30,6 @@ import pandas as pd
 
 from susceptibility_paths import read_susceptibility_csv
 
-# Open markers and colors matched to reference χ vs control-parameter figure.
 L_PLOT_STYLE: dict[int, dict[str, str]] = {
     16: {"color": "black", "marker": "o"},
     32: {"color": "red", "marker": "s"},
@@ -32,56 +41,114 @@ L_PLOT_STYLE: dict[int, dict[str, str]] = {
 }
 
 
-def collect_susceptibility_data(results_dir: str) -> pd.DataFrame:
+def _compute_traj_stats(ts_path: str, meta: dict) -> dict | None:
+    """Compute per-trajectory observables from a single m_timeseries CSV."""
+    if not os.path.isfile(ts_path):
+        return None
+
+    ts = pd.read_csv(ts_path)
+    if ts.empty:
+        return None
+
+    beta = float(meta["beta"])
+    mu = float(meta["mu"])
+    delta_f = float(meta["delta_f"])
+    L = int(float(meta["L"]))
+    N = L * L
+
+    m_arr = ts["m"].values.astype(float)
+    m_mean = float(np.mean(m_arr))
+    m2_mean = float(np.mean(m_arr ** 2))
+    m4_mean = float(np.mean(m_arr ** 4))
+
+    chi = N * beta * (m2_mean - m_mean ** 2)
+    u4 = 1.0 - m4_mean / (3.0 * m2_mean ** 2) if m2_mean != 0 else float("nan")
+
+    result: dict = {
+        "L": L,
+        "epsilon": float(meta["epsilon"]),
+        "m_mean": m_mean,
+        "m2_mean": m2_mean,
+        "m4_mean": m4_mean,
+        "chi": chi,
+        "u4": u4,
+    }
+
+    # Heat capacity from interaction energy only (strips out chemical potential terms).
+    if (
+        "energy" in ts.columns
+        and "rho_bonding" in ts.columns
+        and "rho_inert" in ts.columns
+    ):
+        rho_B = ts["rho_bonding"].values.astype(float)
+        rho_I = ts["rho_inert"].values.astype(float)
+        e_total = ts["energy"].values.astype(float)
+        e_chem = -beta * mu * N * rho_B - beta * (mu + delta_f) * N * rho_I
+        e_int = e_total - e_chem
+        e_int_mean = float(np.mean(e_int))
+        e_int2_mean = float(np.mean(e_int ** 2))
+        result["c"] = (e_int2_mean - e_int_mean ** 2) / N
+
+    return result
+
+
+def aggregate(results_dir: str) -> pd.DataFrame:
+    """
+    Scan for susceptibility_data.csv files under results_dir, load each replica's
+    m_timeseries CSV, compute per-trajectory observables, then average over replicas
+    grouped by (L, ε).
+    """
     pattern = os.path.join(results_dir, "**", "susceptibility_data.csv")
     paths = glob.glob(pattern, recursive=True)
     if not paths:
         raise FileNotFoundError(f"No susceptibility_data.csv under {results_dir}")
 
-    frames = [pd.DataFrame(read_susceptibility_csv(p)) for p in paths]
-    df = pd.concat(frames, ignore_index=True)
-    for col in ("L", "epsilon", "chi", "chi_err", "m_mean", "m_mean_err", "m2_mean", "m4_mean", "e_mean", "e2_mean"):
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+    traj_records: list[dict] = []
+    for csv_path in paths:
+        dirpath = os.path.dirname(csv_path)
+        meta_rows = read_susceptibility_csv(csv_path)
+        for meta in meta_rows:
+            run_id = str(meta.get("id", "")).strip()
+            if not run_id:
+                continue
+            ts_path = os.path.join(dirpath, f"m_timeseries_{run_id}.csv")
+            stats = _compute_traj_stats(ts_path, meta)
+            if stats:
+                traj_records.append(stats)
 
+    if not traj_records:
+        raise FileNotFoundError(
+            "No timeseries files found — check that runs have completed."
+        )
 
-def aggregate(df: pd.DataFrame) -> pd.DataFrame:
-    def _stderr(series: pd.Series) -> float:
-        return float(series.std(ddof=1) / np.sqrt(len(series))) if len(series) > 1 else 0.0
+    def _stderr(s: pd.Series) -> float:
+        return float(s.std(ddof=1) / np.sqrt(len(s))) if len(s) > 1 else 0.0
 
-    rows = []
+    df = pd.DataFrame(traj_records)
+    rows_agg = []
     for (l_val, eps), sub in df.groupby(["L", "epsilon"]):
-        chi_stderr = _stderr(sub["chi"]) if len(sub) > 1 else float(sub["chi_err"].mean())
-
-        m2 = float(sub["m2_mean"].mean())
-        m4 = float(sub["m4_mean"].mean())
-        m2_err = _stderr(sub["m2_mean"])
-        m4_err = _stderr(sub["m4_mean"])
-        u4 = 1.0 - m4 / (3.0 * m2 ** 2) if m2 != 0 else float("nan")
-        # delta method: σ_U4² = (σ_m4 / (3m2²))² + (2*m4*σ_m2 / (3*m2³))²
-        u4_err = float(np.sqrt(
-            (m4_err / (3.0 * m2 ** 2)) ** 2 + (2.0 * m4 * m2_err / (3.0 * m2 ** 3)) ** 2
-        )) if m2 != 0 else float("nan")
-
-        rows.append({
-            "L": l_val,
-            "epsilon": eps,
+        row: dict = {
+            "L": int(l_val),
+            "epsilon": float(eps),
             "chi_mean": float(sub["chi"].mean()),
-            "chi_stderr": chi_stderr,
+            "chi_stderr": _stderr(sub["chi"]),
             "m_mean": float(sub["m_mean"].mean()),
-            "m_mean_stderr": float(sub["m_mean_err"].mean()) if "m_mean_err" in sub.columns else _stderr(sub["m_mean"]),
-            "m2_mean": m2,
-            "m4_mean": m4,
-            "u4": u4,
-            "u4_err": u4_err,
-            "e_mean": float(sub["e_mean"].mean()) if "e_mean" in sub.columns else float("nan"),
-            "e2_mean": float(sub["e2_mean"].mean()) if "e2_mean" in sub.columns else float("nan"),
-            "c_mean": float(((sub["e2_mean"] - sub["e_mean"] ** 2) / (l_val ** 2)).mean()) if "e_mean" in sub.columns else float("nan"),
-            "c_stderr": _stderr((sub["e2_mean"] - sub["e_mean"] ** 2) / (l_val ** 2)) if "e_mean" in sub.columns else float("nan"),
-            "n_replicas": len(sub),
-        })
-    return pd.DataFrame(rows).sort_values(["L", "epsilon"])
+            "m_mean_stderr": _stderr(sub["m_mean"]),
+            "m2_mean": float(sub["m2_mean"].mean()),
+            "m4_mean": float(sub["m4_mean"].mean()),
+            "u4": float(sub["u4"].mean()),
+            "u4_err": _stderr(sub["u4"]),
+            "n_replicas": int(len(sub)),
+        }
+        if "c" in sub.columns and sub["c"].notna().any():
+            row["c_mean"] = float(sub["c"].mean())
+            row["c_stderr"] = _stderr(sub["c"])
+        else:
+            row["c_mean"] = float("nan")
+            row["c_stderr"] = float("nan")
+        rows_agg.append(row)
+
+    return pd.DataFrame(rows_agg).sort_values(["L", "epsilon"])
 
 
 def _plot_l_curves_vs_epsilon(
@@ -217,8 +284,7 @@ def main() -> None:
     parser.add_argument("--outdir", default="plots/susceptibility")
     args = parser.parse_args()
 
-    df = collect_susceptibility_data(args.results)
-    agg = aggregate(df)
+    agg = aggregate(args.results)
     plot_chi_vs_epsilon(agg, args.outdir)
     plot_m_vs_epsilon(agg, args.outdir)
     plot_binder_vs_epsilon(agg, args.outdir)
