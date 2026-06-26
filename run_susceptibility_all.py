@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -84,6 +85,15 @@ PHASE_CONFIG = {
 }
 
 
+def _cpus_for_json(json_path: str) -> int | None:
+    try:
+        with open(json_path) as f:
+            job = json.load(f)
+        return job.get("run_settings", {}).get("cpus_per_task")
+    except Exception:
+        return None
+
+
 def submit_slurm_job(
     json_path: str,
     python: str,
@@ -91,7 +101,8 @@ def submit_slurm_job(
     config_path: str = SLURM_CONFIG,
 ) -> str:
     walltime = walltime_for_json(json_path, config_path)
-    slurm = build_slurm(config_path, time=walltime)
+    cpus = _cpus_for_json(json_path)
+    slurm = build_slurm(config_path, time=walltime, cpus_per_task=cpus)
     abs_json = os.path.abspath(json_path)
     job_id = slurm.sbatch(f"{python} -u {runner} {abs_json}")
     return str(job_id)

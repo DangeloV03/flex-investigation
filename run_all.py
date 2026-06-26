@@ -74,12 +74,14 @@ def load_slurm_config(path: str) -> tuple[dict, list[str], str | None]:
     return raw, setup_cmds, report_dir
 
 
-def build_slurm(config_path: str = SLURM_CONFIG, *, time: str | None = None):
+def build_slurm(config_path: str = SLURM_CONFIG, *, time: str | None = None, cpus_per_task: int | None = None):
     from simple_slurm import Slurm
 
     slurm_kwargs, setup_cmds, report_dir = load_slurm_config(config_path)
     if time is not None:
         slurm_kwargs["time"] = time
+    if cpus_per_task is not None:
+        slurm_kwargs["cpus_per_task"] = cpus_per_task
     if report_dir:
         os.makedirs(report_dir, exist_ok=True)
     elif slurm_kwargs.get("output"):

@@ -362,6 +362,7 @@ def main() -> None:
 
     run_settings = params["run_settings"]
     num_parallel_runs = run_settings["num_parallel_runs"]
+    num_batches = run_settings.get("num_batches", 1)
     seed_base = run_settings["seed_base"]
 
     results_base = params.get("results_base", PROD_RESULTS_BASE)
@@ -373,33 +374,46 @@ def main() -> None:
     mu_val = params["mu"]
     print(
         f"[susceptibility_runner] START {args.json_path} "
-        f"eps={eps} L={l_val} mu={mu_val} replicas={num_parallel_runs} outdir={outdir}",
+        f"eps={eps} L={l_val} mu={mu_val} "
+        f"replicas={num_parallel_runs} batches={num_batches} "
+        f"total={num_parallel_runs * num_batches} outdir={outdir}",
         flush=True,
     )
 
     csv_path = os.path.join(outdir, SUSCEPTIBILITY_DATA_CSV)
-    next_id = get_next_id(csv_path)
 
-    tasks = []
-    for replica_id in range(num_parallel_runs):
-        run_id = next_id + replica_id
-        seed = seed_base + run_id * 2
-        tasks.append((replica_id, run_id, seed, params, run_settings, outdir))
-
-    with mp.Pool(processes=num_parallel_runs) as pool:
-        results = pool.map(run_replica, tasks)
-
-    results.sort(key=lambda r: r["id"])
-    append_to_csv(csv_path, results)
-    summarize_replicas(results)
-
-    print(f"Wrote {len(results)} rows to {csv_path}", flush=True)
-    for r in results:
+    for batch_idx in range(num_batches):
+        next_id = get_next_id(csv_path)
         print(
-            f"  replica {r['replica_id']}: m={r['m_mean']:.4f}±{r['m_mean_err']:.4f} "
-            f"chi={r['chi']:.4f}±{r['chi_err']:.4f}",
+            f"[susceptibility_runner] batch {batch_idx + 1}/{num_batches}: "
+            f"run_ids {next_id}–{next_id + num_parallel_runs - 1}",
             flush=True,
         )
+
+        tasks = []
+        for replica_id in range(num_parallel_runs):
+            run_id = next_id + replica_id
+            seed = seed_base + run_id * 2
+            tasks.append((replica_id, run_id, seed, params, run_settings, outdir))
+
+        with mp.Pool(processes=num_parallel_runs) as pool:
+            results = pool.map(run_replica, tasks)
+
+        results.sort(key=lambda r: r["id"])
+        append_to_csv(csv_path, results)
+        summarize_replicas(results)
+
+        print(
+            f"Wrote {len(results)} rows to {csv_path} "
+            f"(batch {batch_idx + 1}/{num_batches})",
+            flush=True,
+        )
+        for r in results:
+            print(
+                f"  replica {r['replica_id']}: m={r['m_mean']:.4f}±{r['m_mean_err']:.4f} "
+                f"chi={r['chi']:.4f}±{r['chi_err']:.4f}",
+                flush=True,
+            )
 
 
 if __name__ == "__main__":

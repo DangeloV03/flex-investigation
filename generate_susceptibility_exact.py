@@ -33,15 +33,17 @@ from susceptibility_paths import (
 
 EPS_MIN = -2.0
 EPS_MAX = -1.4
-EPS_STEP = 0.01
+EPS_STEP = 0.005
 
 DEFAULT_RUN_SETTINGS = {
     "beta": 1.0,
     "initial_fraction": 0.8,
-    "num_parallel_runs": 8,
+    "num_parallel_runs": 24,
+    "num_batches": 4,
+    "cpus_per_task": 24,
     "eq_time": 100000.0,
-    "prod_time": 100000.0,
-    "prod_chunks": 1000,
+    "prod_time": 200000.0,
+    "prod_chunks": 2000,
     "seed_base": 7000,
 }
 
