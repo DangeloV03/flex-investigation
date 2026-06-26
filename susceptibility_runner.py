@@ -113,21 +113,28 @@ def sem(values: np.ndarray) -> float:
 
 
 def compute_chi_err(
-    m_mean: float,
-    m_mean_err: float,
+    m_abs_mean: float,
+    m_abs_mean_err: float,
     m2_mean_err: float,
     n_sites: int,
     beta: float,
 ) -> float:
-    """Delta-method SEM for χ = (1/NT)(⟨M²⟩-⟨M⟩²) = N·β·(⟨m²⟩-⟨m⟩²)."""
+    """Delta-method SEM for χ = N·β·(⟨m²⟩-⟨|m|⟩²)."""
     factor = n_sites * beta
-    var = (factor * m2_mean_err) ** 2 + (2.0 * factor * m_mean * m_mean_err) ** 2
+    var = (factor * m2_mean_err) ** 2 + (2.0 * factor * m_abs_mean * m_abs_mean_err) ** 2
     return float(np.sqrt(var))
 
 
-def compute_chi(m2_mean: float, m_mean: float, n_sites: int, beta: float) -> float:
-    """χ = (1/NT)(⟨M²⟩-⟨M⟩²) = N·β·(⟨m²⟩-⟨m⟩²), T=1/β."""
-    return n_sites * beta * (m2_mean - m_mean ** 2)
+def compute_chi(m2_mean: float, m_abs_mean: float, n_sites: int, beta: float) -> float:
+    """χ = (1/NT)(⟨M²⟩-⟨|M|⟩²) with M = N·m, |M| = N·|m|, T = 1/β.
+
+    ⟨M²⟩ = N²⟨m²⟩ and ⟨|M|⟩² = N²⟨|m|⟩², so this equals N·β·(⟨m²⟩-⟨|m|⟩²).
+    Using ⟨|m|⟩ (not ⟨m⟩) removes the spurious symmetry-degeneracy term that small,
+    flipping lattices would otherwise pick up — the connected (FSS) susceptibility.
+    """
+    M2_mean = n_sites ** 2 * m2_mean
+    absM_mean = n_sites * m_abs_mean
+    return beta / n_sites * (M2_mean - absM_mean ** 2)
 
 
 def save_timeseries_csv(path: str, chunks: list[dict]) -> None:
@@ -262,16 +269,19 @@ def run_replica(args: tuple) -> dict:
         )
 
     m_arr = np.asarray(m_samples, dtype=float)
+    abs_m_arr = np.abs(m_arr)
     m2_arr = m_arr ** 2
     m4_arr = m_arr ** 4
     m_mean = float(np.mean(m_arr))
+    abs_m_mean = float(np.mean(abs_m_arr))
     m2_mean = float(np.mean(m2_arr))
     m4_mean = float(np.mean(m4_arr))
     m_mean_err = sem(m_arr)
+    abs_m_mean_err = sem(abs_m_arr)
     m2_mean_err = sem(m2_arr)
     m4_mean_err = sem(m4_arr)
-    chi = compute_chi(m2_mean, m_mean, n_sites, beta)
-    chi_err = compute_chi_err(m_mean, m_mean_err, m2_mean_err, n_sites, beta)
+    chi = compute_chi(m2_mean, abs_m_mean, n_sites, beta)
+    chi_err = compute_chi_err(abs_m_mean, abs_m_mean_err, m2_mean_err, n_sites, beta)
 
     e_arr = np.asarray(e_samples, dtype=float)
     e2_arr = e_arr ** 2

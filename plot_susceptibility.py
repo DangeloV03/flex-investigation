@@ -62,7 +62,11 @@ def _compute_traj_stats(ts_path: str, meta: dict) -> dict | None:
     m2_mean = float(np.mean(m_arr ** 2))
     m4_mean = float(np.mean(m_arr ** 4))
 
-    chi = N * beta * (m2_mean - m_mean ** 2)
+    # χ = (1/NT)(⟨M²⟩-⟨|M|⟩²) with M = N·m, |M| = N·|m|, T = 1/β.
+    # Subtracting ⟨|M|⟩² (not ⟨M⟩²) removes the between-well m₀² term that flipping
+    # small-L runs would otherwise pick up — the connected (FSS) susceptibility.
+    M_arr = N * m_arr
+    chi = beta / N * (float(np.mean(M_arr ** 2)) - float(np.mean(np.abs(M_arr))) ** 2)
     u4 = 1.0 - m4_mean / (3.0 * m2_mean ** 2) if m2_mean != 0 else float("nan")
 
     result: dict = {
