@@ -315,7 +315,7 @@ python plot_susceptibility.py --results susceptibility_results/exact --outdir pl
 
 **Plots produced** (in `plots/exact/`):
 - `chi_vs_epsilon.png` — susceptibility χ(ε) per L; peak locates ε_c
-- `abs_m_vs_epsilon.png` — order parameter |m|(ε)
+- `abs_m_vs_epsilon.png` — order parameter ⟨|m|⟩(ε)
 - `binder_vs_epsilon.png` — Binder cumulant U₄(ε); intersection of L curves = ε_c
 - `peak_chi_vs_L.png` — finite-size scaling: max(χ) vs L (log-log)
 

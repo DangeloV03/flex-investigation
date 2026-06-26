@@ -5,7 +5,7 @@ Plot susceptibility χ vs ε, order parameter |m| vs ε, heat capacity c vs ε, 
 
 Reads m_timeseries_{id}.csv files (raw time series per replica) and computes all observables
 from scratch, following the paper's ordering:
-  1. time averages ⟨m⟩, ⟨m²⟩, ⟨m⁴⟩, ⟨E_int⟩, ⟨E_int²⟩ per single trajectory
+  1. time averages ⟨m⟩, ⟨|m|⟩, ⟨m²⟩, ⟨m⁴⟩, ⟨E_int⟩, ⟨E_int²⟩ per single trajectory
   2. per-trajectory observables: χ, c, U4
   3. average over replicas per (L, ε)
 
@@ -59,6 +59,7 @@ def _compute_traj_stats(ts_path: str, meta: dict) -> dict | None:
 
     m_arr = ts["m"].values.astype(float)
     m_mean = float(np.mean(m_arr))
+    abs_m_mean = float(np.mean(np.abs(m_arr)))
     m2_mean = float(np.mean(m_arr ** 2))
     m4_mean = float(np.mean(m_arr ** 4))
 
@@ -73,6 +74,7 @@ def _compute_traj_stats(ts_path: str, meta: dict) -> dict | None:
         "L": L,
         "epsilon": float(meta["epsilon"]),
         "m_mean": m_mean,
+        "abs_m_mean": abs_m_mean,
         "m2_mean": m2_mean,
         "m4_mean": m4_mean,
         "chi": chi,
@@ -134,6 +136,8 @@ def aggregate(results_dir: str) -> pd.DataFrame:
             "chi_stderr": _stderr(sub["chi"]),
             "m_mean": float(sub["m_mean"].mean()),
             "m_mean_stderr": _stderr(sub["m_mean"]),
+            "abs_m_mean": float(sub["abs_m_mean"].mean()),
+            "abs_m_mean_stderr": _stderr(sub["abs_m_mean"]),
             "m2_mean": float(sub["m2_mean"].mean()),
             "m4_mean": float(sub["m4_mean"].mean()),
             "u4": float(sub["u4"].mean()),
@@ -233,6 +237,9 @@ def aggregate_pooled(results_dir: str) -> pd.DataFrame:
             m_arrays, lambda a, N=N, beta=beta: N * beta * (np.mean(a ** 2) - np.mean(a) ** 2)
         )
         m_mean, m_mean_err = _jackknife(m_arrays, lambda a: float(np.mean(a)))
+        abs_m_mean, abs_m_mean_err = _jackknife(
+            m_arrays, lambda a: float(np.mean(np.abs(a)))
+        )
         u4, u4_err = _jackknife(
             m_arrays,
             lambda a: 1.0 - np.mean(a ** 4) / (3.0 * np.mean(a ** 2) ** 2)
@@ -246,6 +253,8 @@ def aggregate_pooled(results_dir: str) -> pd.DataFrame:
             "chi_stderr": chi_err,
             "m_mean": m_mean,
             "m_mean_stderr": m_mean_err,
+            "abs_m_mean": abs_m_mean,
+            "abs_m_mean_stderr": abs_m_mean_err,
             "m2_mean": float(np.mean(pooled_m ** 2)),
             "m4_mean": float(np.mean(pooled_m ** 4)),
             "u4": u4,
@@ -336,15 +345,13 @@ def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False) ->
 def plot_m_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
     suffix = " (pooled)" if pooled else ""
     ftag = "_pooled" if pooled else ""
-    plot_agg = agg.copy()
-    plot_agg["abs_m_mean"] = plot_agg["m_mean"].abs()
     _plot_l_curves_vs_epsilon(
-        plot_agg,
+        agg,
         outdir,
         y_col="abs_m_mean",
-        yerr_col="m_mean_stderr",
-        ylabel=r"$|m|$",
-        title=r"$|m|$ vs $\varepsilon$" + suffix,
+        yerr_col="abs_m_mean_stderr",
+        ylabel=r"$\langle |m| \rangle$",
+        title=r"$\langle |m| \rangle$ vs $\varepsilon$" + suffix,
         filename=f"abs_m_vs_epsilon{ftag}.png",
     )
 
