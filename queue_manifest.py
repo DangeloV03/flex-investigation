@@ -54,7 +54,10 @@ def read_manifest(path: str = MANIFEST_PATH) -> dict:
     if not os.path.isfile(path):
         return _empty_manifest()
     with open(path) as f:
-        manifest = json.load(f)
+        content = f.read().strip()
+    if not content:
+        return _empty_manifest()
+    manifest = json.loads(content)
     manifest.setdefault("pending", [])
     manifest.setdefault("in_flight", {})
     return manifest

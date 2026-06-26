@@ -29,12 +29,20 @@ import multiprocessing as mp
 
 import numpy as np
 
-from combo_paths import COMBO_KEY_FIELDS, combo_dir, mu_dir, mu_sweeps_dir
-from lattice_gas.markov_chain import HeteroChain
+from combo_paths import COMBO_KEY_FIELDS, RESULTS_DIR, combo_dir, mu_dir, mu_sweeps_dir
+from lattice_gas import load
 from lattice_gas.boundary_condition import Periodic
 from lattice_gas.ending_criterion import Time
+from lattice_gas.markov_chain import HeteroChain
 from lattice_gas.simulate import simulate
-from lattice_gas import load
+
+
+def _results_base(params: dict) -> str:
+    return params.get("results_base", RESULTS_DIR)
+
+
+def _manage_csv_path(params: dict) -> str:
+    return params.get("manage_csv", "manage.csv")
 
 EMPTY, INERT, BONDING = 0, 1, 2
 
@@ -198,7 +206,7 @@ def update_manage_csv(manage_path: str, params: dict) -> None:
     if "combo_path" not in fieldnames:
         fieldnames.append("combo_path")
 
-    combo_path = combo_dir(params)
+    combo_path = combo_dir(params, base=_results_base(params))
     updated = False
     for row in rows:
         if row.get("isRan", "") and row.get("combo_path", ""):
@@ -237,12 +245,13 @@ def main():
     num_parallel_runs = run_settings["num_parallel_runs"]
     seed_base = run_settings["seed_base"]
 
+    results_base = _results_base(params)
     if args.outdir is not None:
         outdir = args.outdir
     else:
-        outdir = mu_dir(params)
-    os.makedirs(combo_dir(params), exist_ok=True)
-    os.makedirs(mu_sweeps_dir(params), exist_ok=True)
+        outdir = mu_dir(params, base=results_base)
+    os.makedirs(combo_dir(params, base=results_base), exist_ok=True)
+    os.makedirs(mu_sweeps_dir(params, base=results_base), exist_ok=True)
     os.makedirs(outdir, exist_ok=True)
 
     eps = params["epsilon"]
@@ -286,7 +295,7 @@ def main():
             flush=True,
         )
 
-    update_manage_csv("manage.csv", params)
+    update_manage_csv(_manage_csv_path(params), params)
 
 
 if __name__ == "__main__":

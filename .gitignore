@@ -34,7 +34,9 @@ env/
 # Generated pipeline outputs (large data — keep out of git)
 samples/
 test_samples/
+susceptibility_samples/
 results/
+susceptibility_results/
 plots/
 test_run_out/
 
@@ -43,6 +45,7 @@ manage.csv
 test_manage.csv
 *_manage.csv
 run_all_queue.json
+susceptibility_*_queue.json
 
 # Simulation scratch dirs (if any remain outside results/)
 _scratch_*/
