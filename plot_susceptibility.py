@@ -90,9 +90,15 @@ def _compute_traj_stats(ts_path: str, meta: dict) -> dict | None:
         e_total = ts["energy"].values.astype(float)
         e_chem = -beta * mu * N * rho_B - beta * (mu + delta_f) * N * rho_I
         e_int = e_total - e_chem
-        e_int_mean = float(np.mean(e_int))
-        e_int2_mean = float(np.mean(e_int ** 2))
-        result["c"] = (e_int2_mean - e_int_mean ** 2) / N
+        # c = [Var(E_int) − Cov(E_int,m)²/Var(m)] / N. E_int is almost perfectly tied to
+        # the order parameter (corr≈−1), so plain Var(E_int) just re-measures χ. Projecting
+        # out the m-linear piece (energy–order-parameter mixing) recovers the true c.
+        em = e_int - float(np.mean(e_int))
+        mm = m_arr - m_mean
+        var_e = float(np.mean(em ** 2))
+        var_m = float(np.mean(mm ** 2))
+        cov = float(np.mean(em * mm))
+        result["c"] = (var_e - (cov ** 2 / var_m if var_m > 0 else 0.0)) / N
 
     return result
 
