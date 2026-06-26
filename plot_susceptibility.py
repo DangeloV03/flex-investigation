@@ -86,7 +86,8 @@ def _compute_traj_stats(ts_path: str, meta: dict) -> dict | None:
         e2_mean = float(np.mean(e_total ** 2))
         e_mean  = float(np.mean(e_total))
         T = 1.0 / beta
-        result["c"] = (e2_mean - e_mean ** 2) / (N * T ** 2)
+        epsilon = float(meta["epsilon"])
+        result["c"] = (e2_mean - e_mean ** 2) / (N * T ** 2 * epsilon)
 
     return result
 
