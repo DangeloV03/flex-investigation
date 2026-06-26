@@ -1,7 +1,7 @@
 """
 plot_susceptibility.py
 
-Plot susceptibility χ vs ε, order parameter m vs ε, heat capacity c vs ε, and Binder U4 vs ε.
+Plot susceptibility χ vs ε, order parameter |m| vs ε, heat capacity c vs ε, and Binder U4 vs ε.
 
 Reads m_timeseries_{id}.csv files (raw time series per replica) and computes all observables
 from scratch, following the paper's ordering:
@@ -336,14 +336,16 @@ def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False) ->
 def plot_m_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
     suffix = " (pooled)" if pooled else ""
     ftag = "_pooled" if pooled else ""
+    plot_agg = agg.copy()
+    plot_agg["abs_m_mean"] = plot_agg["m_mean"].abs()
     _plot_l_curves_vs_epsilon(
-        agg,
+        plot_agg,
         outdir,
-        y_col="m_mean",
+        y_col="abs_m_mean",
         yerr_col="m_mean_stderr",
-        ylabel=r"$m$",
-        title=r"Order parameter vs $\varepsilon$" + suffix,
-        filename=f"m_vs_epsilon{ftag}.png",
+        ylabel=r"$|m|$",
+        title=r"$|m|$ vs $\varepsilon$" + suffix,
+        filename=f"abs_m_vs_epsilon{ftag}.png",
     )
 
 
