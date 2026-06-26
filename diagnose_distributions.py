@@ -241,6 +241,7 @@ def analyze(df: pd.DataFrame, eps: float, outdir: str) -> None:
 
     _scaling_plot(smry, eps, outdir)
     _autocorr_report(sub, eps, outdir)
+    _heat_capacity_report(sub, eps, outdir)
 
     print(
         "\nRead it like this:\n"
@@ -249,8 +250,48 @@ def analyze(df: pd.DataFrame, eps: float, outdir: str) -> None:
         "    discarding the between-phase variance that should scale as L^1.75.\n"
         "  • Single-peaked P(m) narrowing with L, BC small     ⇒ continuous; trust pooled χ/c.\n"
         "  • Autocorr: if Neff_tot collapses toward ~1 as L grows, large-L is under-sampled\n"
-        "    (critical slowing down) — the run length, not the snapshot count, is the limit."
+        "    (critical slowing down) — the run length, not the snapshot count, is the limit.\n"
+        "  • Heat cap: if |corr(E,m)|→1 and c_resid ≪ c_raw, c is contaminated by the\n"
+        "    magnetization fluctuation (energy–order-parameter mixing); c_resid is the fix."
     )
+
+
+def _heat_capacity_report(sub: pd.DataFrame, eps: float, outdir: str) -> None:
+    """Test whether c is inflated by E_int–m mixing (energy tracking the order parameter).
+
+    c_raw    = Var(E_int)/N                              (current definition)
+    c_resid  = [Var(E_int) − Cov(E_int,m)²/Var(m)] / N   (m-linear part projected out)
+    If E_int ≈ E_sym + a·N·m, c_resid recovers Var(E_sym)/N ≈ the true specific heat.
+    Done per trajectory then averaged, matching the production estimator.
+    """
+    Ls = sorted(sub["L"].unique())
+    print(f"\n=== Heat capacity: energy–order-parameter mixing check at ε = {eps:.4f} ===")
+    header = f"{'L':>5} {'corr(E,m)':>10} {'c_raw':>10} {'c_resid':>10} {'drop':>7}"
+    print(header)
+    print("-" * len(header))
+    for L in Ls:
+        recs = sub[sub["L"] == L]
+        N = int(recs["N"].iloc[0])
+        c_raw_l, c_resid_l, corr_l = [], [], []
+        for _, r in recs.iterrows():
+            e, m = r["e_int"], r["m"]
+            if e is None:
+                continue
+            em = e - e.mean()
+            mm = m - m.mean()
+            var_e = float(np.mean(em ** 2))
+            var_m = float(np.mean(mm ** 2))
+            cov = float(np.mean(em * mm))
+            if var_e <= 0 or var_m <= 0:
+                continue
+            c_raw_l.append(var_e / N)
+            c_resid_l.append((var_e - cov ** 2 / var_m) / N)
+            corr_l.append(cov / np.sqrt(var_e * var_m))
+        if not c_raw_l:
+            continue
+        c_raw, c_resid, corr = np.mean(c_raw_l), np.mean(c_resid_l), np.mean(corr_l)
+        drop = c_resid / c_raw if c_raw else float("nan")
+        print(f"{L:>5} {corr:>10.3f} {c_raw:>10.2f} {c_resid:>10.3f} {drop:>7.3f}")
 
 
 def _autocorr_report(sub: pd.DataFrame, eps: float, outdir: str) -> None:
