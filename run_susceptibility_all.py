@@ -47,11 +47,14 @@ from susceptibility_paths import (
     COEX_MANIFEST,
     COEX_SAMPLES_DIR,
     EXACT_MANIFEST,
+    EXACT_RANDOM_MANIFEST,
+    EXACT_RANDOM_SAMPLES_DIR,
     EXACT_SAMPLES_DIR,
     PROD_MANIFEST,
     PROD_SAMPLES_DIR,
     patch_coex_job_json,
     patch_exact_job_json,
+    patch_exact_random_job_json,
     patch_prod_job_json,
 )
 
@@ -72,6 +75,11 @@ PHASE_CONFIG = {
         "runner": "susceptibility_runner.py",
         "manifest": EXACT_MANIFEST,
         "samples_root": EXACT_SAMPLES_DIR,
+    },
+    "exact_random": {
+        "runner": "susceptibility_runner.py",
+        "manifest": EXACT_RANDOM_MANIFEST,
+        "samples_root": EXACT_RANDOM_SAMPLES_DIR,
     },
 }
 
@@ -168,6 +176,8 @@ def submit_up_to_cap(
             patch_job = patch_coex_job_json
         elif phase == "exact":
             patch_job = patch_exact_job_json
+        elif phase == "exact_random":
+            patch_job = patch_exact_random_job_json
         else:
             patch_job = patch_prod_job_json
         if patch_job(json_path):
@@ -194,7 +204,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Dispatcher for susceptibility campaign jobs")
     parser.add_argument(
         "--phase",
-        choices=["coex", "prod", "exact"],
+        choices=["coex", "prod", "exact", "exact_random"],
         required=True,
         help="coex: slab μ sweep via json_runner; prod/exact: square L via susceptibility_runner",
     )
