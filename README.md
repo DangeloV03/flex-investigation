@@ -51,8 +51,14 @@ See [QUICKSTART.md](QUICKSTART.md) for full setup from scratch.
 | Script | When to use |
 |--------|-------------|
 | `env.sh` | Source on login: exports, conda activate, import check |
-| `start_daemons.sh` / `stop_daemons.sh` | Start/stop campaign tmux session on Della |
+| `start_sus_exact_daemons.sh` | Start exact susceptibility dispatcher in tmux (`sus-exact`) |
+| `start_sus_coex_daemons.sh` | Start coex susceptibility dispatcher + analyzer in tmux |
+| `start_sus_prod_daemons.sh` | Start prod susceptibility dispatcher in tmux |
+| `start_daemons.sh` / `stop_daemons.sh` | Start/stop coexistence campaign tmux session |
 | `repair_queue.py` | Restore missing JSONs, clear stale `in_flight` entries |
+| `requeue_incomplete.py` | Re-enqueue jobs that never finished |
+| `retry_nan_combos.py` | Re-run analyzer on rows marked NaN |
+| `estimate_runtime.py` | Estimate remaining campaign wall time |
 
 ---
 
@@ -78,21 +84,47 @@ See [QUICKSTART.md](QUICKSTART.md) for full setup from scratch.
 
 ```
 flex-investigation/
-├── generate_samples.py          # coexistence campaign setup
-├── json_runner.py               # single-job worker
-├── run_all.py                   # Slurm dispatcher
-├── analyzer.py                  # results watcher + refinement
-├── generate_susceptibility_exact.py
-├── susceptibility_runner.py
-├── run_susceptibility_all.py
-├── plot_susceptibility.py
-├── plot_fss.py                  # FSS collapse plots
+├── README.md / QUICKSTART.md
 ├── slurm_config.yml
 ├── requirements.txt
+│
+├── # Coexistence campaign
+├── generate_samples.py
+├── json_runner.py
+├── run_all.py
+├── analyzer.py
+├── queue_manifest.py
+├── combo_paths.py
+├── flex_coex_chemical_potential_prediction.py
+│
+├── # Susceptibility campaign
+├── generate_susceptibility_exact.py   # exact μ = 2ε (current active)
+├── generate_susceptibility_coex.py    # coex-phase μ sweep
+├── generate_susceptibility_jobs.py    # prod-phase job gen
+├── susceptibility_runner.py
+├── susceptibility_paths.py
+├── run_susceptibility_all.py
+├── plot_susceptibility.py
+├── plot_fss.py
+│
 ├── scripts/
-│   ├── env.sh
-│   ├── start_daemons.sh
-│   └── stop_daemons.sh
+│   ├── env.sh                         # login setup (source from ~/.bashrc)
+│   ├── start_sus_exact_daemons.sh     # start exact susceptibility campaign
+│   ├── start_sus_coex_daemons.sh      # start coex susceptibility phase
+│   ├── start_sus_prod_daemons.sh      # start prod susceptibility phase
+│   ├── start_daemons.sh               # start coexistence campaign
+│   ├── stop_daemons.sh
+│   ├── repair_queue.py
+│   ├── requeue_incomplete.py
+│   ├── retry_nan_combos.py
+│   └── estimate_runtime.py
+│
+├── tests/
+│   └── test_pipeline.py
+│
 ├── susceptibility_results/      # gitignored — simulation output
+├── susceptibility_samples/      # gitignored — generated job JSONs
+├── results/                     # gitignored — coexistence output
+├── samples/                     # gitignored — coexistence job JSONs
 └── plots/                       # gitignored — generated figures
 ```

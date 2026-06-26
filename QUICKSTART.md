@@ -217,19 +217,18 @@ You only need to run this once. If some jobs fail and you re-run it, it skips jo
 
 We use `tmux` so the dispatcher keeps running after you disconnect from SSH. If you close your terminal or your SSH connection drops, the jobs and the dispatcher keep going.
 
+There is already a script that handles all of this:
+
 ```bash
-tmux new-session -d -s susceptibility
-tmux send-keys -t susceptibility \
-  "source /scratch/gpfs/WJACOBS/$USER/flex-investigation/scripts/env.sh && python run_susceptibility_all.py --phase exact" \
-  Enter
+./scripts/start_sus_exact_daemons.sh
 ```
 
-This starts `run_susceptibility_all.py` in a detached tmux session named `susceptibility`. The `source env.sh` at the front ensures conda and `LD_LIBRARY_PATH` are set even though the tmux window starts with a fresh shell. The dispatcher will submit jobs to Slurm, wait for them to finish, and keep going until the queue is empty.
+It creates a tmux session called `sus-exact`, sources `env.sh` to set up the environment, and starts the dispatcher. You should see output confirming the session was created.
 
 To watch what it's doing:
 
 ```bash
-tmux attach -t susceptibility
+tmux attach -t sus-exact
 # Press Ctrl+b then d to detach without stopping it
 ```
 
@@ -325,7 +324,7 @@ ssh <your-netid>@della.princeton.edu
 git pull
 
 # 3. Check if the dispatcher is still running
-tmux attach -t susceptibility   # Ctrl-b then d to detach without stopping it
+tmux attach -t sus-exact   # Ctrl-b then d to detach without stopping it
 
 # 4. Check how many jobs are done
 find susceptibility_results -name "susceptibility_data.csv" | wc -l
@@ -373,10 +372,7 @@ python run_susceptibility_all.py --phase exact
 **Dispatcher stopped mid-campaign**
 Just restart it — it picks up where it left off:
 ```bash
-tmux new-session -d -s susceptibility
-tmux send-keys -t susceptibility \
-  "source /scratch/gpfs/WJACOBS/$USER/flex-investigation/scripts/env.sh && python run_susceptibility_all.py --phase exact" \
-  Enter
+./scripts/start_sus_exact_daemons.sh
 ```
 
 **Want to update the code after a change is pushed**
