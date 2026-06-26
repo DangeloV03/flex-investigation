@@ -75,6 +75,29 @@ def largest_gap_split(e: np.ndarray) -> dict:
     }
 
 
+def integrated_autocorr_time(x: np.ndarray, c: float = 5.0) -> float:
+    """Integrated autocorrelation time τ (in sample units), automatic windowing.
+
+    τ = 1 + 2 Σ_k ρ(k), window W chosen as smallest W ≥ c·τ (Sokal). Effective
+    independent samples = n / τ. A nearly-frozen series (no fluctuation) → nan.
+    """
+    x = np.asarray(x, dtype=float)
+    n = x.size
+    if n < 8:
+        return float("nan")
+    x = x - x.mean()
+    c0 = float(np.dot(x, x) / n)
+    if c0 <= 0:
+        return float("nan")  # constant series → frozen, τ undefined
+    tau = 1.0
+    for k in range(1, n):
+        rho = float(np.dot(x[: n - k], x[k:]) / n) / c0
+        tau += 2.0 * rho
+        if k >= c * tau:
+            break
+    return max(tau, 1.0)
+
+
 def _recover_eint(ts: pd.DataFrame, beta: float, mu: float, delta_f: float, N: int) -> np.ndarray | None:
     if not {"energy", "rho_bonding", "rho_inert"}.issubset(ts.columns):
         return None
@@ -109,12 +132,19 @@ def collect(results_dir: str) -> pd.DataFrame:
             delta_f = float(meta["delta_f"])
             L = int(float(meta["L"]))
             N = L * L
+            try:
+                pt = float(meta.get("prod_time", "") or "nan")
+                pc = float(meta.get("prod_chunks", "") or "nan")
+                steps_per_sample = pt / pc if pc else float("nan")
+            except (TypeError, ValueError):
+                steps_per_sample = float("nan")
             e_int = _recover_eint(ts, beta, mu, delta_f, N)
             records.append({
                 "L": L,
                 "epsilon": float(meta["epsilon"]),
                 "beta": beta,
                 "N": N,
+                "steps_per_sample": steps_per_sample,
                 "m": ts["m"].to_numpy(float),
                 "e_int": e_int,
             })
@@ -210,14 +240,74 @@ def analyze(df: pd.DataFrame, eps: float, outdir: str) -> None:
     print(f"Wrote {csv_path}")
 
     _scaling_plot(smry, eps, outdir)
+    _autocorr_report(sub, eps, outdir)
 
     print(
         "\nRead it like this:\n"
         "  • BC(E) > 0.56 and ΔE/N roughly constant across L  ⇒ first order (latent heat).\n"
         "  • χ_pool ≫ χ_pertraj (ratio ≫ 1)                   ⇒ per-traj estimator is\n"
         "    discarding the between-phase variance that should scale as L^1.75.\n"
-        "  • Single-peaked P(m) narrowing with L, BC small     ⇒ continuous; trust pooled χ/c."
+        "  • Single-peaked P(m) narrowing with L, BC small     ⇒ continuous; trust pooled χ/c.\n"
+        "  • Autocorr: if Neff_tot collapses toward ~1 as L grows, large-L is under-sampled\n"
+        "    (critical slowing down) — the run length, not the snapshot count, is the limit."
     )
+
+
+def _autocorr_report(sub: pd.DataFrame, eps: float, outdir: str) -> None:
+    """Per-L integrated autocorrelation time of m and effective independent sample size."""
+    Ls = sorted(sub["L"].unique())
+    print(f"\n=== Autocorrelation / effective sample size at ε = {eps:.4f} ===")
+    header = (
+        f"{'L':>5} {'n/rep':>7} {'reps':>5} {'τ(samp)':>9} {'τ(steps)':>11} "
+        f"{'Neff/rep':>9} {'Neff_tot':>9} {'frozen':>8}"
+    )
+    print(header)
+    print("-" * len(header))
+
+    rows = []
+    for L in Ls:
+        recs = sub[sub["L"] == L]
+        taus, n_per, sps, n_frozen = [], None, float("nan"), 0
+        for _, r in recs.iterrows():
+            m = r["m"]
+            n_per = m.size
+            sps = r.get("steps_per_sample", float("nan"))
+            t = integrated_autocorr_time(m)
+            if np.isnan(t):
+                n_frozen += 1
+            else:
+                taus.append(t)
+        if taus:
+            tau = float(np.mean(taus))
+            neff_rep = n_per / tau
+            neff_tot = neff_rep * len(taus)
+        else:
+            tau = neff_rep = float("nan")
+            neff_tot = 0.0
+        tau_steps = tau * sps if sps == sps else float("nan")
+        print(
+            f"{L:>5} {n_per:>7} {len(recs):>5} {tau:>9.1f} {tau_steps:>11.0f} "
+            f"{neff_rep:>9.1f} {neff_tot:>9.1f} {f'{n_frozen}/{len(recs)}':>8}"
+        )
+        rows.append({"L": L, "tau_samples": tau, "tau_steps": tau_steps,
+                     "neff_per_rep": neff_rep, "neff_total": neff_tot})
+
+    s = pd.DataFrame(rows).sort_values("L")
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.5))
+    ax1.loglog(s["L"], s["tau_samples"], "o-", color="tab:purple")
+    ax1.set_xlabel("L"); ax1.set_ylabel(r"$\tau_{int}$ (samples)")
+    ax1.set_title("Autocorrelation time"); ax1.grid(True, which="both", alpha=0.3)
+    ax2.loglog(s["L"], s["neff_total"], "o-", color="tab:green")
+    ax2.axhline(1.0, color="r", ls="--", lw=0.8, label="1 independent config")
+    ax2.set_xlabel("L"); ax2.set_ylabel(r"$N_{eff}$ (total)")
+    ax2.set_title("Effective independent samples"); ax2.legend(fontsize=8)
+    ax2.grid(True, which="both", alpha=0.3)
+    fig.suptitle(f"Critical slowing down check at ε={eps:.3f}", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    path = os.path.join(outdir, f"autocorr_eps{abs(eps):.3f}".replace(".", "p") + ".png")
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+    print(f"Wrote {path}")
 
 
 def _scaling_plot(smry: pd.DataFrame, eps: float, outdir: str) -> None:
