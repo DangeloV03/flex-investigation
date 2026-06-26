@@ -79,26 +79,14 @@ def _compute_traj_stats(ts_path: str, meta: dict) -> dict | None:
         "u4": u4,
     }
 
-    # Heat capacity from interaction energy only (strips out chemical potential terms).
-    if (
-        "energy" in ts.columns
-        and "rho_bonding" in ts.columns
-        and "rho_inert" in ts.columns
-    ):
-        rho_B = ts["rho_bonding"].values.astype(float)
-        rho_I = ts["rho_inert"].values.astype(float)
+    # c(T,L) = (1/NT²)(⟨E²⟩ - ⟨E⟩²).  At μ=2ε the Nm terms in e_interact and
+    # e_chem cancel exactly so E_total is spin-invariant; use the stored energy directly.
+    if "energy" in ts.columns:
         e_total = ts["energy"].values.astype(float)
-        e_chem = -beta * mu * N * rho_B - beta * (mu + delta_f) * N * rho_I
-        e_int = e_total - e_chem
-        # c = [Var(E_int) − Cov(E_int,m)²/Var(m)] / N. E_int is almost perfectly tied to
-        # the order parameter (corr≈−1), so plain Var(E_int) just re-measures χ. Projecting
-        # out the m-linear piece (energy–order-parameter mixing) recovers the true c.
-        em = e_int - float(np.mean(e_int))
-        mm = m_arr - m_mean
-        var_e = float(np.mean(em ** 2))
-        var_m = float(np.mean(mm ** 2))
-        cov = float(np.mean(em * mm))
-        result["c"] = (var_e - (cov ** 2 / var_m if var_m > 0 else 0.0)) / N
+        e2_mean = float(np.mean(e_total ** 2))
+        e_mean  = float(np.mean(e_total))
+        T = 1.0 / beta
+        result["c"] = (e2_mean - e_mean ** 2) / (N * T ** 2)
 
     return result
 
