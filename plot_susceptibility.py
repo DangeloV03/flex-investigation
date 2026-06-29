@@ -387,28 +387,23 @@ def plot_binder_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False)
     )
 
 
-def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
+def _draw_peak_chi_figure(peaks: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
     suffix = " (pooled)" if pooled else ""
     ftag = "_pooled" if pooled else ""
     os.makedirs(outdir, exist_ok=True)
-    peaks = (
-        agg.loc[agg.groupby("L")["chi_mean"].idxmax()]
-        .sort_values("L")
-    )
-    fig, ax = plt.subplots(figsize=(6, 5))
-    ax.loglog(peaks["L"], peaks["chi_mean"], "o", markersize=6, color="black", zorder=3)
 
-    # Power-law fit: chi_max = A * L^(gamma/nu)
+    fig, ax = plt.subplots(figsize=(6, 5))
+    ax.loglog(peaks["L"], peaks["chi_mean"], "o", markersize=6, color="black", zorder=3,
+              label="simulation")
+
+    # Reference line from Kumar & Dasgupta (2020): A=0.095, gamma/nu=1.73
+    REF_A, REF_GNU = 0.095, 1.73
     L_vals = peaks["L"].to_numpy(dtype=float)
-    chi_vals = peaks["chi_mean"].to_numpy(dtype=float)
-    log_slope, log_intercept = np.polyfit(np.log(L_vals), np.log(chi_vals), 1)
-    gamma_nu = log_slope
-    A = np.exp(log_intercept)
     L_fine = np.geomspace(L_vals.min(), L_vals.max(), 200)
     ax.loglog(
-        L_fine, A * L_fine**gamma_nu,
+        L_fine, REF_A * L_fine**REF_GNU,
         "-", color="red", linewidth=1.5,
-        label=rf"$A\,L^{{\gamma/\nu}}$,  $A={A:.3f}$,  $\gamma/\nu={gamma_nu:.3f}$",
+        label=rf"$A\,L^{{\gamma/\nu}}$,  $A={REF_A}$,  $\gamma/\nu={REF_GNU}$ (K&D 2020)",
     )
     ax.legend(fontsize=9)
 
@@ -422,6 +417,15 @@ def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> 
     plt.close(fig)
     print(f"Wrote {path}")
 
+
+def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
+    ftag = "_pooled" if pooled else ""
+    os.makedirs(outdir, exist_ok=True)
+    peaks = (
+        agg.loc[agg.groupby("L")["chi_mean"].idxmax()]
+        .sort_values("L")
+    )
+    _draw_peak_chi_figure(peaks, outdir, pooled=pooled)
     csv_path = os.path.join(outdir, f"peak_chi_vs_L{ftag}.csv")
     peaks[["L", "epsilon", "chi_mean", "chi_stderr"]].to_csv(csv_path, index=False)
     print(f"Wrote {csv_path}")
@@ -437,7 +441,19 @@ def main() -> None:
         help="Pool all replica samples per (L, ε) before computing χ/c/U4 "
         "(vs per-trajectory then averaged). Writes *_pooled.png alongside the originals.",
     )
+    parser.add_argument(
+        "--peak-only",
+        action="store_true",
+        help="Skip aggregation and replot peak_chi_vs_L from the existing CSV in --outdir.",
+    )
     args = parser.parse_args()
+
+    if args.peak_only:
+        ftag = "_pooled" if args.pooled else ""
+        csv_path = os.path.join(args.outdir, f"peak_chi_vs_L{ftag}.csv")
+        peaks = pd.read_csv(csv_path)
+        _draw_peak_chi_figure(peaks, args.outdir, pooled=args.pooled)
+        return
 
     if args.pooled:
         print("Aggregation: POOLED (all replica samples combined before χ/c/U4)")
