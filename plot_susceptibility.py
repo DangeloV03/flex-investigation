@@ -396,15 +396,27 @@ def _draw_peak_chi_figure(peaks: pd.DataFrame, outdir: str, pooled: bool = False
     ax.loglog(peaks["L"], peaks["chi_mean"], "o", markersize=6, color="black", zorder=3,
               label="simulation")
 
-    # Reference line from Kumar & Dasgupta (2020): A=0.095, gamma/nu=1.73
-    REF_A, REF_GNU = 0.095, 1.73
     L_vals = peaks["L"].to_numpy(dtype=float)
+    chi_vals = peaks["chi_mean"].to_numpy(dtype=float)
     L_fine = np.geomspace(L_vals.min(), L_vals.max(), 200)
+
+    # Reference line from Kumar & Dasgupta (2020): A=0.095, gamma/nu=1.75
+    REF_A, REF_GNU = 0.095, 1.75
     ax.loglog(
         L_fine, REF_A * L_fine**REF_GNU,
         "-", color="red", linewidth=1.5,
-        label=rf"$A\,L^{{\gamma/\nu}}$,  $A={REF_A}$,  $\gamma/\nu={REF_GNU}$ (K&D 2020)",
+        label=rf"$A={REF_A}$,  $\gamma/\nu={REF_GNU}$ (K&D 2020)",
     )
+
+    # Best fit to our data
+    log_slope, log_intercept = np.polyfit(np.log(L_vals), np.log(chi_vals), 1)
+    fit_A = np.exp(log_intercept)
+    ax.loglog(
+        L_fine, fit_A * L_fine**log_slope,
+        "--", color="blue", linewidth=1.5,
+        label=rf"$A={fit_A:.3f}$,  $\gamma/\nu={log_slope:.3f}$ (fit)",
+    )
+
     ax.legend(fontsize=9)
 
     ax.set_xlabel("L")
