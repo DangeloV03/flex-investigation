@@ -396,9 +396,24 @@ def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> 
         .sort_values("L")
     )
     fig, ax = plt.subplots(figsize=(6, 5))
-    ax.loglog(peaks["L"], peaks["chi_mean"], "o-", markersize=6)
+    ax.loglog(peaks["L"], peaks["chi_mean"], "o", markersize=6, color="black", zorder=3)
+
+    # Power-law fit: chi_max = A * L^(gamma/nu)
+    L_vals = peaks["L"].to_numpy(dtype=float)
+    chi_vals = peaks["chi_mean"].to_numpy(dtype=float)
+    log_slope, log_intercept = np.polyfit(np.log(L_vals), np.log(chi_vals), 1)
+    gamma_nu = log_slope
+    A = np.exp(log_intercept)
+    L_fine = np.geomspace(L_vals.min(), L_vals.max(), 200)
+    ax.loglog(
+        L_fine, A * L_fine**gamma_nu,
+        "-", color="red", linewidth=1.5,
+        label=rf"$A\,L^{{\gamma/\nu}}$,  $A={A:.3f}$,  $\gamma/\nu={gamma_nu:.3f}$",
+    )
+    ax.legend(fontsize=9)
+
     ax.set_xlabel("L")
-    ax.set_ylabel(r"max($\chi$)")
+    ax.set_ylabel(r"$\chi^{\mathrm{max}}(L)$")
     ax.set_title(r"Peak susceptibility vs $L$" + suffix)
     ax.grid(True, which="both", alpha=0.3)
     path = os.path.join(outdir, f"peak_chi_vs_L{ftag}.png")
