@@ -234,7 +234,7 @@ def aggregate_pooled(results_dir: str) -> pd.DataFrame:
         pooled_m = np.concatenate(m_arrays)
 
         chi, chi_err = _jackknife(
-            m_arrays, lambda a, N=N, beta=beta: N * beta * (np.mean(a ** 2) - np.mean(a) ** 2)
+            m_arrays, lambda a, N=N, beta=beta: N * beta * (np.mean(a ** 2) - np.mean(np.abs(a)) ** 2)
         )
         m_mean, m_mean_err = _jackknife(m_arrays, lambda a: float(np.mean(a)))
         abs_m_mean, abs_m_mean_err = _jackknife(
