@@ -148,6 +148,10 @@ def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str, skip: int) -> pd.DataFram
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"  Wrote {path}")
+
+    csv_path = os.path.join(outdir, f"peak_chi_vs_L_skip{skip}.csv")
+    peaks[["L", "chi_mean", "chi_stderr"]].to_csv(csv_path, index=False)
+    print(f"  Wrote {csv_path}")
     return peaks
 
 
@@ -189,14 +193,28 @@ def main() -> None:
     parser.add_argument("--outdir", default="plots/susceptibility/correlation_test")
     parser.add_argument("--skips", type=int, nargs="+", default=SKIP_VALUES,
                         help="Skip values to test (default: 0 1 2 3 5 7 10 12 15)")
+    parser.add_argument("--mega-only", action="store_true",
+                        help="Skip aggregation; read saved peak CSVs and produce only the mega plot.")
     args = parser.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
-    all_peaks: dict[int, pd.DataFrame] = {}
 
+    if args.mega_only:
+        all_peaks: dict[int, pd.DataFrame] = {}
+        for skip in args.skips:
+            csv_path = os.path.join(args.outdir, f"peak_chi_vs_L_skip{skip}.csv")
+            if not os.path.isfile(csv_path):
+                print(f"WARNING: missing {csv_path}, skipping skip={skip}")
+                continue
+            all_peaks[skip] = pd.read_csv(csv_path)
+        print("[mega plot]")
+        plot_mega(all_peaks, args.outdir)
+        print("Done.")
+        return
+
+    all_peaks = {}
     for skip in args.skips:
-        n_kept = f"every {skip + 1}th chunk"
-        print(f"\n[skip={skip}] {n_kept}")
+        print(f"\n[skip={skip}] every {skip + 1}th chunk")
         agg = aggregate_thinned(args.results, skip)
         plot_chi_vs_eps(agg, args.outdir, skip)
         peaks = plot_peak_chi_vs_L(agg, args.outdir, skip)
