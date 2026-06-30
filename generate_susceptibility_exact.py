@@ -37,7 +37,7 @@ EPS_STEP = 0.005
 
 DEFAULT_RUN_SETTINGS = {
     "beta": 1.0,
-    "initial_fraction": 0.8,
+    "initial_fraction": 0.5,
     "num_parallel_runs": 24,
     "num_batches": 4,
     "cpus_per_task": 24,
