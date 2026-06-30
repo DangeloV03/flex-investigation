@@ -215,9 +215,13 @@ def analyze(df: pd.DataFrame, eps: float, outdir: str) -> None:
 
         color = L_COLOR.get(L, "gray")
         ax_m, ax_e = axes[i][0], axes[i][1]
-        ax_m.hist(m_pool, bins=40, color=color, alpha=0.75, density=True)
+        ax_m.hist(m_pool, bins=40, color=color, alpha=0.6, density=True, label="pooled chunks")
+        traj_means = np.array([mm.mean() for mm in rows["m"]])
+        ax_m.hist(traj_means, bins=20, color="black", alpha=0.9, density=True,
+                  histtype="step", linewidth=1.5, label=r"per-replica $\langle m \rangle$")
         ax_m.set_ylabel(f"L={L}", fontsize=9)
         ax_m.set_title(f"P(m)  BC={bc_m:.2f}", fontsize=8)
+        ax_m.legend(fontsize=6)
         if e_pool is not None:
             ax_e.hist(e_pool, bins=40, color=color, alpha=0.75, density=True)
             ax_e.set_title(f"P(E_int)  BC={bc_e:.2f}", fontsize=8)
