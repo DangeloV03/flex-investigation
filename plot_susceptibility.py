@@ -152,7 +152,7 @@ def aggregate(results_dir: str) -> pd.DataFrame:
             row["c_stderr"] = float("nan")
         rows_agg.append(row)
 
-    return pd.DataFrame(rows_agg).sort_values(["L", "epsilon"])
+    return pd.DataFrame(rows_agg).sort_values(["L", "epsilon"]), pd.DataFrame(traj_records)
 
 
 def _load_traj_arrays(ts_path: str, meta: dict) -> dict | None:
@@ -227,11 +227,20 @@ def aggregate_pooled(results_dir: str) -> pd.DataFrame:
         raise FileNotFoundError("No timeseries files found — check that runs have completed.")
 
     rows = []
+    traj_rows: list[dict] = []
     for (l_val, eps), recs in groups.items():
         beta = recs[0]["beta"]
         N = recs[0]["N"]
         m_arrays = [r["m"] for r in recs]
         pooled_m = np.concatenate(m_arrays)
+        for m_arr in m_arrays:
+            traj_rows.append({
+                "L": int(l_val),
+                "epsilon": float(eps),
+                "m_mean": float(np.mean(m_arr)),
+                "m2_mean": float(np.mean(m_arr ** 2)),
+                "m4_mean": float(np.mean(m_arr ** 4)),
+            })
 
         chi, chi_err = _jackknife(
             m_arrays, lambda a, N=N, beta=beta: N * beta * (np.mean(a ** 2) - np.mean(np.abs(a)) ** 2)
@@ -272,7 +281,7 @@ def aggregate_pooled(results_dir: str) -> pd.DataFrame:
             row["c_stderr"] = float("nan")
         rows.append(row)
 
-    return pd.DataFrame(rows).sort_values(["L", "epsilon"])
+    return pd.DataFrame(rows).sort_values(["L", "epsilon"]), pd.DataFrame(traj_rows)
 
 
 def _plot_l_curves_vs_epsilon(
@@ -443,6 +452,64 @@ def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> 
     print(f"Wrote {csv_path}")
 
 
+def print_moments_summary(agg: pd.DataFrame, warn_threshold: float = 0.1) -> None:
+    peaks = agg.loc[agg.groupby("L")["chi_mean"].idxmax()].sort_values("L")
+    print("\n=== Moments at peak chi per L ===")
+    print(f"{'L':>5}  {'eps_peak':>9}  {'<m>':>8}  {'<m^2>':>8}  {'<m^4>':>10}")
+    print("-" * 50)
+    warned = False
+    for _, row in peaks.iterrows():
+        m1 = row["m_mean"]
+        flag = "  *** |<m>| far from 0 ***" if abs(m1) > warn_threshold else ""
+        if flag:
+            warned = True
+        print(f"{int(row['L']):>5}  {row['epsilon']:>9.4f}  {m1:>8.4f}  {row['m2_mean']:>8.4f}  {row['m4_mean']:>10.6f}{flag}")
+    if warned:
+        print(f"\nWARNING: one or more L values have |<m>| > {warn_threshold} at peak chi.")
+        print("  This may indicate replicas trapped in one well (check initial_fraction).\n")
+    else:
+        print()
+
+
+def plot_m_histograms_at_peak(
+    traj_df: pd.DataFrame, agg: pd.DataFrame, outdir: str, pooled: bool = False
+) -> None:
+    """Histogram of per-replica <m> at the peak chi epsilon for each L."""
+    ftag = "_pooled" if pooled else ""
+    os.makedirs(outdir, exist_ok=True)
+    Ls = sorted(int(v) for v in agg["L"].unique())
+    peaks = agg.loc[agg.groupby("L")["chi_mean"].idxmax()].set_index("L")
+
+    fig, axes = plt.subplots(len(Ls), 1, figsize=(6, 2.5 * len(Ls)), squeeze=False)
+    for i, L in enumerate(Ls):
+        peak_eps = float(peaks.loc[L, "epsilon"])
+        sub = traj_df[traj_df["L"] == L]
+        eps_vals = sub["epsilon"].to_numpy()
+        closest_eps = float(eps_vals[np.argmin(np.abs(eps_vals - peak_eps))])
+        m_vals = sub[np.isclose(sub["epsilon"], closest_eps, atol=1e-6)]["m_mean"].to_numpy()
+
+        ax = axes[i][0]
+        color = L_PLOT_STYLE.get(L, {}).get("color", "gray")
+        ax.hist(m_vals, bins=min(20, max(5, len(m_vals) // 3)), color=color, alpha=0.75, density=True)
+        ax.axvline(0, color="black", linewidth=1.0, linestyle="--")
+        m1 = float(np.mean(m_vals))
+        warn = "  ⚠ |<m>| far from 0" if abs(m1) > 0.1 else ""
+        ax.set_title(
+            rf"L={L},  $\varepsilon$={closest_eps:.4f}   $\langle m\rangle$={m1:.3f}{warn}",
+            fontsize=9,
+        )
+        ax.set_xlabel(r"per-replica $\langle m \rangle$", fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle(r"Per-replica $\langle m \rangle$ at peak $\chi$ (criticality)", fontsize=11)
+    fig.tight_layout()
+    path = os.path.join(outdir, f"m_hist_at_peak{ftag}.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"Wrote {path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot susceptibility campaign results")
     parser.add_argument("--results", default="susceptibility_results")
@@ -469,16 +536,18 @@ def main() -> None:
 
     if args.pooled:
         print("Aggregation: POOLED (all replica samples combined before χ/c/U4)")
-        agg = aggregate_pooled(args.results)
+        agg, traj_df = aggregate_pooled(args.results)
     else:
         print("Aggregation: per-trajectory then averaged")
-        agg = aggregate(args.results)
+        agg, traj_df = aggregate(args.results)
 
+    print_moments_summary(agg)
     plot_chi_vs_epsilon(agg, args.outdir, pooled=args.pooled)
     plot_m_vs_epsilon(agg, args.outdir, pooled=args.pooled)
     plot_binder_vs_epsilon(agg, args.outdir, pooled=args.pooled)
     plot_heat_capacity_vs_epsilon(agg, args.outdir, pooled=args.pooled)
     plot_peak_chi_vs_L(agg, args.outdir, pooled=args.pooled)
+    plot_m_histograms_at_peak(traj_df, agg, args.outdir, pooled=args.pooled)
 
 
 if __name__ == "__main__":
