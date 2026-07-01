@@ -215,9 +215,11 @@ def analyze(df: pd.DataFrame, eps: float, outdir: str) -> None:
 
         color = L_COLOR.get(L, "gray")
         ax_m, ax_e = axes[i][0], axes[i][1]
+        m_mean_pool = float(m_pool.mean())
         ax_m.hist(m_pool, bins=40, color=color, alpha=0.75, density=True)
+        ax_m.axvline(m_mean_pool, color="k", linewidth=1.2, linestyle="--")
         ax_m.set_ylabel(f"L={L}", fontsize=9)
-        ax_m.set_title(f"P(m)  BC={bc_m:.2f}", fontsize=8)
+        ax_m.set_title(f"P(m)  BC={bc_m:.2f}  ⟨m⟩={m_mean_pool:.3f}", fontsize=8)
         if e_pool is not None:
             ax_e.hist(e_pool, bins=40, color=color, alpha=0.75, density=True)
             ax_e.set_title(f"P(E_int)  BC={bc_e:.2f}", fontsize=8)
