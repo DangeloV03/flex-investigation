@@ -120,8 +120,22 @@ def sacct_state(job_id: str) -> str | None:
 
 
 def active_slurm_ids(slurm) -> set[str]:
-    slurm.squeue.update_squeue()
-    return {str(job_id) for job_id in slurm.squeue.jobs}
+    try:
+        result = subprocess.run(
+            ["squeue", "--me", "--format=%i", "--noheader"],
+            capture_output=True, text=True, check=False,
+        )
+        ids: set[str] = set()
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            ids.add(line)
+            ids.add(line.split("_")[0])  # base ID for array jobs like "12345_[0-3]"
+        return ids
+    except FileNotFoundError:
+        slurm.squeue.update_squeue()
+        return {str(job_id) for job_id in slurm.squeue.jobs}
 
 
 def walltime_for_json(json_path: str, config_path: str = SLURM_CONFIG) -> str:
