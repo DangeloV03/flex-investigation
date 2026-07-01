@@ -21,7 +21,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 from collections import defaultdict
 
@@ -29,7 +28,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from susceptibility_paths import read_susceptibility_csv
+from susceptibility_paths import find_susceptibility_csvs, read_susceptibility_csv
 
 L_PLOT_STYLE: dict[int, dict[str, str]] = {
     16: {"color": "black", "marker": "o"},
@@ -100,8 +99,7 @@ def aggregate(results_dir: str) -> pd.DataFrame:
     m_timeseries CSV, compute per-trajectory observables, then average over replicas
     grouped by (L, ε).
     """
-    pattern = os.path.join(results_dir, "**", "susceptibility_data.csv")
-    paths = glob.glob(pattern, recursive=True)
+    paths = find_susceptibility_csvs(results_dir)
     if not paths:
         raise FileNotFoundError(f"No susceptibility_data.csv under {results_dir}")
 
@@ -206,8 +204,7 @@ def aggregate_pooled(results_dir: str) -> pd.DataFrame:
     Workaround for non-ergodic short runs: combining replicas reconstructs the full
     P(m) the per-trajectory estimator misses. Errors are leave-one-replica-out jackknife.
     """
-    pattern = os.path.join(results_dir, "**", "susceptibility_data.csv")
-    paths = glob.glob(pattern, recursive=True)
+    paths = find_susceptibility_csvs(results_dir)
     if not paths:
         raise FileNotFoundError(f"No susceptibility_data.csv under {results_dir}")
 

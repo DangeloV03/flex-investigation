@@ -25,7 +25,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 
 import matplotlib
@@ -35,7 +34,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from susceptibility_paths import read_susceptibility_csv
+from susceptibility_paths import find_susceptibility_csvs, read_susceptibility_csv
 
 L_COLOR: dict[int, str] = {
     16: "black", 32: "red", 48: "#2ca02c", 64: "blue",
@@ -110,7 +109,7 @@ def _recover_eint(ts: pd.DataFrame, beta: float, mu: float, delta_f: float, N: i
 
 def collect(results_dir: str) -> pd.DataFrame:
     """One row per replica: L, epsilon, beta, N, and the per-chunk m / E_int arrays."""
-    paths = glob.glob(os.path.join(results_dir, "**", "susceptibility_data.csv"), recursive=True)
+    paths = find_susceptibility_csvs(results_dir)
     if not paths:
         raise FileNotFoundError(f"No susceptibility_data.csv under {results_dir}")
 

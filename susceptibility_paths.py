@@ -16,15 +16,18 @@ COEX_SAMPLES_DIR = "susceptibility_samples/coex"
 PROD_SAMPLES_DIR = "susceptibility_samples/prod"
 EXACT_SAMPLES_DIR = "susceptibility_samples/exact"
 EXACT_RANDOM_SAMPLES_DIR = "susceptibility_samples/exact_random"
+EXACT_SPLIT_SAMPLES_DIR = "susceptibility_samples/exact_split"
 COEX_RESULTS_DIR = "susceptibility_results/coex"
 PROD_RESULTS_BASE = "susceptibility_results"
 EXACT_RESULTS_BASE = "susceptibility_results/exact"
 EXACT_RANDOM_RESULTS_BASE = "susceptibility_results/exact_random"
+EXACT_SPLIT_RESULTS_BASE = "susceptibility_results/exact_split"
 MANAGE_CSV = "susceptibility_manage.csv"
 COEX_MANIFEST = "susceptibility_coex_queue.json"
 PROD_MANIFEST = "susceptibility_prod_queue.json"
 EXACT_MANIFEST = "susceptibility_exact_queue.json"
 EXACT_RANDOM_MANIFEST = "susceptibility_exact_random_queue.json"
+EXACT_SPLIT_MANIFEST = "susceptibility_exact_split_queue.json"
 SUSCEPTIBILITY_DATA_CSV = "susceptibility_data.csv"
 
 # Pre-SEM schema (smoke tests / early prod); current adds *_err columns after each moment/chi.
@@ -119,6 +122,21 @@ def read_susceptibility_csv(path: str) -> list[dict]:
             record = dict(zip(fieldnames, row))
             rows.append({field: record.get(field, "") for field in SUSCEPTIBILITY_CSV_FIELDS})
     return rows
+
+
+def find_susceptibility_csvs(results_dir: str) -> list[str]:
+    """All susceptibility_data.csv files for the phase rooted at results_dir.
+
+    Run dirs are always {base}/susceptibility_{combo}/ for every phase, so glob
+    exactly one level deep. This keeps phases isolated: pointing at the prod base
+    (susceptibility_results/) no longer sweeps up coex/, exact/, exact_random/,
+    exact_split/ nested underneath it.
+    """
+    import glob
+
+    return sorted(
+        glob.glob(os.path.join(results_dir, "susceptibility_*", SUSCEPTIBILITY_DATA_CSV))
+    )
 
 
 def eps_filename_tag(epsilon: float) -> str:
@@ -220,6 +238,21 @@ def patch_exact_random_job_json(json_path: str) -> bool:
     if job.get("results_base") == EXACT_RANDOM_RESULTS_BASE:
         return False
     job["results_base"] = EXACT_RANDOM_RESULTS_BASE
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(job, f, indent=2)
+        f.write("\n")
+    return True
+
+
+def patch_exact_split_job_json(json_path: str) -> bool:
+    """Ensure exact-mu split-IC jobs write under susceptibility_results/exact_split/."""
+    import json
+
+    with open(json_path, encoding="utf-8") as f:
+        job = json.load(f)
+    if job.get("results_base") == EXACT_SPLIT_RESULTS_BASE:
+        return False
+    job["results_base"] = EXACT_SPLIT_RESULTS_BASE
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(job, f, indent=2)
         f.write("\n")

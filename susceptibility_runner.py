@@ -207,6 +207,12 @@ def run_replica(args: tuple) -> dict:
     prod_time = run_settings["prod_time"]
     n_chunks = run_settings.get("prod_chunks", 1000)
     initial_fraction = run_settings.get("initial_fraction", 0.8)
+    # Split-IC mode: cycle through run_settings["initial_fractions"] by run_id so
+    # e.g. [0.8, 0.2] puts even run_ids in the dense basin and odd ones in the
+    # dilute basin — an exact 50/50 split that stays exact across batches.
+    ic_cycle = run_settings.get("initial_fractions")
+    if ic_cycle:
+        initial_fraction = float(ic_cycle[run_id % len(ic_cycle)])
 
     inert_fugacity = np.exp(beta * (mu + delta_f))
     bonding_fugacity = np.exp(beta * mu)
@@ -226,6 +232,11 @@ def run_replica(args: tuple) -> dict:
 
     scratch_dir = os.path.join(outdir, f"_scratch_{replica_id}")
 
+    print(
+        f"[susceptibility_runner] replica={replica_id} run_id={run_id} "
+        f"initial_fraction={initial_fraction}",
+        flush=True,
+    )
     simulate(state, boundary, chain, [], [Time(eq_time)], seed, scratch_dir)
     state = load.final_state(scratch_dir)
     print(f"[susceptibility_runner] replica={replica_id} equilibration done", flush=True)
