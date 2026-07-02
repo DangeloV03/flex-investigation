@@ -40,9 +40,14 @@ if command -v module >/dev/null 2>&1; then
 fi
 export PYTHONUNBUFFERED=1
 
-# Run from the repo root (parent of this script's susceptibility/ folder) so
-# relative results paths land at the root and PYTHONPATH resolves both folders.
-cd "$(dirname "$0")/.."
+# Run from the repo root so relative results paths land there and PYTHONPATH
+# resolves both source folders. Under SLURM the batch script is copied to a spool
+# dir, so $0 is useless — use SLURM_SUBMIT_DIR (the dir sbatch was launched from).
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+    cd "$SLURM_SUBMIT_DIR"
+else
+    cd "$(dirname "$0")/.."
+fi
 export PYTHONPATH="$PWD/coex:$PWD/susceptibility:$PWD${PYTHONPATH:+:$PYTHONPATH}"
 
 # Use srun under SLURM; run python directly when testing locally.
