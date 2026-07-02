@@ -3,7 +3,7 @@
 Compare manage.csv, results/, and combo folder artifacts.
 
 Usage:
-    python scripts/audit_campaign.py
+    python coex/audit_campaign.py
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ def main():
             print(f"  {tag}")
         if len(missing_plot) > 20:
             print(f"  ... and {len(missing_plot) - 20} more")
-        print("\n  Fix: python scripts/replot_from_results.py")
+        print("\n  Fix: python coex/replot_from_results.py")
 
     missing_path = [
         row for row in rows
@@ -92,7 +92,7 @@ def main():
     ]
     if missing_path:
         print(f"\n{len(missing_path)} manage row(s) missing combo_path")
-        print("  Fix: python scripts/migrate_combo_layout.py")
+        print("  Fix: python coex/migrate_combo_layout.py")
 
 
 if __name__ == "__main__":

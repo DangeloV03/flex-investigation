@@ -6,8 +6,8 @@ Use when the analyzer is stuck on 'refinement jobs already queued, waiting'
 but you already have 10/10 initial mu points and phi sign change.
 
 Usage:
-    python scripts/finalize_susceptibility_coex.py
-    python scripts/finalize_susceptibility_coex.py --dry-run
+    python coex/finalize_susceptibility_coex.py
+    python coex/finalize_susceptibility_coex.py --dry-run
 """
 
 from __future__ import annotations

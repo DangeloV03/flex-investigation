@@ -11,19 +11,19 @@ is still False.
 
 Usage (on Della):
     # Diagnose only — no file changes
-    python scripts/retry_nan_combos.py --diagnose-only
+    python coex/retry_nan_combos.py --diagnose-only
 
     # Reset NaN rows and re-run analyzer once (may enqueue Slurm jobs)
-    python scripts/retry_nan_combos.py
+    python coex/retry_nan_combos.py
 
     # Preview reset + analysis
-    python scripts/retry_nan_combos.py --dry-run
+    python coex/retry_nan_combos.py --dry-run
 
     # If retry still NaN but curve looks good: force argmin(psi) result
-    python scripts/retry_nan_combos.py --force-min-psi
+    python coex/retry_nan_combos.py --force-min-psi
 
 After running, ensure run_all.py is active if jobs were enqueued:
-    ./scripts/start_daemons.sh
+    ./coex/start_daemons.sh
 """
 
 from __future__ import annotations
@@ -364,7 +364,7 @@ def main() -> int:
           f"{n_still_nan} still NaN")
     if n_enqueued > 0:
         print(f"  Enqueued ~{n_enqueued} new job(s) in {args.manifest}")
-        print("  Ensure run_all.py is running: ./scripts/start_daemons.sh")
+        print("  Ensure run_all.py is running: ./coex/start_daemons.sh")
     elif not args.dry_run and n_finalized == len(to_reset):
         print("  No new Slurm jobs needed.")
 

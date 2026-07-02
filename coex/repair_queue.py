@@ -4,8 +4,8 @@ Repair run_all_queue.json after failures: restore missing JSON from samples/done
 and clear stale in_flight entries for jobs no longer in Slurm.
 
 Usage (on Della login node, from project root):
-    python scripts/repair_queue.py --dry-run
-    python scripts/repair_queue.py
+    python coex/repair_queue.py --dry-run
+    python coex/repair_queue.py
 """
 
 from __future__ import annotations

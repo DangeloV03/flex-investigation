@@ -17,4 +17,6 @@ setup_cmds:
   - "source \"$(conda info --base)/etc/profile.d/conda.sh\""
   - "conda activate lattice"
   - "export LD_LIBRARY_PATH=\"$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}\""
+  # Jobs start in the sbatch submission dir (repo root); expose the source folders.
+  - "export PYTHONPATH=\"$PWD/coex:$PWD/susceptibility:$PWD${PYTHONPATH:+:$PYTHONPATH}\""
   - "export PYTHONUNBUFFERED=1"

@@ -3,8 +3,8 @@
 Regenerate phi/psi plots and CSV from existing results/ data.
 
 Usage:
-    python scripts/replot_from_results.py --dry-run
-    python scripts/replot_from_results.py
+    python coex/replot_from_results.py --dry-run
+    python coex/replot_from_results.py
 """
 
 from __future__ import annotations

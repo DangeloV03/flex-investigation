@@ -1,0 +1,4 @@
+{
+  "extraPaths": ["coex", "susceptibility"],
+  "reportMissingImports": "warning"
+}

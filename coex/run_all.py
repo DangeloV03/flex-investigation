@@ -158,12 +158,12 @@ def submit_slurm_job(
     walltime = walltime_for_json(json_path, config_path)
     slurm = build_slurm(config_path, time=walltime)
     abs_json = os.path.abspath(json_path)
-    job_id = slurm.sbatch(f"{python} -u json_runner.py {abs_json}")
+    job_id = slurm.sbatch(f"{python} -u coex/json_runner.py {abs_json}")
     return str(job_id)
 
 
 def run_local_job(json_path: str, python: str) -> bool:
-    result = subprocess.run([python, "-u", "json_runner.py", json_path])
+    result = subprocess.run([python, "-u", "coex/json_runner.py",json_path])
     return result.returncode == 0
 
 
@@ -260,7 +260,7 @@ def submit_up_to_cap(
         staged_path = stage_job_json(json_path)
 
         if local_jobs is not None:
-            proc = subprocess.Popen([python, "-u", "json_runner.py", staged_path])
+            proc = subprocess.Popen([python, "-u", "coex/json_runner.py",staged_path])
             job_id = f"local-{proc.pid}"
             mark_in_flight(job_id, json_path)
             local_jobs[job_id] = proc

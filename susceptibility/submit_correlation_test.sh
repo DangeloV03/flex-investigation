@@ -3,10 +3,10 @@
 # final mega-plot job that runs only after all 9 succeed.
 #
 # Usage (from project root on Della):
-#   ./scripts/submit_correlation_test.sh
+#   ./susceptibility/submit_correlation_test.sh
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.."       # repo root
 
 SKIPS=(0 1 2 3 5 7 10 12 15)
 RESULTS="susceptibility_results/exact"
@@ -15,7 +15,7 @@ PARTITION="cpu"
 TIME="02:00:00"
 MEM="16G"
 
-SETUP='module load anaconda3/2024.10; source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate lattice; export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"; export PYTHONUNBUFFERED=1'
+SETUP="module load anaconda3/2024.10; source \"\$(conda info --base)/etc/profile.d/conda.sh\"; conda activate lattice; export LD_LIBRARY_PATH=\"\${CONDA_PREFIX}/lib:\${LD_LIBRARY_PATH:-}\"; export PYTHONPATH=\"$(pwd)/coex:$(pwd)/susceptibility:$(pwd)\"; export PYTHONUNBUFFERED=1"
 
 mkdir -p "$OUTDIR"
 mkdir -p ~/slurm_reports
@@ -31,7 +31,7 @@ for skip in "${SKIPS[@]}"; do
         --output="$HOME/slurm_reports/%j.out" \
         --error="$HOME/slurm_reports/%j.err" \
         --parsable \
-        --wrap="${SETUP}; cd $(pwd) && python -u plot_correlation_test.py --results ${RESULTS} --skips ${skip} --outdir ${OUTDIR}")
+        --wrap="${SETUP}; cd $(pwd) && python -u susceptibility/plot_correlation_test.py --results ${RESULTS} --skips ${skip} --outdir ${OUTDIR}")
     echo "Submitted skip=${skip} → job ${job_id}"
     job_ids+=("$job_id")
 done
@@ -48,7 +48,7 @@ mega_id=$(sbatch \
     --error="$HOME/slurm_reports/%j.err" \
     --dependency="afterok:${dep}" \
     --parsable \
-    --wrap="${SETUP}; cd $(pwd) && python -u plot_correlation_test.py --mega-only --outdir ${OUTDIR}")
+    --wrap="${SETUP}; cd $(pwd) && python -u susceptibility/plot_correlation_test.py --mega-only --outdir ${OUTDIR}")
 echo "Submitted mega plot → job ${mega_id} (runs after all skip jobs finish)"
 echo ""
 echo "Monitor: squeue -u \$USER"

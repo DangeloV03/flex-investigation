@@ -2,8 +2,8 @@
 # Stop the flex-investigation tmux session (run_all + analyzer).
 #
 # Usage:
-#   ./scripts/stop_daemons.sh          # kill tmux session only
-#   ./scripts/stop_daemons.sh --slurm  # also scancel your flex_sim jobs
+#   ./coex/stop_daemons.sh          # kill tmux session only
+#   ./coex/stop_daemons.sh --slurm  # also scancel your flex_sim jobs
 
 set -euo pipefail
 

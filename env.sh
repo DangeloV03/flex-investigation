@@ -2,7 +2,10 @@
 # Shell environment for flex-investigation (local or Della).
 #
 # Usage — source from your SSH session (recommended):
-#   source /path/to/flex-investigation/scripts/env.sh
+#   source /path/to/flex-investigation/env.sh
+#
+# Sets PYTHONPATH to include the coex/ and susceptibility/ package folders so
+# bare imports (e.g. `from combo_paths import ...`) resolve from the repo root.
 #
 # Optional overrides (before sourcing):
 #   export PROJECT_ROOT=/custom/path
@@ -11,13 +14,13 @@
 #   export FLEX_ENV_CD=0          # skip cd into PROJECT_ROOT
 #
 # Add to ~/.bashrc on Della (edit path for your clone):
-#   source /scratch/gpfs/WJACOBS/$USER/flex-investigation/scripts/env.sh
+#   source /scratch/gpfs/WJACOBS/$USER/flex-investigation/env.sh
 
 _flex_env_setup() {
     local script_dir repo_root host
 
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    repo_root="$(cd "${script_dir}/.." && pwd)"
+    repo_root="${script_dir}"   # env.sh lives at the repo root
     host="$(hostname -s 2>/dev/null || hostname)"
 
     # --- paths ---
@@ -36,6 +39,9 @@ _flex_env_setup() {
         fi
     fi
     export PROJECT_ROOT
+
+    # --- import path: coex/ and susceptibility/ hold the source packages ---
+    export PYTHONPATH="${PROJECT_ROOT}/coex:${PROJECT_ROOT}/susceptibility:${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
     if [[ -z "${LATTICE_GAS_ROOT:-}" ]]; then
         LATTICE_GAS_ROOT="${HOME}/software/lattice-gas"

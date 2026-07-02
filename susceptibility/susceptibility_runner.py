@@ -1,8 +1,8 @@
 """
 susceptibility_runner.py
 
-Long production runs on square L×L lattices at μ_coex for susceptibility measurement.
-Initial condition: random 80% active (BONDING), 20% empty.
+Long production runs on a square L×L lattice at μ_coex for susceptibility
+measurement. Driven entirely by command-line flags (one (ε, L) per invocation).
 
 For each replica:
   - Equilibrate (eq_time), discard.
@@ -18,15 +18,18 @@ Outputs (per job directory):
   - m_timeseries_{id}.png         — m vs chunk plot per replica
   - final_lattice_{id}.npy        — final lattice snapshot
 
+Re-running the same (ε, L) appends new replicas to susceptibility_data.csv
+(run IDs continue from the max existing ID); it never overwrites.
+
 Usage:
-    python susceptibility_runner.py susceptibility_samples/prod/susceptibility_homo_eps1p76_dm0p0_L64.json
+    python susceptibility_runner.py --epsilon -1.76 --L 64 --cpus 16 \\
+        --results-base susceptibility_results/exact_2026-07-02
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import json
 import multiprocessing as mp
 import os
 import shutil
@@ -43,6 +46,10 @@ from lattice_gas.markov_chain import HeteroChain
 from lattice_gas.simulate import simulate
 
 from susceptibility_paths import (
+    ISING_DELTA_F,
+    ISING_DELTA_MU,
+    ISING_K,
+    ISING_SCHEME,
     PROD_RESULTS_BASE,
     SUSCEPTIBILITY_CSV_FIELDS,
     SUSCEPTIBILITY_DATA_CSV,
@@ -206,13 +213,7 @@ def run_replica(args: tuple) -> dict:
     eq_time = run_settings["eq_time"]
     prod_time = run_settings["prod_time"]
     n_chunks = run_settings.get("prod_chunks", 1000)
-    initial_fraction = run_settings.get("initial_fraction", 0.8)
-    # Split-IC mode: cycle through run_settings["initial_fractions"] by run_id so
-    # e.g. [0.8, 0.2] puts even run_ids in the dense basin and odd ones in the
-    # dilute basin — an exact 50/50 split that stays exact across batches.
-    ic_cycle = run_settings.get("initial_fractions")
-    if ic_cycle:
-        initial_fraction = float(ic_cycle[run_id % len(ic_cycle)])
+    initial_fraction = run_settings.get("initial_fraction", 0.5)
 
     inert_fugacity = np.exp(beta * (mu + delta_f))
     bonding_fugacity = np.exp(beta * mu)
@@ -360,32 +361,73 @@ def summarize_replicas(results: list[dict]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Square-lattice susceptibility production runner")
-    parser.add_argument("json_path", help="Path to susceptibility production job JSON")
+    parser.add_argument("--epsilon", type=float, required=True, help="Interaction strength ε")
+    parser.add_argument("--L", type=int, required=True, help="Square lattice side (Lx = Ly = L)")
+    parser.add_argument(
+        "--mu",
+        type=float,
+        default=None,
+        help="Chemical potential; default is μ_coex_EXACT = 2*ε",
+    )
+    parser.add_argument(
+        "--cpus",
+        type=int,
+        default=1,
+        help="Parallel replicas per batch (= SLURM_CPUS_PER_TASK)",
+    )
+    parser.add_argument("--num-batches", type=int, default=1, help="Sequential batches to append")
+    parser.add_argument("--eq-time", type=float, default=100000.0)
+    parser.add_argument("--prod-time", type=float, default=200000.0)
+    parser.add_argument("--prod-chunks", type=int, default=2000)
+    parser.add_argument("--seed-base", type=int, default=7000)
+    parser.add_argument("--initial-fraction", type=float, default=0.5)
+    parser.add_argument("--beta", type=float, default=1.0)
+    parser.add_argument("--scheme", default=ISING_SCHEME)
+    parser.add_argument("--delta-f", type=float, default=ISING_DELTA_F)
+    parser.add_argument("--delta-mu", type=float, default=ISING_DELTA_MU)
+    parser.add_argument("--k", type=float, default=ISING_K)
+    parser.add_argument("--results-base", default=PROD_RESULTS_BASE)
     parser.add_argument(
         "--outdir",
         default=None,
-        help="Output directory (default: susceptibility_results/susceptibility_{L}x{L}_.../)",
+        help="Output directory (default: {results_base}/susceptibility_{L}x{L}_.../)",
     )
     args = parser.parse_args()
 
-    with open(args.json_path) as f:
-        params = json.load(f)
+    mu = args.mu if args.mu is not None else 2.0 * args.epsilon
 
-    run_settings = params["run_settings"]
+    params = {
+        "epsilon": args.epsilon,
+        "delta_f": args.delta_f,
+        "delta_mu": args.delta_mu,
+        "k": args.k,
+        "scheme": args.scheme,
+        "Lx": args.L,
+        "Ly": args.L,
+        "mu": mu,
+        "results_base": args.results_base,
+    }
+    run_settings = {
+        "beta": args.beta,
+        "num_parallel_runs": args.cpus,
+        "num_batches": args.num_batches,
+        "seed_base": args.seed_base,
+        "eq_time": args.eq_time,
+        "prod_time": args.prod_time,
+        "prod_chunks": args.prod_chunks,
+        "initial_fraction": args.initial_fraction,
+    }
+
     num_parallel_runs = run_settings["num_parallel_runs"]
-    num_batches = run_settings.get("num_batches", 1)
+    num_batches = run_settings["num_batches"]
     seed_base = run_settings["seed_base"]
 
-    results_base = params.get("results_base", PROD_RESULTS_BASE)
-    outdir = args.outdir or susceptibility_prod_dir(params, base=results_base)
+    outdir = args.outdir or susceptibility_prod_dir(params, base=args.results_base)
     os.makedirs(outdir, exist_ok=True)
 
-    eps = params["epsilon"]
-    l_val = params["Lx"]
-    mu_val = params["mu"]
     print(
-        f"[susceptibility_runner] START {args.json_path} "
-        f"eps={eps} L={l_val} mu={mu_val} "
+        f"[susceptibility_runner] START "
+        f"eps={args.epsilon} L={args.L} mu={mu} "
         f"replicas={num_parallel_runs} batches={num_batches} "
         f"total={num_parallel_runs * num_batches} outdir={outdir}",
         flush=True,

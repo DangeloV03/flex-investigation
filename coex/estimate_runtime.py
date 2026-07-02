@@ -6,9 +6,9 @@ Uses sacct for empirical per-job times (when available) and the queue manifest
 + results/ for progress. Run from the project root on a login node.
 
 Usage:
-    python scripts/estimate_runtime.py
-    python scripts/estimate_runtime.py --job-id 9832776
-    python scripts/estimate_runtime.py --since 2026-06-17
+    python coex/estimate_runtime.py
+    python coex/estimate_runtime.py --job-id 9832776
+    python coex/estimate_runtime.py --since 2026-06-17
 """
 
 from __future__ import annotations
@@ -289,7 +289,7 @@ def main() -> int:
     else:
         print("\nManual one-job check after a job completes:")
         print("  sacct -j JOBID -X --format=JobID,State,Elapsed,ExitCode")
-        print("  python scripts/estimate_runtime.py --job-id JOBID")
+        print("  python coex/estimate_runtime.py --job-id JOBID")
 
     return 0
 

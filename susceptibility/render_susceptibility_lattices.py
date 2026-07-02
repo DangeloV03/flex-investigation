@@ -8,9 +8,9 @@ Color map:
   - empty  (EMPTY, 0)   -> white
 
 Usage:
-    python scripts/render_susceptibility_lattices.py
-    python scripts/render_susceptibility_lattices.py --results susceptibility_results
-    python scripts/render_susceptibility_lattices.py --dry-run
+    python susceptibility/render_susceptibility_lattices.py
+    python susceptibility/render_susceptibility_lattices.py --results susceptibility_results
+    python susceptibility/render_susceptibility_lattices.py --dry-run
 """
 
 from __future__ import annotations

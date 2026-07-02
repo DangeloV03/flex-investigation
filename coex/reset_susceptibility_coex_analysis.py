@@ -8,14 +8,14 @@ one poll cycle:
 
 After reset, restart daemons (a long-running analyzer caches nothing in manage,
 but restart clears pending_points wait state):
-    ./scripts/start_sus_coex_daemons.sh
+    ./coex/start_daemons.sh
 
 Keeps coex simulation output.csv files; only resets manage.csv analysis state.
 
 Usage:
-    python scripts/reset_susceptibility_coex_analysis.py --dry-run
-    python scripts/reset_susceptibility_coex_analysis.py
-    python scripts/reset_susceptibility_coex_analysis.py --bad-psi-only
+    python coex/reset_susceptibility_coex_analysis.py --dry-run
+    python coex/reset_susceptibility_coex_analysis.py
+    python coex/reset_susceptibility_coex_analysis.py --bad-psi-only
 """
 
 from __future__ import annotations

@@ -7,10 +7,10 @@ Keeps output.csv so combos can be re-analyzed after resetting manage.csv.
 Default target: rows with isAnalyzed set and mu_coex_SIM = NaN (premature or unstable).
 
 Usage:
-    python scripts/clean_wrong_npy.py --dry-run
-    python scripts/clean_wrong_npy.py
-    python scripts/clean_wrong_npy.py --mode premature   # NaN + RequestForAdditionalData >= 5
-    python scripts/clean_wrong_npy.py --reset-manage     # also clear isAnalyzed for those rows
+    python coex/clean_wrong_npy.py --dry-run
+    python coex/clean_wrong_npy.py
+    python coex/clean_wrong_npy.py --mode premature   # NaN + RequestForAdditionalData >= 5
+    python coex/clean_wrong_npy.py --reset-manage     # also clear isAnalyzed for those rows
 """
 
 from __future__ import annotations

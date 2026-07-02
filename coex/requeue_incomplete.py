@@ -6,9 +6,9 @@ Targets rows without isAnalyzed where fewer than N_MU_POINTS result dirs exist.
 Recreates JSON under samples/ and merge_pending into run_all_queue.json.
 
 Usage (on Della, from project root):
-    python scripts/requeue_incomplete.py --dry-run
-    python scripts/requeue_incomplete.py
-    python scripts/requeue_incomplete.py --reset-ran   # clear isRan when 0 results
+    python coex/requeue_incomplete.py --dry-run
+    python coex/requeue_incomplete.py
+    python coex/requeue_incomplete.py --reset-ran   # clear isRan when 0 results
 """
 
 from __future__ import annotations

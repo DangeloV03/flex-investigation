@@ -13,21 +13,10 @@ import os
 from combo_paths import combo_dir_name
 
 COEX_SAMPLES_DIR = "susceptibility_samples/coex"
-PROD_SAMPLES_DIR = "susceptibility_samples/prod"
-EXACT_SAMPLES_DIR = "susceptibility_samples/exact"
-EXACT_RANDOM_SAMPLES_DIR = "susceptibility_samples/exact_random"
-EXACT_SPLIT_SAMPLES_DIR = "susceptibility_samples/exact_split"
 COEX_RESULTS_DIR = "susceptibility_results/coex"
 PROD_RESULTS_BASE = "susceptibility_results"
-EXACT_RESULTS_BASE = "susceptibility_results/exact"
-EXACT_RANDOM_RESULTS_BASE = "susceptibility_results/exact_random"
-EXACT_SPLIT_RESULTS_BASE = "susceptibility_results/exact_split"
 MANAGE_CSV = "susceptibility_manage.csv"
 COEX_MANIFEST = "susceptibility_coex_queue.json"
-PROD_MANIFEST = "susceptibility_prod_queue.json"
-EXACT_MANIFEST = "susceptibility_exact_queue.json"
-EXACT_RANDOM_MANIFEST = "susceptibility_exact_random_queue.json"
-EXACT_SPLIT_MANIFEST = "susceptibility_exact_split_queue.json"
 SUSCEPTIBILITY_DATA_CSV = "susceptibility_data.csv"
 
 # Pre-SEM schema (smoke tests / early prod); current adds *_err columns after each moment/chi.
@@ -193,70 +182,6 @@ def patch_coex_job_json(json_path: str) -> bool:
     return True
 
 
-def patch_prod_job_json(json_path: str) -> bool:
-    """Ensure prod susceptibility jobs use the campaign results base and manage.csv."""
-    import json
-
-    with open(json_path, encoding="utf-8") as f:
-        job = json.load(f)
-    changed = False
-    if job.get("results_base") != PROD_RESULTS_BASE:
-        job["results_base"] = PROD_RESULTS_BASE
-        changed = True
-    if job.get("manage_csv") != MANAGE_CSV:
-        job["manage_csv"] = MANAGE_CSV
-        changed = True
-    if not changed:
-        return False
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(job, f, indent=2)
-        f.write("\n")
-    return True
-
-
-def patch_exact_job_json(json_path: str) -> bool:
-    """Ensure exact-mu jobs write under susceptibility_results/exact/."""
-    import json
-
-    with open(json_path, encoding="utf-8") as f:
-        job = json.load(f)
-    if job.get("results_base") == EXACT_RESULTS_BASE:
-        return False
-    job["results_base"] = EXACT_RESULTS_BASE
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(job, f, indent=2)
-        f.write("\n")
-    return True
-
-
-def patch_exact_random_job_json(json_path: str) -> bool:
-    """Ensure exact-random-IC jobs write under susceptibility_results/exact_random/."""
-    import json
-
-    with open(json_path, encoding="utf-8") as f:
-        job = json.load(f)
-    if job.get("results_base") == EXACT_RANDOM_RESULTS_BASE:
-        return False
-    job["results_base"] = EXACT_RANDOM_RESULTS_BASE
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(job, f, indent=2)
-        f.write("\n")
-    return True
-
-
-def patch_exact_split_job_json(json_path: str) -> bool:
-    """Ensure exact-mu split-IC jobs write under susceptibility_results/exact_split/."""
-    import json
-
-    with open(json_path, encoding="utf-8") as f:
-        job = json.load(f)
-    if job.get("results_base") == EXACT_SPLIT_RESULTS_BASE:
-        return False
-    job["results_base"] = EXACT_SPLIT_RESULTS_BASE
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(job, f, indent=2)
-        f.write("\n")
-    return True
 
 
 def prod_job_filename(scheme: str, epsilon: float, delta_mu: float, l: int) -> str:
