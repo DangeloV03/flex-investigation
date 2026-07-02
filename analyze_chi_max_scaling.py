@@ -69,22 +69,58 @@ L_COLOR = {
 # Data loading
 # ---------------------------------------------------------------------------
 
-def scan_metadata(results_dir: str) -> list[dict]:
+def _parse_run_dir(dirname: str) -> tuple[int | None, float | None]:
     """
-    Fast scan: reads only susceptibility_data.csv files (no timeseries).
-    Returns list of meta dicts. Used by --list to avoid loading ~81K CSV files.
+    Parse L and epsilon from a run directory name without reading any file.
+    e.g. susceptibility_128x128_homo_deltaFm20p0_dmu0p0_epsilonm1p935
+      -> L=128, eps=-1.935
     """
-    rows = []
-    for csv_path in find_susceptibility_csvs(results_dir):
-        dirpath = os.path.dirname(csv_path)
-        for meta in read_susceptibility_csv(csv_path):
-            run_id = str(meta.get("id", "")).strip()
-            if not run_id:
-                continue
-            ts_path = os.path.join(dirpath, f"m_timeseries_{run_id}.csv")
-            meta["_ts_exists"] = os.path.isfile(ts_path)
-            rows.append(meta)
-    return rows
+    import re
+    m_L = re.search(r"susceptibility_(\d+)x\d+", dirname)
+    L = int(m_L.group(1)) if m_L else None
+    m_e = re.search(r"epsilon(m?)(\d+)(?:p(\d+))?", dirname)
+    if m_e:
+        sign = -1 if m_e.group(1) == "m" else 1
+        dec = m_e.group(3) or "0"
+        eps = sign * float(f"{m_e.group(2)}.{dec}")
+    else:
+        eps = None
+    return L, eps
+
+
+def fast_inventory(results_dir: str) -> list[dict]:
+    """
+    Instant --list scan: reads NO CSV content.
+    For each run dir, parses L/eps from the name, counts CSV rows via
+    line-count (not CSV parsing), and counts timeseries files via glob.
+    """
+    import glob as _glob
+
+    SUSCEPTIBILITY_DATA_CSV = "susceptibility_data.csv"
+    records = []
+    abs_dir = os.path.abspath(results_dir)
+    try:
+        entries = [e for e in os.scandir(abs_dir)
+                   if e.is_dir() and e.name.startswith("susceptibility_")]
+    except FileNotFoundError:
+        return records
+
+    for entry in entries:
+        csv_path = os.path.join(entry.path, SUSCEPTIBILITY_DATA_CSV)
+        if not os.path.isfile(csv_path):
+            continue
+        L, eps = _parse_run_dir(entry.name)
+        if L is None or eps is None:
+            continue
+        # Count data rows (lines minus header) without parsing CSV content
+        with open(csv_path, "rb") as f:
+            n_lines = sum(1 for _ in f)
+        n_replicas = max(0, n_lines - 1)
+        # Count timeseries files present
+        n_ts = len(_glob.glob(os.path.join(entry.path, "m_timeseries_*.csv")))
+        records.append({"L": L, "eps": eps, "n_replicas": n_replicas, "n_ts": n_ts})
+
+    return records
 
 
 def load_replica_groups(results_dir: str) -> dict[tuple[int, float], dict]:
@@ -440,55 +476,59 @@ def main() -> None:
     os.makedirs(args.outdir, exist_ok=True)
 
     abs_results = os.path.abspath(args.results)
-    csvs = find_susceptibility_csvs(args.results)
-
-    print(f"Results dir (absolute): {abs_results}")
-    print(f"Run dirs found:         {len(csvs)}", flush=True)
+    print(f"Results dir (absolute): {abs_results}", flush=True)
 
     if args.list:
-        # Fast path: only read susceptibility_data.csv files, never touch timeseries
-        meta_rows = scan_metadata(args.results)
-        if not meta_rows:
-            raise SystemExit("No replica rows found — check --results path.")
+        # Instant path: parse dir names + line-count CSVs, never read CSV content
+        records = fast_inventory(args.results)
+        if not records:
+            raise SystemExit("No run dirs with susceptibility_data.csv found — check --results path.")
 
         from collections import defaultdict
-        counts: dict[tuple[int, float], dict] = defaultdict(lambda: {"total": 0, "ts_ok": 0, "prod_chunks": ""})
-        for m in meta_rows:
-            L = int(float(m["L"]))
-            eps = round(float(m["epsilon"]), 6)
-            counts[(L, eps)]["total"] += 1
-            counts[(L, eps)]["ts_ok"] += int(m.get("_ts_exists", False))
-            counts[(L, eps)]["prod_chunks"] = m.get("prod_chunks", "")
+        by_L_eps: dict[tuple[int, float], dict] = defaultdict(
+            lambda: {"n_replicas": 0, "n_ts": 0}
+        )
+        for r in records:
+            key = (r["L"], round(r["eps"], 4))
+            by_L_eps[key]["n_replicas"] += r["n_replicas"]
+            by_L_eps[key]["n_ts"]       += r["n_ts"]
 
-        Ls_list = sorted({L for (L, _) in counts})
-        eps_per_L_list = {L: sorted({eps for (l, eps) in counts if l == L}) for L in Ls_list}
-        total_rows = sum(v["total"] for v in counts.values())
-        total_ts = sum(v["ts_ok"] for v in counts.values())
+        Ls_list  = sorted({L for (L, _) in by_L_eps})
+        eps_by_L = {L: sorted({eps for (l, eps) in by_L_eps if l == L}) for L in Ls_list}
+        total_reps = sum(v["n_replicas"] for v in by_L_eps.values())
+        total_ts   = sum(v["n_ts"]       for v in by_L_eps.values())
 
-        print(f"(L, eps) pairs:         {len(counts)}")
-        print(f"Total replica rows:     {total_rows}")
-        print(f"Timeseries files found: {total_ts} / {total_rows}")
+        print(f"Run dirs with data:     {len(records)}")
+        print(f"(L, eps) pairs:         {len(by_L_eps)}")
+        print(f"Total replica rows:     {total_reps}")
+        print(f"Timeseries files found: {total_ts}")
         print(f"L values:               {Ls_list}")
         for L in Ls_list:
-            e = eps_per_L_list[L]
-            print(f"  L={L:>4}:  eps [{min(e):.4f}, {max(e):.4f}]  ({len(e)} pts)")
+            e = eps_by_L[L]
+            reps = [by_L_eps[(L, eps)]["n_replicas"] for eps in e]
+            print(f"  L={L:>4}:  eps [{min(e):.4f}, {max(e):.4f}]  "
+                  f"({len(e)} pts)  replicas/pt: min={min(reps)} max={max(reps)}")
+
+        rep_vals   = [v["n_replicas"] for v in by_L_eps.values() if v["n_replicas"] > 0]
+        unique_rep = set(rep_vals)
         print()
-        rep_vals = [v["total"] for v in counts.values()]
-        unique_counts = set(rep_vals)
-        if len(unique_counts) == 1:
-            print(f"Replicas per (L, eps):  {rep_vals[0]}  (uniform)")
+        if len(unique_rep) == 1:
+            print(f"Replicas per (L, eps):  {rep_vals[0]}  (uniform ✓)")
         else:
             print(f"WARNING: uneven replica counts — min={min(rep_vals)} max={max(rep_vals)}")
-            print(f"\n{'L':>5}  {'eps':>8}  {'n_rep':>6}  {'ts_ok':>6}  {'prod_chunks':>12}")
-            for (L, eps) in sorted(counts):
-                v = counts[(L, eps)]
-                flag = "  <-- INCOMPLETE" if v["ts_ok"] < v["total"] else ""
-                print(f"{L:>5}  {eps:>8.4f}  {v['total']:>6}  {v['ts_ok']:>6}  {v['prod_chunks']:>12}{flag}")
+            print(f"\n{'L':>5}  {'eps':>8}  {'n_rep':>6}  {'n_ts':>6}")
+            for (L, eps) in sorted(by_L_eps):
+                v = by_L_eps[(L, eps)]
+                flag = "  <-- MISSING TS" if v["n_ts"] < v["n_replicas"] else ""
+                print(f"{L:>5}  {eps:>8.4f}  {v['n_replicas']:>6}  {v['n_ts']:>6}{flag}")
+
         print(f"\nK&D reference: gamma/nu = {KD_GAMMA_NU} +/- {KD_GAMMA_NU_ERR},  A = {KD_A}")
         return
 
     # Full load (reads all timeseries) — only reached when not --list
-    print("Loading timeseries (this takes ~2 min for 81K files) ...", flush=True)
+    csvs = find_susceptibility_csvs(args.results)
+    print(f"Run dirs found:         {len(csvs)}")
+    print("Loading timeseries (this may take a few minutes) ...", flush=True)
     groups = load_replica_groups(args.results)
 
     if not groups:
