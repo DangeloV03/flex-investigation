@@ -2,7 +2,7 @@
 #SBATCH --job-name=susc_exact
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem-per-cpu=1G
+#SBATCH --mem-per-cpu=512M
 #SBATCH --time=23:59:59
 # Logs go to ~/slurm_reports (same place as the coex jobs). SLURM does not expand
 # "~", so use /home/%u; %x = job name, %j = job id. The dir must already exist.
