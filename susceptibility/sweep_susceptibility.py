@@ -62,6 +62,10 @@ def main() -> None:
 
     if not args.dry_run:
         os.makedirs(results_base, exist_ok=True)
+        # SLURM writes job logs to ~/slurm_reports (see run_susceptibility.sh) but
+        # won't create the dir; make sure it exists so logs aren't dropped.
+        if not args.local:
+            os.makedirs(os.path.expanduser("~/slurm_reports"), exist_ok=True)
 
     launcher = "bash" if args.local else "sbatch"
     print(

@@ -4,8 +4,10 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem-per-cpu=1G
 #SBATCH --time=23:59:59
-#SBATCH --output=%x_%A.out
-#SBATCH --error=%x_%A.err
+# Logs go to ~/slurm_reports (same place as the coex jobs). SLURM does not expand
+# "~", so use /home/%u; %x = job name, %j = job id. The dir must already exist.
+#SBATCH --output=/home/%u/slurm_reports/%x_%j.out
+#SBATCH --error=/home/%u/slurm_reports/%x_%j.err
 #
 # Exact-mu (mu = 2*epsilon) susceptibility run for a single epsilon, looping over
 # all square sizes L = 16 .. 256. Submitted once per epsilon by
