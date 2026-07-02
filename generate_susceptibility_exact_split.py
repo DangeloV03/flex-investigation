@@ -61,9 +61,10 @@ DEFAULT_RUN_SETTINGS = {
 }
 
 
-def exact_split_job_filename(scheme: str, epsilon: float, l: int) -> str:
+def exact_split_job_filename(scheme: str, epsilon: float, l: int, batch: int = 0) -> str:
     eps_tag = f"eps{epsilon:.4f}".replace("-", "m").replace(".", "p")
-    return f"exact_split_{scheme}_{eps_tag}_L{l}.json"
+    suffix = f"_b{batch:02d}" if batch > 0 else ""
+    return f"exact_split_{scheme}_{eps_tag}_L{l}{suffix}.json"
 
 
 def main() -> None:
@@ -77,20 +78,39 @@ def main() -> None:
     parser.add_argument("--samples-dir", default=EXACT_SPLIT_SAMPLES_DIR)
     parser.add_argument("--manifest", default=EXACT_SPLIT_MANIFEST)
     parser.add_argument("--results-base", default=EXACT_SPLIT_RESULTS_BASE)
+    parser.add_argument(
+        "--add-batches", type=int, default=0,
+        help=(
+            "Generate N additional batch files per (L, eps) to accumulate more replicas. "
+            "Each batch adds num_parallel_runs (8) replicas. "
+            "Example: --add-batches 11 adds 88 replicas for 96 total."
+        ),
+    )
     args = parser.parse_args()
 
     os.makedirs(args.samples_dir, exist_ok=True)
     eps_values = frange(args.eps_min, args.eps_max, args.eps_step)
     l_values = sorted(set(args.L))
 
+    # batch indices: 0 = original files (no suffix), 1..add_batches = new files (_b01 etc.)
+    batch_indices = list(range(args.add_batches + 1))
+
     pending_paths: list[str] = []
     n_written = 0
     n_unchanged = 0
+    n_skipped_done = 0
 
+    reps_per_batch = DEFAULT_RUN_SETTINGS["num_parallel_runs"]
+    total_batches  = len(batch_indices)
     print(
         f"Exact-mu split-IC jobs: epsilon [{args.eps_min}, {args.eps_max}] "
         f"step {args.eps_step} ({len(eps_values)} pts), "
         f"L={l_values}, mu=2*epsilon, initial_fractions={INITIAL_FRACTIONS}"
+    )
+    print(
+        f"Batches: {total_batches}  "
+        f"({reps_per_batch} replicas each → "
+        f"{total_batches * reps_per_batch} replicas/point when all complete)"
     )
 
     for epsilon in eps_values:
@@ -110,29 +130,39 @@ def main() -> None:
                 "run_settings": dict(DEFAULT_RUN_SETTINGS),
                 "results_base": args.results_base,
             }
-            filename = exact_split_job_filename(ISING_SCHEME, epsilon, l_val)
-            filepath = os.path.join(args.samples_dir, filename)
             payload = json.dumps(job, indent=2)
-            if os.path.isfile(filepath):
-                with open(filepath) as f:
-                    if f.read().rstrip("\n") == payload:
-                        n_unchanged += 1
-                        pending_paths.append(filepath)
-                        continue
-            with open(filepath, "w") as f:
-                f.write(payload)
-            n_written += 1
-            pending_paths.append(filepath)
+
+            for batch in batch_indices:
+                filename = exact_split_job_filename(ISING_SCHEME, epsilon, l_val, batch)
+                filepath = os.path.join(args.samples_dir, filename)
+
+                # Check done dir — skip files already completed so we don't re-queue them
+                done_path = os.path.join(args.samples_dir, "done", filename)
+                if os.path.isfile(done_path):
+                    n_skipped_done += 1
+                    continue
+
+                if os.path.isfile(filepath):
+                    with open(filepath) as f:
+                        if f.read().rstrip("\n") == payload:
+                            n_unchanged += 1
+                            pending_paths.append(filepath)
+                            continue
+                with open(filepath, "w") as f:
+                    f.write(payload)
+                n_written += 1
+                pending_paths.append(filepath)
 
     merge_pending(pending_paths, path=args.manifest)
 
-    print(f"Wrote {n_written} JSON files ({n_unchanged} unchanged)")
+    print(f"Wrote {n_written} new JSON files, {n_unchanged} unchanged, "
+          f"{n_skipped_done} already in done/ (skipped)")
     print(f"Queued {len(pending_paths)} jobs into '{args.manifest}'")
     print(f"Results will go to '{args.results_base}/'")
     print(f"\nTo run:  python run_susceptibility_all.py --phase exact_split")
     print(
         f"To plot: python plot_susceptibility.py "
-        f"--results {args.results_base} --outdir plots/exact_split"
+        f"--results {args.results_base} --outdir plots/exact_split --pooled"
     )
 
 
