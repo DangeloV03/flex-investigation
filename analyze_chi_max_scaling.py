@@ -69,6 +69,24 @@ L_COLOR = {
 # Data loading
 # ---------------------------------------------------------------------------
 
+def scan_metadata(results_dir: str) -> list[dict]:
+    """
+    Fast scan: reads only susceptibility_data.csv files (no timeseries).
+    Returns list of meta dicts. Used by --list to avoid loading ~81K CSV files.
+    """
+    rows = []
+    for csv_path in find_susceptibility_csvs(results_dir):
+        dirpath = os.path.dirname(csv_path)
+        for meta in read_susceptibility_csv(csv_path):
+            run_id = str(meta.get("id", "")).strip()
+            if not run_id:
+                continue
+            ts_path = os.path.join(dirpath, f"m_timeseries_{run_id}.csv")
+            meta["_ts_exists"] = os.path.isfile(ts_path)
+            rows.append(meta)
+    return rows
+
+
 def load_replica_groups(results_dir: str) -> dict[tuple[int, float], dict]:
     """
     Returns { (L, eps): {"beta": float, "N": int, "replicas": [m_array, ...]} }
@@ -421,7 +439,56 @@ def main() -> None:
 
     os.makedirs(args.outdir, exist_ok=True)
 
-    print(f"Loading replicas from '{os.path.abspath(args.results)}' ...", flush=True)
+    abs_results = os.path.abspath(args.results)
+    csvs = find_susceptibility_csvs(args.results)
+
+    print(f"Results dir (absolute): {abs_results}")
+    print(f"Run dirs found:         {len(csvs)}", flush=True)
+
+    if args.list:
+        # Fast path: only read susceptibility_data.csv files, never touch timeseries
+        meta_rows = scan_metadata(args.results)
+        if not meta_rows:
+            raise SystemExit("No replica rows found — check --results path.")
+
+        from collections import defaultdict
+        counts: dict[tuple[int, float], dict] = defaultdict(lambda: {"total": 0, "ts_ok": 0, "prod_chunks": ""})
+        for m in meta_rows:
+            L = int(float(m["L"]))
+            eps = round(float(m["epsilon"]), 6)
+            counts[(L, eps)]["total"] += 1
+            counts[(L, eps)]["ts_ok"] += int(m.get("_ts_exists", False))
+            counts[(L, eps)]["prod_chunks"] = m.get("prod_chunks", "")
+
+        Ls_list = sorted({L for (L, _) in counts})
+        eps_per_L_list = {L: sorted({eps for (l, eps) in counts if l == L}) for L in Ls_list}
+        total_rows = sum(v["total"] for v in counts.values())
+        total_ts = sum(v["ts_ok"] for v in counts.values())
+
+        print(f"(L, eps) pairs:         {len(counts)}")
+        print(f"Total replica rows:     {total_rows}")
+        print(f"Timeseries files found: {total_ts} / {total_rows}")
+        print(f"L values:               {Ls_list}")
+        for L in Ls_list:
+            e = eps_per_L_list[L]
+            print(f"  L={L:>4}:  eps [{min(e):.4f}, {max(e):.4f}]  ({len(e)} pts)")
+        print()
+        rep_vals = [v["total"] for v in counts.values()]
+        unique_counts = set(rep_vals)
+        if len(unique_counts) == 1:
+            print(f"Replicas per (L, eps):  {rep_vals[0]}  (uniform)")
+        else:
+            print(f"WARNING: uneven replica counts — min={min(rep_vals)} max={max(rep_vals)}")
+            print(f"\n{'L':>5}  {'eps':>8}  {'n_rep':>6}  {'ts_ok':>6}  {'prod_chunks':>12}")
+            for (L, eps) in sorted(counts):
+                v = counts[(L, eps)]
+                flag = "  <-- INCOMPLETE" if v["ts_ok"] < v["total"] else ""
+                print(f"{L:>5}  {eps:>8.4f}  {v['total']:>6}  {v['ts_ok']:>6}  {v['prod_chunks']:>12}{flag}")
+        print(f"\nK&D reference: gamma/nu = {KD_GAMMA_NU} +/- {KD_GAMMA_NU_ERR},  A = {KD_A}")
+        return
+
+    # Full load (reads all timeseries) — only reached when not --list
+    print("Loading timeseries (this takes ~2 min for 81K files) ...", flush=True)
     groups = load_replica_groups(args.results)
 
     if not groups:
@@ -432,34 +499,21 @@ def main() -> None:
         L: sorted({eps for (l, eps) in groups if l == L})
         for L in Ls
     }
+    rep_counts_all = {k: len(groups[k]["replicas"]) for k in groups}
+    unique_counts = set(rep_counts_all.values())
+    total_replicas = sum(rep_counts_all.values())
 
-    # Always print the compact header so users can verify the right directory
-    total_replicas = sum(len(groups[k]["replicas"]) for k in groups)
-    print(f"Results dir (absolute): {os.path.abspath(args.results)}")
-    print(f"Run dirs found:         {len(find_susceptibility_csvs(args.results))}")
     print(f"(L, eps) pairs loaded:  {len(groups)}")
     print(f"Total replica rows:     {total_replicas}")
     print(f"L values:               {Ls}")
-    print(f"Eps range per L:        {[(L, round(min(eps_per_L[L]),4), round(max(eps_per_L[L]),4), len(eps_per_L[L])) for L in Ls]}")
-
-    # Per-(L, eps) replica count table — shown with --list or when counts are uneven
-    rep_counts_all = {k: len(groups[k]["replicas"]) for k in groups}
-    unique_counts = set(rep_counts_all.values())
-    if args.list or len(unique_counts) > 1:
-        print(f"\n{'L':>5}  {'eps':>8}  {'n_replicas':>11}  {'n_chunks_first':>15}")
-        for (L, eps) in sorted(groups):
-            reps = groups[(L, eps)]["replicas"]
-            print(f"{L:>5}  {eps:>8.4f}  {len(reps):>11}  {len(reps[0]):>15}")
-        if len(unique_counts) > 1:
-            print(f"\nWARNING: uneven replica counts across (L, eps) — "
-                  f"min={min(unique_counts)} max={max(unique_counts)}")
+    print(f"Eps range per L:        "
+          f"{[(L, round(min(eps_per_L[L]),4), round(max(eps_per_L[L]),4), len(eps_per_L[L])) for L in Ls]}")
+    if len(unique_counts) > 1:
+        print(f"WARNING: uneven replica counts — min={min(unique_counts)} max={max(unique_counts)}")
 
     n_avail_min = min(rep_counts_all.values())
-    print(f"\nMin replicas (bottleneck for subsampling): {n_avail_min}")
+    print(f"Min replicas (bottleneck): {n_avail_min}")
     print(f"K&D reference: gamma/nu = {KD_GAMMA_NU} +/- {KD_GAMMA_NU_ERR},  A = {KD_A}")
-
-    if args.list:
-        return
 
     if not args.loo_only:
         rep_counts = [n for n in args.rep_counts if n <= n_avail_min]
