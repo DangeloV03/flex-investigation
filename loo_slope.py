@@ -66,12 +66,16 @@ def main() -> None:
         mask = np.arange(n) != i
         gnu_loo[i], A_loo[i] = fit_power_law(Ls[mask], chi_max[mask])
 
-    gnu_loo_mean = gnu_loo.mean()
-    gnu_loo_err  = float(
-        np.sqrt((n - 1) / n * np.sum((gnu_loo - gnu_loo_mean) ** 2))
-    )
+    gnu_loo_std  = float(gnu_loo.std(ddof=1))   # simple std of the 7 LOO slopes
+    gnu_loo_min  = float(gnu_loo.min())
+    gnu_loo_max  = float(gnu_loo.max())
 
-    sigma_diff = abs(gnu_full - KD_GAMMA_NU) / np.sqrt(gnu_loo_err**2 + KD_GAMMA_NU_ERR**2)
+    # Use simple std as the error — the jackknife inflation factor (n-1)/sqrt(n) ≈ 2.27
+    # makes ±0.13 from ±0.06 std, which is hard to interpret with only 7 L values.
+    # Simple std is the honest spread of LOO slopes.
+    gnu_err = gnu_loo_std
+
+    sigma_diff = abs(gnu_full - KD_GAMMA_NU) / np.sqrt(gnu_err**2 + KD_GAMMA_NU_ERR**2)
     within = sigma_diff <= 2.0
 
     # ---- Print results ----
@@ -83,10 +87,13 @@ def main() -> None:
         print(f"{int(Ls[i]):>6}  {eps_star[i]:>9.4f}  {chi_max[i]:>10.4f}  "
               f"{'±':>2}  {chi_err[i]:>8.4f}  {gnu_loo[i]:>16.4f}")
     print("-" * 65)
-    print(f"\nFull fit:    γ/ν = {gnu_full:.4f},  A = {A_full:.4f}")
-    print(f"LOO error:   γ/ν = {gnu_full:.4f} ± {gnu_loo_err:.4f}")
-    print(f"K&D (2020):  γ/ν = {KD_GAMMA_NU} ± {KD_GAMMA_NU_ERR}")
-    print(f"\nDifference:  {gnu_full - KD_GAMMA_NU:+.4f}  ({sigma_diff:.2f}σ combined)")
+    print(f"\nFull fit:      γ/ν = {gnu_full:.4f},  A = {A_full:.4f}")
+    print(f"LOO slopes:    mean = {gnu_loo.mean():.4f},  "
+          f"std = {gnu_loo_std:.4f},  "
+          f"range = [{gnu_loo_min:.4f}, {gnu_loo_max:.4f}]")
+    print(f"Our result:    γ/ν = {gnu_full:.4f} ± {gnu_err:.4f}  (std of LOO slopes)")
+    print(f"K&D (2020):    γ/ν = {KD_GAMMA_NU} ± {KD_GAMMA_NU_ERR}")
+    print(f"\nDifference:    {gnu_full - KD_GAMMA_NU:+.4f}  ({sigma_diff:.2f}σ combined)")
     print(f"Within 2σ of K&D: {'YES ✓' if within else 'NO ✗'}")
 
     # ---- Plot ----
@@ -101,7 +108,7 @@ def main() -> None:
     ax.errorbar(Ls, chi_max, yerr=chi_err, fmt="o", color="black",
                 markersize=7, capsize=4, zorder=5, label="data")
     ax.loglog(L_fine, A_full * L_fine ** gnu_full, "-", color="blue", linewidth=2,
-              label=rf"fit: $\gamma/\nu={gnu_full:.3f}\pm{gnu_loo_err:.3f}$")
+              label=rf"fit: $\gamma/\nu={gnu_full:.3f}\pm{gnu_err:.3f}$")
     ax.loglog(L_fine, KD_A * L_fine ** KD_GAMMA_NU, "--", color="red", linewidth=1.8,
               label=rf"K&D: $\gamma/\nu={KD_GAMMA_NU}\pm{KD_GAMMA_NU_ERR}$")
     ax.fill_between(L_fine,
