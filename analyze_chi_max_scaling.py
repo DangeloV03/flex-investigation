@@ -240,7 +240,7 @@ def subsampling_analysis(
 
     for n_rep in rep_counts:
         print(f"  n_rep={n_rep}: {n_boot} bootstrap draws ...", flush=True)
-        for _ in range(n_boot):
+        for draw_i in range(n_boot):
             chi_max_draw: dict[int, float] = {}
             for L in Ls:
                 v = chi_max_for_L(groups, L, eps_per_L[L], n_rep=n_rep, rng=rng)
@@ -250,11 +250,21 @@ def subsampling_analysis(
                      if np.isfinite(chi_max_draw[L]) and chi_max_draw[L] > 0]
             for L in Ls:
                 chi_boot[n_rep][L].append(chi_max_draw[L])
+            gnu_this: float | None = None
             if len(valid) >= 3:
                 L_arr = np.array([v[0] for v in valid], float)
                 c_arr = np.array([v[1] for v in valid], float)
                 gnu, _ = fit_power_law(L_arr, c_arr)
                 gnu_boot[n_rep].append(gnu)
+                gnu_this = gnu
+
+            if (draw_i + 1) % 25 == 0 or draw_i == 0:
+                chi_str = "  ".join(
+                    f"L{L}={chi_max_draw[L]:.3f}" for L in Ls
+                    if np.isfinite(chi_max_draw.get(L, float("nan")))
+                )
+                gnu_str = f"  γ/ν={gnu_this:.4f}" if gnu_this is not None else ""
+                print(f"    draw {draw_i+1:>4}/{n_boot}  {chi_str}{gnu_str}", flush=True)
 
     # --- Plot 1a: chi_max vs L for each n_rep ---
     fig, ax = plt.subplots(figsize=(7, 5))
