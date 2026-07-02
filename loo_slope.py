@@ -128,7 +128,7 @@ def main() -> None:
     ax.axhline(gnu_full, color="blue", linewidth=1.5,
                label=rf"Full fit: {gnu_full:.4f}")
     ax.fill_between([Ls[0] * 0.7, Ls[-1] * 1.4],
-                    gnu_full - gnu_loo_err, gnu_full + gnu_loo_err,
+                    gnu_full - gnu_err, gnu_full + gnu_err,
                     color="blue", alpha=0.15)
     ax.axhline(KD_GAMMA_NU, color="red", linestyle="--", linewidth=1.5,
                label=rf"K&D: {KD_GAMMA_NU} ± {KD_GAMMA_NU_ERR}")
