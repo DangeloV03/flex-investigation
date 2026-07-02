@@ -170,11 +170,15 @@ def chi_max_for_L(
     groups: dict,
     L: int,
     eps_list: list[float],
-    replica_indices: list[int] | None = None,
+    n_rep: int | None = None,
+    rng: np.random.Generator | None = None,
 ) -> float:
     """
-    chi_max(L): max over all eps of chi computed from the selected replica indices.
-    If replica_indices is None, use all replicas.
+    chi_max(L): max chi over all eps values.
+
+    If n_rep is given: draw n_rep replicas independently per eps (skip eps
+    values with fewer than n_rep replicas).  If n_rep is None: use all
+    replicas at each eps (counts may differ across eps).
     """
     chi_vals = []
     for eps in eps_list:
@@ -183,7 +187,14 @@ def chi_max_for_L(
             continue
         data = groups[key]
         reps = data["replicas"]
-        selected = [reps[i] for i in replica_indices] if replica_indices is not None else reps
+        if n_rep is not None:
+            if len(reps) < n_rep:
+                continue  # skip eps values with insufficient replicas
+            assert rng is not None, "rng required when n_rep is given"
+            idx = rng.choice(len(reps), n_rep, replace=False).tolist()
+            selected = [reps[i] for i in idx]
+        else:
+            selected = reps
         if not selected:
             continue
         chi_vals.append(chi_from_pooled(selected, data["N"], data["beta"]))
@@ -210,17 +221,19 @@ def subsampling_analysis(
 ) -> None:
     rng = np.random.default_rng(42)
 
-    # How many replicas are available at each (L, eps)?
-    n_avail = {
-        L: min(len(groups[(L, eps)]["replicas"]) for eps in eps_per_L[L] if (L, eps) in groups)
+    # Max replicas available at ANY eps for each L — determines which rep_counts
+    # are feasible (eps values with fewer replicas are simply skipped per draw).
+    n_avail_max = {
+        L: max(len(groups[(L, eps)]["replicas"]) for eps in eps_per_L[L] if (L, eps) in groups)
         for L in Ls
     }
-    rep_counts = [n for n in rep_counts if n <= min(n_avail.values())]
+    rep_counts = [n for n in rep_counts if n <= min(n_avail_max.values())]
     if not rep_counts:
         print("  Not enough replicas for subsampling — skipping.")
         return
 
     # Bootstrap: for each (n_rep, draw) -> chi_max per L -> gamma/nu
+    # Each eps draws independently; eps with <n_rep replicas are skipped.
     # Shape: chi_boot[n_rep][L] = array of n_boot chi_max values
     chi_boot: dict[int, dict[int, list[float]]] = {n: {L: [] for L in Ls} for n in rep_counts}
     gnu_boot: dict[int, list[float]] = {n: [] for n in rep_counts}
@@ -230,9 +243,7 @@ def subsampling_analysis(
         for _ in range(n_boot):
             chi_max_draw: dict[int, float] = {}
             for L in Ls:
-                n = n_avail[L]
-                idx = rng.choice(n, n_rep, replace=False).tolist()
-                v = chi_max_for_L(groups, L, eps_per_L[L], idx)
+                v = chi_max_for_L(groups, L, eps_per_L[L], n_rep=n_rep, rng=rng)
                 chi_max_draw[L] = v
 
             valid = [(L, chi_max_draw[L]) for L in Ls
@@ -322,26 +333,27 @@ def loo_jackknife_analysis(
         if not reps_per_eps:
             continue
 
-        # Full chi_max
         N = groups[(L, eps_per_L[L][0])]["N"]
         beta = groups[(L, eps_per_L[L][0])]["beta"]
-        n_reps = min(len(reps_per_eps[eps]) for eps in reps_per_eps)
 
-        def _chi_max_subset(idx: list[int]) -> float:
-            vals = []
-            for reps in reps_per_eps.values():
-                selected = [reps[i] for i in idx]
-                vals.append(chi_from_pooled(selected, N, beta))
-            return float(np.max(vals))
+        # chi_max using ALL available replicas at each eps (counts may differ per eps)
+        chi_by_eps = {
+            eps: chi_from_pooled(reps, N, beta)
+            for eps, reps in reps_per_eps.items()
+        }
+        eps_star = max(chi_by_eps, key=chi_by_eps.__getitem__)
+        chi_max_full[L] = chi_by_eps[eps_star]
 
-        full_idx = list(range(n_reps))
-        chi_max_full[L] = _chi_max_subset(full_idx)
-
-        # Replica LOO for error on chi_max
-        loo_vals = [_chi_max_subset([j for j in full_idx if j != i]) for i in full_idx]
+        # Replica LOO error at the critical eps only (where chi_max is achieved)
+        reps_critical = reps_per_eps[eps_star]
+        n_c = len(reps_critical)
+        loo_vals = [
+            chi_from_pooled([reps_critical[j] for j in range(n_c) if j != i], N, beta)
+            for i in range(n_c)
+        ]
         loo_arr = np.array(loo_vals)
         chi_max_err[L] = float(
-            np.sqrt((n_reps - 1) / n_reps * np.sum((loo_arr - loo_arr.mean()) ** 2))
+            np.sqrt((n_c - 1) / n_c * np.sum((loo_arr - loo_arr.mean()) ** 2))
         )
 
     Ls_fit = sorted(chi_max_full)
@@ -552,11 +564,19 @@ def main() -> None:
         print(f"WARNING: uneven replica counts — min={min(unique_counts)} max={max(unique_counts)}")
 
     n_avail_min = min(rep_counts_all.values())
-    print(f"Min replicas (bottleneck): {n_avail_min}")
+    # Max replicas available at ANY eps for each L — what the subsampling can reach
+    n_avail_max_per_L = {
+        L: max(len(groups[(L, eps)]["replicas"]) for eps in eps_per_L[L])
+        for L in Ls
+    }
+    n_avail_max_min = min(n_avail_max_per_L.values())
+    print(f"Min replicas (global floor):    {n_avail_min}  (some off-critical eps)")
+    print(f"Max replicas per L (subsampling cap): "
+          f"{n_avail_max_min}  (at critical eps; all L values)")
     print(f"K&D reference: gamma/nu = {KD_GAMMA_NU} +/- {KD_GAMMA_NU_ERR},  A = {KD_A}")
 
     if not args.loo_only:
-        rep_counts = [n for n in args.rep_counts if n <= n_avail_min]
+        rep_counts = [n for n in args.rep_counts if n <= n_avail_max_min]
         print(f"\n--- Replica subsampling (n_boot={args.n_boot}, "
               f"rep_counts={rep_counts}) ---", flush=True)
         subsampling_analysis(groups, Ls, eps_per_L, rep_counts, args.n_boot, args.outdir)
