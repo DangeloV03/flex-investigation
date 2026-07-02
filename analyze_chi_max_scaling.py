@@ -415,11 +415,13 @@ def main() -> None:
                         help="Skip subsampling; only run LOO jackknife (fast)")
     parser.add_argument("--subsample-only", action="store_true",
                         help="Skip LOO; only run subsampling")
+    parser.add_argument("--list", action="store_true",
+                        help="Print full inventory of what is found in --results, then exit")
     args = parser.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
 
-    print(f"Loading replicas from '{args.results}' ...", flush=True)
+    print(f"Loading replicas from '{os.path.abspath(args.results)}' ...", flush=True)
     groups = load_replica_groups(args.results)
 
     if not groups:
@@ -430,15 +432,34 @@ def main() -> None:
         L: sorted({eps for (l, eps) in groups if l == L})
         for L in Ls
     }
-    n_avail_min = min(
-        min(len(groups[(L, eps)]["replicas"]) for eps in eps_per_L[L] if (L, eps) in groups)
-        for L in Ls
-    )
 
-    print(f"L values: {Ls}")
-    print(f"Eps points per L: {[len(eps_per_L[L]) for L in Ls]}")
-    print(f"Replicas available (min over all L, eps): {n_avail_min}")
+    # Always print the compact header so users can verify the right directory
+    total_replicas = sum(len(groups[k]["replicas"]) for k in groups)
+    print(f"Results dir (absolute): {os.path.abspath(args.results)}")
+    print(f"Run dirs found:         {len(find_susceptibility_csvs(args.results))}")
+    print(f"(L, eps) pairs loaded:  {len(groups)}")
+    print(f"Total replica rows:     {total_replicas}")
+    print(f"L values:               {Ls}")
+    print(f"Eps range per L:        {[(L, round(min(eps_per_L[L]),4), round(max(eps_per_L[L]),4), len(eps_per_L[L])) for L in Ls]}")
+
+    # Per-(L, eps) replica count table — shown with --list or when counts are uneven
+    rep_counts_all = {k: len(groups[k]["replicas"]) for k in groups}
+    unique_counts = set(rep_counts_all.values())
+    if args.list or len(unique_counts) > 1:
+        print(f"\n{'L':>5}  {'eps':>8}  {'n_replicas':>11}  {'n_chunks_first':>15}")
+        for (L, eps) in sorted(groups):
+            reps = groups[(L, eps)]["replicas"]
+            print(f"{L:>5}  {eps:>8.4f}  {len(reps):>11}  {len(reps[0]):>15}")
+        if len(unique_counts) > 1:
+            print(f"\nWARNING: uneven replica counts across (L, eps) — "
+                  f"min={min(unique_counts)} max={max(unique_counts)}")
+
+    n_avail_min = min(rep_counts_all.values())
+    print(f"\nMin replicas (bottleneck for subsampling): {n_avail_min}")
     print(f"K&D reference: gamma/nu = {KD_GAMMA_NU} +/- {KD_GAMMA_NU_ERR},  A = {KD_A}")
+
+    if args.list:
+        return
 
     if not args.loo_only:
         rep_counts = [n for n in args.rep_counts if n <= n_avail_min]
