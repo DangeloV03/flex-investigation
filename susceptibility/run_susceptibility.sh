@@ -9,22 +9,42 @@
 #SBATCH --output=/home/%u/slurm_reports/%x_%j.out
 #SBATCH --error=/home/%u/slurm_reports/%x_%j.err
 #
-# Exact-mu (mu = 2*epsilon) susceptibility run for a single epsilon, looping over
-# all square sizes L = 16 .. 256. Submitted once per epsilon by
-# sweep_susceptibility.py. Uses SLURM_CPUS_PER_TASK parallel replicas per job and
-# appends replicas to each per-(L, eps) susceptibility_data.csv.
+# Susceptibility run for a single epsilon, looping over all square sizes
+# L = 16 .. 256. Submitted once per epsilon by sweep_susceptibility.py. Uses
+# SLURM_CPUS_PER_TASK parallel replicas per job and appends replicas to each
+# per-(L, eps) susceptibility_data.csv.
 #
-# Args (passed by sbatch):
+# Args (passed by sbatch/bash):
 #   $1  epsilon       (required)
 #   $2  results_base  (required; e.g. susceptibility_results/exact_2026-07-02)
 #   $3  num_batches   (optional, default 1)
+#   $4  mu            (optional; empty => runner default mu = 2*epsilon)
+#   $5  delta_f       (optional; empty => runner default)
+#   $6  delta_mu      (optional; empty => runner default)
+#   $7  k             (optional; empty => runner default)
+#   $8  scheme        (optional; empty => runner default)
+# The optional args let sweep_susceptibility.py --mu-source drive fitted-mu runs
+# for an arbitrary scheme; with all empty this reproduces the exact-mu Ising run.
 
 set -euo pipefail
 
 EPS=$1
 RESULTS_BASE=$2
 NUM_BATCHES=${3:-1}
+MU=${4:-}
+DELTA_F=${5:-}
+DELTA_MU=${6:-}
+K_ARG=${7:-}
+SCHEME=${8:-}
 N=${SLURM_CPUS_PER_TASK:-2}     # 16 under SLURM -> num_parallel_runs; 2 locally
+
+# Optional runner flags: only added when the corresponding arg is non-empty.
+EXTRA_ARGS=()
+[[ -n "$MU"       ]] && EXTRA_ARGS+=(--mu "$MU")
+[[ -n "$DELTA_F"  ]] && EXTRA_ARGS+=(--delta-f "$DELTA_F")
+[[ -n "$DELTA_MU" ]] && EXTRA_ARGS+=(--delta-mu "$DELTA_MU")
+[[ -n "$K_ARG"    ]] && EXTRA_ARGS+=(--k "$K_ARG")
+[[ -n "$SCHEME"   ]] && EXTRA_ARGS+=(--scheme "$SCHEME")
 
 # ---- Tunables (kept here so they are easy to change) ------------------------
 EQ_TIME=100000.0
@@ -70,5 +90,6 @@ for SIZE in "${SIZES[@]}"; do
         --cpus "$N" --num-batches "$NUM_BATCHES" \
         --eq-time "$EQ_TIME" --prod-time "$PROD_TIME" --prod-chunks "$PROD_CHUNKS" \
         --seed-base "$SEED_BASE" --initial-fraction "$INITIAL_FRACTION" \
-        --results-base "$RESULTS_BASE"
+        --results-base "$RESULTS_BASE" \
+        ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 done
