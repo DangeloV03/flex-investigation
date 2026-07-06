@@ -21,7 +21,7 @@ import time
 
 import numpy as np
 
-from combo_paths import COMBO_KEY_FIELDS, combo_key_from_dict
+from combo_paths import COMBO_KEY_FIELDS, combo_dir, combo_key_from_dict
 from flex_coex_chemical_potential_prediction import coex_chemical_potential
 from generate_samples import append_manage_rows, collect_active_combo_keys, frange, mu_sweep
 from queue_manifest import merge_pending
@@ -34,7 +34,6 @@ from susceptibility_paths import (
     ISING_K,
     ISING_SCHEME,
     MANAGE_CSV,
-    coex_combo_dir,
     coex_job_filename,
 )
 
@@ -71,13 +70,16 @@ MANAGE_FIELDS = COMBO_KEY_FIELDS + [
 ]
 
 
-def combo_dict(epsilon: float, ly: int, lx: int) -> dict:
+def combo_dict(
+    epsilon: float, ly: int, lx: int,
+    delta_f: float, delta_mu: float, k: float, scheme: str,
+) -> dict:
     return {
         "epsilon": epsilon,
-        "delta_f": ISING_DELTA_F,
-        "delta_mu": ISING_DELTA_MU,
-        "k": ISING_K,
-        "scheme": ISING_SCHEME,
+        "delta_f": delta_f,
+        "delta_mu": delta_mu,
+        "k": k,
+        "scheme": scheme,
         "Lx": lx,
         "Ly": ly,
     }
@@ -89,6 +91,14 @@ def main() -> None:
     parser.add_argument("--eps-max", type=float, default=EPS_MAX)
     parser.add_argument("--eps-step", type=float, default=EPS_STEP)
     parser.add_argument("--ly", type=int, default=DEFAULT_COEX_LY, help="Slab Ly (Lx = 10*Ly)")
+    parser.add_argument("--delta-f", type=float, default=ISING_DELTA_F, help="Δf (default: Ising-limit)")
+    parser.add_argument("--delta-mu", type=float, default=ISING_DELTA_MU, help="Δμ (default: Ising-limit)")
+    parser.add_argument("--k", type=float, default=ISING_K, help="Chemical recycling base rate k")
+    parser.add_argument("--scheme", default=ISING_SCHEME, help="HeteroChain markov scheme, e.g. 'homo'")
+    parser.add_argument(
+        "--flex-scheme", type=int, default=FLEX_INDEX,
+        help="FLEX prediction scheme index (1=homo/plain k)",
+    )
     parser.add_argument("--samples-dir", default=COEX_SAMPLES_DIR)
     parser.add_argument("--manage", default=MANAGE_CSV)
     parser.add_argument("--manifest", default=COEX_MANIFEST)
@@ -121,11 +131,18 @@ def main() -> None:
 
     print(
         f"Susceptibility coex: epsilon [{args.eps_min}, {args.eps_max}] "
-        f"step {args.eps_step} ({len(eps_values)} pts), Ly={ly}, Lx={lx}"
+        f"step {args.eps_step} ({len(eps_values)} pts), Ly={ly}, Lx={lx}\n"
+        f"  scheme={args.scheme} (flex={args.flex_scheme}) "
+        f"delta_f={args.delta_f} delta_mu={args.delta_mu} k={args.k}\n"
+        f"  results={args.results_dir}  manage={args.manage}  "
+        f"manifest={args.manifest}  samples={args.samples_dir}"
     )
 
+    run_settings = dict(RUN_SETTINGS)
+    run_settings["k"] = args.k
+
     for epsilon in eps_values:
-        combo = combo_dict(epsilon, ly, lx)
+        combo = combo_dict(epsilon, ly, lx, args.delta_f, args.delta_mu, args.k, args.scheme)
         key = combo_key_from_dict(combo)
 
         if key in active_combos:
@@ -136,11 +153,11 @@ def main() -> None:
         try:
             mu_coex_flex = coex_chemical_potential(
                 epsilon=epsilon,
-                df=ISING_DELTA_F,
-                dmu=ISING_DELTA_MU,
-                chem_rec_baserate=ISING_K,
+                df=args.delta_f,
+                dmu=args.delta_mu,
+                chem_rec_baserate=args.k,
                 DRIVEN=True,
-                scheme=FLEX_INDEX,
+                scheme=args.flex_scheme,
             )
             mu_coex_flex = float(np.asarray(mu_coex_flex).ravel()[0])
         except Exception as exc:
@@ -166,7 +183,7 @@ def main() -> None:
                 "mu_coex_FITTED": "",
                 "mu_coex_FITTED_error": "",
                 "RequestForAdditionalData": 0,
-                "combo_path": coex_combo_dir(combo),
+                "combo_path": combo_dir(combo, base=args.results_dir),
             })
             existing_keys.add(key)
 
@@ -175,11 +192,11 @@ def main() -> None:
                 **combo,
                 "mu": mu,
                 "mu_coex_FLEX": mu_coex_flex,
-                "run_settings": dict(RUN_SETTINGS),
+                "run_settings": dict(run_settings),
                 "results_base": args.results_dir,
                 "manage_csv": args.manage,
             }
-            filename = coex_job_filename(ISING_SCHEME, epsilon, ISING_DELTA_MU, ly, idx)
+            filename = coex_job_filename(args.scheme, epsilon, args.delta_mu, ly, idx)
             filepath = os.path.join(args.samples_dir, filename)
             if os.path.isfile(filepath):
                 n_existing_json += 1

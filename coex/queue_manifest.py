@@ -29,8 +29,10 @@ def _empty_manifest() -> dict:
 
 
 @contextmanager
-def locked_manifest(path: str = MANIFEST_PATH) -> Iterator[dict]:
+def locked_manifest(path: str | None = None) -> Iterator[dict]:
     """Atomically read-modify-write the manifest under an exclusive file lock."""
+    if path is None:
+        path = MANIFEST_PATH
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "a+") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
@@ -50,7 +52,9 @@ def locked_manifest(path: str = MANIFEST_PATH) -> Iterator[dict]:
         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
-def read_manifest(path: str = MANIFEST_PATH) -> dict:
+def read_manifest(path: str | None = None) -> dict:
+    if path is None:
+        path = MANIFEST_PATH
     if not os.path.isfile(path):
         return _empty_manifest()
     with open(path) as f:
@@ -63,13 +67,13 @@ def read_manifest(path: str = MANIFEST_PATH) -> dict:
     return manifest
 
 
-def seed_pending(paths: list[str], path: str = MANIFEST_PATH) -> None:
+def seed_pending(paths: list[str], path: str | None = None) -> None:
     """Replace pending queue with paths (used by generate_samples)."""
     with locked_manifest(path) as manifest:
         manifest["pending"] = list(paths)
 
 
-def prepend_pending(paths: list[str], path: str = MANIFEST_PATH) -> int:
+def prepend_pending(paths: list[str], path: str | None = None) -> int:
     """Prepend paths to the front of pending (analyzer priority / stack).
 
     Returns the number of paths actually added (duplicates skipped).
@@ -84,7 +88,7 @@ def prepend_pending(paths: list[str], path: str = MANIFEST_PATH) -> int:
         return len(new_paths)
 
 
-def merge_pending(paths: list[str], path: str = MANIFEST_PATH) -> None:
+def merge_pending(paths: list[str], path: str | None = None) -> None:
     """Append new paths to pending, skipping duplicates and in-flight jobs."""
     if not paths:
         return
@@ -98,7 +102,7 @@ def merge_pending(paths: list[str], path: str = MANIFEST_PATH) -> None:
         manifest["pending"].extend(new_paths)
 
 
-def pop_next_pending(path: str = MANIFEST_PATH) -> str | None:
+def pop_next_pending(path: str | None = None) -> str | None:
     """Remove and return the next pending JSON path, or None if empty."""
     with locked_manifest(path) as manifest:
         if not manifest["pending"]:
@@ -106,18 +110,18 @@ def pop_next_pending(path: str = MANIFEST_PATH) -> str | None:
         return manifest["pending"].pop(0)
 
 
-def mark_in_flight(job_id: str, json_path: str, path: str = MANIFEST_PATH) -> None:
+def mark_in_flight(job_id: str, json_path: str, path: str | None = None) -> None:
     with locked_manifest(path) as manifest:
         manifest["in_flight"][str(job_id)] = json_path
 
 
-def remove_in_flight(job_id: str, path: str = MANIFEST_PATH) -> str | None:
+def remove_in_flight(job_id: str, path: str | None = None) -> str | None:
     """Remove a job from in_flight and return its JSON path."""
     with locked_manifest(path) as manifest:
         return manifest["in_flight"].pop(str(job_id), None)
 
 
-def requeue_front(json_path: str, path: str = MANIFEST_PATH) -> None:
+def requeue_front(json_path: str, path: str | None = None) -> None:
     """Put a failed job back at the front of pending."""
     prepend_pending([json_path], path=path)
 
