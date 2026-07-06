@@ -53,7 +53,21 @@ def main() -> None:
         help="Fix the prefactor A to this value and fit only gamma/nu. "
              "Use --fixed-A 0.095 to constrain to the K&D prefactor.",
     )
+    parser.add_argument(
+        "--target", type=float, default=KD_GAMMA_NU,
+        help="Reference γ/ν to benchmark against (default: K&D 1.73). "
+             "Use --target 1.75 for the exact 2D Ising value 7/4.",
+    )
+    parser.add_argument(
+        "--target-err", type=float, default=KD_GAMMA_NU_ERR,
+        help="Uncertainty on --target (use --target-err 0 for the exact 2D Ising value).",
+    )
     args = parser.parse_args()
+
+    # Reference exponent to benchmark against; overrides the K&D defaults.
+    target = args.target
+    target_err = args.target_err
+    ref_label = "2D Ising (7/4)" if abs(target - 1.75) < 1e-9 else "Reference"
 
     if not os.path.isfile(args.csv):
         raise SystemExit(f"CSV not found: {args.csv}\n"
@@ -90,8 +104,9 @@ def main() -> None:
     gnu_loo_max = float(gnu_loo.max())
     gnu_err     = gnu_loo_std
 
-    sigma_diff = abs(gnu_full - KD_GAMMA_NU) / np.sqrt(gnu_err**2 + KD_GAMMA_NU_ERR**2)
+    sigma_diff = abs(gnu_full - target) / np.sqrt(gnu_err**2 + target_err**2)
     within     = sigma_diff <= 2.0
+    within_1sig = abs(gnu_full - target) <= gnu_err
 
     # ---- Print results ----
     A_label = f"fixed A={fixed_A}" if fixed_A is not None else "free A"
@@ -111,9 +126,11 @@ def main() -> None:
           f"std = {gnu_loo_std:.4f},  "
           f"range = [{gnu_loo_min:.4f}, {gnu_loo_max:.4f}]")
     print(f"Our result:    γ/ν = {gnu_full:.4f} ± {gnu_err:.4f}  (std of LOO slopes)")
-    print(f"K&D (2020):    γ/ν = {KD_GAMMA_NU} ± {KD_GAMMA_NU_ERR}")
-    print(f"\nDifference:    {gnu_full - KD_GAMMA_NU:+.4f}  ({sigma_diff:.2f}σ combined)")
-    print(f"Within 2σ of K&D: {'YES ✓' if within else 'NO ✗'}")
+    print(f"{ref_label + ':':<14} γ/ν = {target} ± {target_err}")
+    print(f"\nDifference:    {gnu_full - target:+.4f}  ({sigma_diff:.2f}σ combined)")
+    print(f"{target} within 1σ error bar [{gnu_full - gnu_err:.4f}, {gnu_full + gnu_err:.4f}]: "
+          f"{'YES ✓' if within_1sig else 'NO ✗'}")
+    print(f"Within 2σ of {ref_label}: {'YES ✓' if within else 'NO ✗'}")
 
     # ---- Plot ----
     outdir = args.outdir or os.path.dirname(os.path.abspath(args.csv))
@@ -132,8 +149,8 @@ def main() -> None:
                      rf"$\gamma/\nu={gnu_full:.3f}\pm{gnu_err:.3f}$"
                      if fixed_A is not None else
                      rf"fit: $A={A_full:.3f}$, $\gamma/\nu={gnu_full:.3f}\pm{gnu_err:.3f}$"))
-    ax.loglog(L_fine, KD_A * L_fine ** KD_GAMMA_NU, "--", color="red", linewidth=1.8,
-              label=rf"K&D: $A={KD_A}$, $\gamma/\nu={KD_GAMMA_NU}\pm{KD_GAMMA_NU_ERR}$")
+    ax.loglog(L_fine, KD_A * L_fine ** target, "--", color="red", linewidth=1.8,
+              label=rf"{ref_label}: $A={KD_A}$, $\gamma/\nu={target}\pm{target_err}$")
     ax.fill_between(L_fine,
                     A_full * L_fine ** gnu_loo_min,
                     A_full * L_fine ** gnu_loo_max,
@@ -153,16 +170,16 @@ def main() -> None:
     ax.fill_between([Ls[0] * 0.7, Ls[-1] * 1.4],
                     gnu_full - gnu_err, gnu_full + gnu_err,
                     color="blue", alpha=0.15)
-    ax.axhline(KD_GAMMA_NU, color="red", linestyle="--", linewidth=1.5,
-               label=rf"K&D: {KD_GAMMA_NU} ± {KD_GAMMA_NU_ERR}")
+    ax.axhline(target, color="red", linestyle="--", linewidth=1.5,
+               label=rf"{ref_label}: {target} ± {target_err}")
     ax.fill_between([Ls[0] * 0.7, Ls[-1] * 1.4],
-                    KD_GAMMA_NU - KD_GAMMA_NU_ERR,
-                    KD_GAMMA_NU + KD_GAMMA_NU_ERR,
+                    target - target_err,
+                    target + target_err,
                     color="red", alpha=0.15)
     ax.set_xscale("log")
     ax.set_xlabel("$L$ dropped", fontsize=12)
     ax.set_ylabel(r"$\gamma/\nu$", fontsize=12)
-    ax.set_title(rf"LOO: {sigma_diff:.2f}σ from K&D  ({'within 2σ' if within else 'outside 2σ'})")
+    ax.set_title(rf"LOO: {sigma_diff:.2f}σ from {ref_label}  ({'within 2σ' if within else 'outside 2σ'})")
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
     ax.set_xlim(Ls[0] * 0.7, Ls[-1] * 1.4)
