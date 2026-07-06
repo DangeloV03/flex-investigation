@@ -31,7 +31,9 @@ EQ_TIME=100000.0
 PROD_TIME=200000.0
 PROD_CHUNKS=2000
 SEED_BASE=7000
-INITIAL_FRACTION=0.5
+# High-side fill: even run_ids seed 80% BONDING (0.8), odd run_ids seed the
+# mirror 20% (0.2), so replicas sample both magnetization branches.
+INITIAL_FRACTION=0.8
 
 # ---- Environment (mirrors slurm_config.yml setup_cmds; skipped off-SLURM) ---
 if command -v module >/dev/null 2>&1; then
