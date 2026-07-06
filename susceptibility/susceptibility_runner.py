@@ -111,6 +111,19 @@ def build_initial_state(Lx: int, Ly: int, fraction: float, seed: int) -> np.ndar
     return state
 
 
+def replica_fraction(base_fraction: float, run_id: int) -> float:
+    """Alternate the initial BONDING fill between two mirror-image sides so
+    replicas seed both branches of the magnetization distribution.
+
+    Even run_id -> high side (base_fraction, e.g. 0.8 = 80% BONDING).
+    Odd  run_id -> low  side (1 - base_fraction, e.g. 0.2 = 20% BONDING).
+    With base_fraction=0.5 both sides coincide (symmetric, original behaviour).
+    """
+    high = max(base_fraction, 1.0 - base_fraction)
+    low = 1.0 - high
+    return high if run_id % 2 == 0 else low
+
+
 def sem(values: np.ndarray) -> float:
     """Standard error of the mean."""
     n = len(values)
@@ -213,7 +226,8 @@ def run_replica(args: tuple) -> dict:
     eq_time = run_settings["eq_time"]
     prod_time = run_settings["prod_time"]
     n_chunks = run_settings.get("prod_chunks", 1000)
-    initial_fraction = run_settings.get("initial_fraction", 0.5)
+    base_fraction = run_settings.get("initial_fraction", 0.5)
+    initial_fraction = replica_fraction(base_fraction, run_id)
 
     inert_fugacity = np.exp(beta * (mu + delta_f))
     bonding_fugacity = np.exp(beta * mu)
@@ -380,7 +394,16 @@ def main() -> None:
     parser.add_argument("--prod-time", type=float, default=200000.0)
     parser.add_argument("--prod-chunks", type=int, default=2000)
     parser.add_argument("--seed-base", type=int, default=7000)
-    parser.add_argument("--initial-fraction", type=float, default=0.5)
+    parser.add_argument(
+        "--initial-fraction",
+        type=float,
+        default=0.8,
+        help=(
+            "High-side BONDING fill fraction. Even run_ids seed this fraction "
+            "(e.g. 0.8 = 80/20), odd run_ids seed its mirror (0.2 = 20/80), so "
+            "replicas sample both branches of the magnetization distribution."
+        ),
+    )
     parser.add_argument("--beta", type=float, default=1.0)
     parser.add_argument("--scheme", default=ISING_SCHEME)
     parser.add_argument("--delta-f", type=float, default=ISING_DELTA_F)
