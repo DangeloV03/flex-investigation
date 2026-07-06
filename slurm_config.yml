@@ -7,9 +7,13 @@ mem: 8G
 time: "24:00:00"
 partition: cpu
 # account: your_account   # uncomment if required
-report_dir: ~/slurm_reports
-output: "~/slurm_reports/%j.out"
-error: "~/slurm_reports/%j.err"
+# Logs go to an in-repo dir. The repo lives on /scratch (large quota), so this
+# keeps SLURM stdout/err off the small /home quota — writing logs to /home fills
+# it and every job dies with "OSError: [Errno 122] Disk quota exceeded" at its
+# first print(). Relative path resolves to the sbatch submit dir (repo root).
+report_dir: slurm_reports
+output: "slurm_reports/%j.out"
+error: "slurm_reports/%j.err"
 
 # Shell commands prepended to each batch script (module loads, conda activate, etc.)
 setup_cmds:

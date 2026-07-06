@@ -47,6 +47,9 @@ test_manage.csv
 run_all_queue.json
 susceptibility_*_queue.json
 
+# SLURM job logs (in-repo on /scratch, kept off /home quota)
+slurm_reports/
+
 # Simulation scratch dirs (if any remain outside results/)
 _scratch_*/
 
