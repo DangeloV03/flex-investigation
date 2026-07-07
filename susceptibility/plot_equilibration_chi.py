@@ -46,6 +46,22 @@ def _chi_stat(m: np.ndarray, N: int, beta: float) -> float:
     return float(N * beta * (np.mean(m ** 2) - np.mean(np.abs(m)) ** 2))
 
 
+def _mean_sem(arrays: list[np.ndarray], stat_fn) -> tuple[float, float]:
+    """Mean and standard error of a per-replica statistic.
+
+    Computes stat_fn on each replica's array separately, then returns the mean over
+    replicas and the standard error of that mean (std/√N, ddof=1). Unlike the pooled
+    jackknife this treats each replica as one independent measurement of the statistic.
+    """
+    vals = np.array([float(stat_fn(a)) for a in arrays if a.size > 0])
+    n = vals.size
+    if n == 0:
+        return float("nan"), 0.0
+    mean = float(vals.mean())
+    sem = float(vals.std(ddof=1) / np.sqrt(n)) if n > 1 else 0.0
+    return mean, sem
+
+
 def _meta_float(meta: dict, key: str) -> float:
     """Parse a meta field to float, returning 0.0 for missing/blank/non-numeric."""
     try:
@@ -144,9 +160,9 @@ def compute_rolling_chi(
     """Rolling-window χ vs time for each L at its peak ε.
 
     A fixed-width window of ``window`` chunks slides (step ``stride``) along the
-    trajectory. At each position every replica's m is truncated to that window and
-    the replicas are pooled to compute χ = Nβ(⟨m²⟩−⟨|m|⟩²), with a
-    leave-one-replica-out jackknife error. Window position is reported both as a
+    trajectory. At each position χ = Nβ(⟨m²⟩−⟨|m|⟩²) is computed on each replica's
+    windowed m; the plotted point is the mean over replicas and the bar is the
+    standard error of that mean (std/√N). Window position is reported both as a
     chunk index (center) and, when chunk timing is known, as absolute MC time.
 
     Returns tidy rows: L, epsilon_peak, window, center_chunk, time, chi, chi_err,
@@ -173,7 +189,7 @@ def compute_rolling_chi(
               f"{len(starts)} windows", flush=True)
         for start in starts:
             wins = [r["m"][start : start + w] for r in recs]
-            chi, chi_err = _jackknife(wins, lambda a, N=N, beta=beta: _chi_stat(a, N, beta))
+            chi, chi_err = _mean_sem(wins, lambda a, N=N, beta=beta: _chi_stat(a, N, beta))
             center = start + w / 2.0
             # Absolute MC time at the window center (production begins after eq_time).
             time = eq_time + center * chunk_time if chunk_time else center
