@@ -3,11 +3,15 @@ plot_equilibration_chi.py
 
 Two equilibration diagnostics from the raw m(t) time series.
 
-1. Expanding-prefix χ^max(L) (``--n-fractions``): χ^max recomputed from only the
-   *first* f fraction of each replica's series, for f = 10%, 20%, …, 100%. If a run
-   is equilibrated the peak susceptibility does not depend on how much of the
-   trajectory you include, so each L's curve is flat across f. A curve still rising
-   or falling as f→1 means the estimator is still absorbing burn-in / drift.
+1. Expanding-fraction χ^max(L) (``--n-fractions``): χ^max recomputed from a fraction
+   f of each replica's series, for f = 10%, 20%, …, 100%. If a run is equilibrated the
+   peak susceptibility does not depend on how much of the trajectory you include, so
+   each L's curve is flat across f. Two versions are written:
+     * max_chi_vs_time.png  — the *first* f% (prefix). Starts contaminated by any
+       burn-in and settles as more data is added.
+     * max_chi_from_back.png — the *last* f% (suffix), accumulating from the
+       equilibrated tail. Flat across f until it starts pulling in early burn-in;
+       a rise only near f→1 pinpoints how much of the head is still un-equilibrated.
 
 2. Rolling-window χ vs time (``--window``): instead of a cumulative prefix, a
    fixed-width window slides along the trajectory and χ is recomputed inside each
@@ -104,26 +108,36 @@ def load_groups(results_dir: str) -> dict[tuple[int, float], list[dict]]:
 
 
 def compute_equilibration_curves(
-    groups: dict[tuple[int, float], list[dict]], fractions: np.ndarray
+    groups: dict[tuple[int, float], list[dict]], fractions: np.ndarray,
+    from_back: bool = False,
 ) -> pd.DataFrame:
-    """For each L and fraction f, find χ^max over ε using the first f of each replica.
+    """For each L and fraction f, find χ^max over ε using a fraction f of each replica.
+
+    from_back=False: use the *first* f (prefix). from_back=True: use the *last* f
+    (suffix) — accumulating from the equilibrated tail, so a curve still rising as
+    f→1 means the earlier data being pulled in is still carrying burn-in.
 
     Returns tidy rows: L, fraction, epsilon_peak, chi_max, chi_max_err, n_replicas.
     """
     rows: list[dict] = []
     Ls = sorted({key[0] for key in groups})
-    print(f"[prefix] computing χ^max over {len(fractions)} fractions for L={Ls}", flush=True)
+    tag = "suffix" if from_back else "prefix"
+    print(f"[{tag}] computing χ^max over {len(fractions)} fractions for L={Ls}", flush=True)
 
     for L in Ls:
-        print(f"[prefix] L={L} …", flush=True)
+        print(f"[{tag}] L={L} …", flush=True)
         eps_keys = sorted(eps for (l_val, eps) in groups if l_val == L)
         for f in fractions:
             best: dict | None = None
             for eps in eps_keys:
                 recs = groups[(L, eps)]
                 beta, N = recs[0]["beta"], recs[0]["N"]
-                # Truncate each replica to its own first-f prefix, then pool.
-                trunc = [r["m"][: max(1, int(round(r["m"].size * f)))] for r in recs]
+                # Truncate each replica to its own first-f prefix (or last-f suffix), then pool.
+                k = lambda size: max(1, int(round(size * f)))
+                if from_back:
+                    trunc = [r["m"][-k(r["m"].size):] for r in recs]
+                else:
+                    trunc = [r["m"][: k(r["m"].size)] for r in recs]
                 trunc = [a for a in trunc if a.size > 0]
                 if not trunc:
                     continue
@@ -250,7 +264,10 @@ def plot_rolling_chi(df: pd.DataFrame, outdir: str, log_y: bool = False) -> None
     print(f"Wrote {path}")
 
 
-def plot_equilibration_curves(df: pd.DataFrame, outdir: str, log_y: bool = False) -> None:
+def plot_equilibration_curves(
+    df: pd.DataFrame, outdir: str, log_y: bool = False,
+    from_back: bool = False, filename: str = "max_chi_vs_time.png",
+) -> None:
     os.makedirs(outdir, exist_ok=True)
     fig, ax = plt.subplots(figsize=(8, 5))
     for L_val, sub in df.groupby("L"):
@@ -272,12 +289,13 @@ def plot_equilibration_curves(df: pd.DataFrame, outdir: str, log_y: bool = False
         )
     if log_y:
         ax.set_yscale("log")
-    ax.set_xlabel("fraction of time series used (first %)")
+    which = "last" if from_back else "first"
+    ax.set_xlabel(f"fraction of time series used ({which} %)")
     ax.set_ylabel(r"$\chi^{\mathrm{max}}(L)$")
-    ax.set_title(r"Equilibration test: $\chi^{\mathrm{max}}$ vs time-series fraction")
+    ax.set_title(rf"Equilibration test: $\chi^{{\mathrm{{max}}}}$ vs time-series fraction ({which} %)")
     ax.legend(fontsize=8, ncol=2)
     ax.grid(True, which="both" if log_y else "major", alpha=0.3)
-    path = os.path.join(outdir, "max_chi_vs_time.png")
+    path = os.path.join(outdir, filename)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -308,7 +326,7 @@ def main() -> None:
 
     groups = load_groups(args.results)
 
-    # Expanding-prefix χ^max(L) vs fraction (original diagnostic).
+    # Expanding-prefix χ^max(L) vs fraction — first f% (original diagnostic).
     fractions = np.arange(1, args.n_fractions + 1) / args.n_fractions
     df = compute_equilibration_curves(groups, fractions)
     if df.empty:
@@ -317,6 +335,16 @@ def main() -> None:
     csv_path = os.path.join(args.outdir, "max_chi_vs_time.csv")
     df.sort_values(["L", "fraction"]).to_csv(csv_path, index=False)
     print(f"Wrote {csv_path}")
+
+    # Same, accumulating from the equilibrated tail — last f% (10%, 20%, …).
+    df_back = compute_equilibration_curves(groups, fractions, from_back=True)
+    plot_equilibration_curves(
+        df_back, args.outdir, log_y=args.log_y,
+        from_back=True, filename="max_chi_from_back.png",
+    )
+    back_csv = os.path.join(args.outdir, "max_chi_from_back.csv")
+    df_back.sort_values(["L", "fraction"]).to_csv(back_csv, index=False)
+    print(f"Wrote {back_csv}")
 
     # Rolling-window χ vs actual MC time.
     series_len = min(min(r["m"].size for r in recs) for recs in groups.values())
