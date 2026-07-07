@@ -18,8 +18,8 @@ samples at the same measurement cadence*.
 | `4x/`  | `scripts/run_susceptibility_4x.sh` | 800000    | 8000        |
 | `5x/`  | `scripts/run_susceptibility_5x.sh` | 1000000   | 10000       |
 
-Each multiplier sweeps **10 ε points** in [−1.8, −1.7] (`--eps-step 0.011111`), and
-each ε job loops **all 7 L** = 16, 32, 48, 64, 96, 128, 256 internally.
+Each multiplier sweeps **21 ε points** in [−1.8, −1.7] (standard `--eps-step 0.005`),
+and each ε job loops **all 7 L** = 16, 32, 48, 64, 96, 128, 256 internally.
 
 ## Layout
 
@@ -35,16 +35,16 @@ multiplier_test/
 ## Run (on Della, from the repo root)
 
 Repo lives at `/scratch/gpfs/WJACOBS/vd7294/flex-investigation`. Submit each
-multiplier (add `--dry-run` first to preview the 10 sbatch commands):
+multiplier (add `--dry-run` first to preview the 21 sbatch commands):
 
 ```bash
-python susceptibility/sweep_susceptibility.py --script multiplier_test/scripts/run_susceptibility_2x.sh --eps-min -1.8 --eps-max -1.7 --eps-step 0.011111 --results-base multiplier_test/2x --label mult2x
-python susceptibility/sweep_susceptibility.py --script multiplier_test/scripts/run_susceptibility_3x.sh --eps-min -1.8 --eps-max -1.7 --eps-step 0.011111 --results-base multiplier_test/3x --label mult3x
-python susceptibility/sweep_susceptibility.py --script multiplier_test/scripts/run_susceptibility_4x.sh --eps-min -1.8 --eps-max -1.7 --eps-step 0.011111 --results-base multiplier_test/4x --label mult4x
-python susceptibility/sweep_susceptibility.py --script multiplier_test/scripts/run_susceptibility_5x.sh --eps-min -1.8 --eps-max -1.7 --eps-step 0.011111 --results-base multiplier_test/5x --label mult5x
+python susceptibility/sweep_susceptibility.py --script multiplier_test/scripts/run_susceptibility_2x.sh --eps-min -1.8 --eps-max -1.7 --eps-step 0.005 --results-base multiplier_test/2x --label mult2x
+python susceptibility/sweep_susceptibility.py --script multiplier_test/scripts/run_susceptibility_3x.sh --eps-min -1.8 --eps-max -1.7 --eps-step 0.005 --results-base multiplier_test/3x --label mult3x
+python susceptibility/sweep_susceptibility.py --script multiplier_test/scripts/run_susceptibility_4x.sh --eps-min -1.8 --eps-max -1.7 --eps-step 0.005 --results-base multiplier_test/4x --label mult4x
+python susceptibility/sweep_susceptibility.py --script multiplier_test/scripts/run_susceptibility_5x.sh --eps-min -1.8 --eps-max -1.7 --eps-step 0.005 --results-base multiplier_test/5x --label mult5x
 ```
 
-Each submits 10 sbatch jobs (40 total). μ defaults to 2ε (exact coexistence).
+Each submits 21 sbatch jobs (84 total). μ defaults to 2ε (exact coexistence).
 
 **Wall-time note:** the run scripts request a 3-day wall (`#SBATCH --time=3-00:00:00`)
 to give 4×/5× at L=256 room to finish. If a job still times out, re-run the same sweep
