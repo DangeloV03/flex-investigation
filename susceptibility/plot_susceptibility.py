@@ -283,6 +283,8 @@ def aggregate_pooled(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFra
             "u4": u4,
             "u4_err": u4_err,
             "n_replicas": len(recs),
+            "n_samples": int(pooled_m.size),
+            "chunks_per_replica": float(np.mean([a.size for a in m_arrays])),
         }
 
         e_arrays = [r["e_int"] for r in recs if r["e_int"] is not None]
@@ -468,16 +470,24 @@ def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> 
 
 def print_moments_summary(agg: pd.DataFrame, warn_threshold: float = 0.1) -> None:
     peaks = agg.loc[agg.groupby("L")["chi_mean"].idxmax()].sort_values("L")
+    has_counts = "chunks_per_replica" in agg.columns
     print("\n=== Moments at peak chi per L ===")
-    print(f"{'L':>5}  {'eps_peak':>9}  {'<m>':>8}  {'<m^2>':>8}  {'<m^4>':>10}")
-    print("-" * 50)
+    hdr = f"{'L':>5}  {'eps_peak':>9}  {'chi':>9}  {'<m>':>8}  {'<m^2>':>8}  {'<m^4>':>10}"
+    if has_counts:
+        hdr += f"  {'chunks/rep':>10}  {'n_samp':>8}"
+    print(hdr)
+    print("-" * (len(hdr) + 2))
     warned = False
     for _, row in peaks.iterrows():
         m1 = row["m_mean"]
         flag = "  *** |<m>| far from 0 ***" if abs(m1) > warn_threshold else ""
         if flag:
             warned = True
-        print(f"{int(row['L']):>5}  {row['epsilon']:>9.4f}  {m1:>8.4f}  {row['m2_mean']:>8.4f}  {row['m4_mean']:>10.6f}{flag}")
+        line = (f"{int(row['L']):>5}  {row['epsilon']:>9.4f}  {row['chi_mean']:>9.2f}  "
+                f"{m1:>8.4f}  {row['m2_mean']:>8.4f}  {row['m4_mean']:>10.6f}")
+        if has_counts:
+            line += f"  {row['chunks_per_replica']:>10.0f}  {int(row['n_samples']):>8}"
+        print(line + flag)
     if warned:
         print(f"\nWARNING: one or more L values have |<m>| > {warn_threshold} at peak chi.")
         print("  This may indicate replicas trapped in one well (check initial_fraction).\n")
