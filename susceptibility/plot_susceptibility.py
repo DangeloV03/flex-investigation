@@ -412,18 +412,30 @@ def plot_binder_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False)
     )
 
 
-def _draw_peak_chi_figure(peaks: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
+def _draw_peak_chi_figure(
+    peaks: pd.DataFrame, outdir: str, pooled: bool = False, fit_min_L: float = 0.0
+) -> None:
     suffix = " (pooled)" if pooled else ""
     ftag = "_pooled" if pooled else ""
     os.makedirs(outdir, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(6, 5))
-    ax.loglog(peaks["L"], peaks["chi_mean"], "o", markersize=6, color="black", zorder=3,
-              label="simulation")
-
     L_vals = peaks["L"].to_numpy(dtype=float)
     chi_vals = peaks["chi_mean"].to_numpy(dtype=float)
     L_fine = np.geomspace(L_vals.min(), L_vals.max(), 200)
+
+    # Points used for the slope fit (drop small-L corrections-to-scaling if requested).
+    fit_mask = L_vals >= fit_min_L
+    if fit_mask.sum() < 2:
+        raise ValueError(f"--fit-min-L={fit_min_L} leaves <2 points to fit.")
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    # Fitted points solid, excluded points hollow so it's obvious what drove the slope.
+    ax.loglog(L_vals[fit_mask], chi_vals[fit_mask], "o", markersize=6, color="black",
+              zorder=3, label="simulation (fitted)")
+    if (~fit_mask).any():
+        ax.loglog(L_vals[~fit_mask], chi_vals[~fit_mask], "o", markersize=6,
+                  markerfacecolor="none", markeredgecolor="black", zorder=3,
+                  label=f"simulation (excluded, L<{fit_min_L:g})")
 
     # Reference line from Kumar & Dasgupta (2020): A=0.095, gamma/nu=1.75
     REF_A, REF_GNU = 0.095, 1.75
@@ -433,19 +445,21 @@ def _draw_peak_chi_figure(peaks: pd.DataFrame, outdir: str, pooled: bool = False
         label=rf"$A={REF_A}$,  $\gamma/\nu={REF_GNU}$ (K&D 2020)",
     )
 
-    # Best fit to our data
-    log_slope, log_intercept = np.polyfit(np.log(L_vals), np.log(chi_vals), 1)
+    # Best fit to our data (over the fitted subset only)
+    log_slope, log_intercept = np.polyfit(np.log(L_vals[fit_mask]), np.log(chi_vals[fit_mask]), 1)
     fit_A = np.exp(log_intercept)
-    ax.loglog(
-        L_fine, fit_A * L_fine**log_slope,
-        "--", color="blue", linewidth=1.5,
-        label=rf"$A={fit_A:.3f}$,  $\gamma/\nu={log_slope:.3f}$ (fit)",
-    )
+    fit_label = rf"$A={fit_A:.3f}$,  $\gamma/\nu={log_slope:.3f}$ (fit"
+    fit_label += rf", $L\geq{fit_min_L:g}$)" if fit_min_L > 0 else ")"
+    ax.loglog(L_fine, fit_A * L_fine**log_slope, "--", color="blue", linewidth=1.5,
+              label=fit_label)
+    print(f"[peak_chi_vs_L] fit gamma/nu={log_slope:.4f}, A={fit_A:.4f} "
+          f"over L={sorted(L_vals[fit_mask].astype(int))}")
 
     ax.legend(fontsize=9)
 
     ax.set_xlabel("L")
     ax.set_ylabel(r"$\chi^{\mathrm{max}}(L)$")
+    ax.set_ylim(10, 1500)
     ax.set_title(r"Peak susceptibility vs $L$" + suffix)
     ax.grid(True, which="both", alpha=0.3)
     path = os.path.join(outdir, f"peak_chi_vs_L{ftag}.png")
@@ -455,14 +469,16 @@ def _draw_peak_chi_figure(peaks: pd.DataFrame, outdir: str, pooled: bool = False
     print(f"Wrote {path}")
 
 
-def plot_peak_chi_vs_L(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
+def plot_peak_chi_vs_L(
+    agg: pd.DataFrame, outdir: str, pooled: bool = False, fit_min_L: float = 0.0
+) -> None:
     ftag = "_pooled" if pooled else ""
     os.makedirs(outdir, exist_ok=True)
     peaks = (
         agg.loc[agg.groupby("L")["chi_mean"].idxmax()]
         .sort_values("L")
     )
-    _draw_peak_chi_figure(peaks, outdir, pooled=pooled)
+    _draw_peak_chi_figure(peaks, outdir, pooled=pooled, fit_min_L=fit_min_L)
     csv_path = os.path.join(outdir, f"peak_chi_vs_L{ftag}.csv")
     peaks[["L", "epsilon", "chi_mean", "chi_stderr"]].to_csv(csv_path, index=False)
     print(f"Wrote {csv_path}")
@@ -555,6 +571,11 @@ def main() -> None:
              "the equilibrated tail). Default 1.0 = full series. Point --outdir somewhere "
              "separate to keep tail plots apart from full-data plots.",
     )
+    parser.add_argument(
+        "--fit-min-L", type=float, default=0.0,
+        help="Fit the χ^max vs L slope (γ/ν) using only L >= this value, excluding "
+             "small-L corrections-to-scaling that bias the slope low. Default 0 = all L.",
+    )
     args = parser.parse_args()
     if not 0.0 < args.tail_fraction <= 1.0:
         parser.error("--tail-fraction must be in (0, 1].")
@@ -563,7 +584,7 @@ def main() -> None:
         ftag = "_pooled" if args.pooled else ""
         csv_path = os.path.join(args.outdir, f"peak_chi_vs_L{ftag}.csv")
         peaks = pd.read_csv(csv_path)
-        _draw_peak_chi_figure(peaks, args.outdir, pooled=args.pooled)
+        _draw_peak_chi_figure(peaks, args.outdir, pooled=args.pooled, fit_min_L=args.fit_min_L)
         return
 
     if args.tail_fraction < 1.0:
@@ -581,7 +602,7 @@ def main() -> None:
     plot_m_vs_epsilon(agg, args.outdir, pooled=args.pooled)
     plot_binder_vs_epsilon(agg, args.outdir, pooled=args.pooled)
     plot_heat_capacity_vs_epsilon(agg, args.outdir, pooled=args.pooled)
-    plot_peak_chi_vs_L(agg, args.outdir, pooled=args.pooled)
+    plot_peak_chi_vs_L(agg, args.outdir, pooled=args.pooled, fit_min_L=args.fit_min_L)
     plot_m_histograms_at_peak(traj_df, agg, args.outdir, pooled=args.pooled)
 
 
