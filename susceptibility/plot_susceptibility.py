@@ -41,14 +41,26 @@ L_PLOT_STYLE: dict[int, dict[str, str]] = {
 }
 
 
-def _compute_traj_stats(ts_path: str, meta: dict) -> dict | None:
-    """Compute per-trajectory observables from a single m_timeseries CSV."""
+def _tail_slice(n: int, tail_fraction: float) -> slice:
+    """Index slice keeping the last `tail_fraction` of an n-length series (>=1 sample)."""
+    if tail_fraction >= 1.0:
+        return slice(None)
+    keep = max(1, int(round(n * tail_fraction)))
+    return slice(n - keep, None)
+
+
+def _compute_traj_stats(ts_path: str, meta: dict, tail_fraction: float = 1.0) -> dict | None:
+    """Compute per-trajectory observables from a single m_timeseries CSV.
+
+    tail_fraction < 1 keeps only the last fraction of each series (equilibrated tail).
+    """
     if not os.path.isfile(ts_path):
         return None
 
     ts = pd.read_csv(ts_path)
     if ts.empty:
         return None
+    ts = ts.iloc[_tail_slice(len(ts), tail_fraction)]
 
     beta = float(meta["beta"])
     mu = float(meta["mu"])
@@ -93,11 +105,11 @@ def _compute_traj_stats(ts_path: str, meta: dict) -> dict | None:
     return result
 
 
-def aggregate(results_dir: str) -> pd.DataFrame:
+def aggregate(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFrame:
     """
     Scan for susceptibility_data.csv files under results_dir, load each replica's
     m_timeseries CSV, compute per-trajectory observables, then average over replicas
-    grouped by (L, ε).
+    grouped by (L, ε). tail_fraction < 1 uses only each series' last fraction.
     """
     paths = find_susceptibility_csvs(results_dir)
     if not paths:
@@ -112,7 +124,7 @@ def aggregate(results_dir: str) -> pd.DataFrame:
             if not run_id:
                 continue
             ts_path = os.path.join(dirpath, f"m_timeseries_{run_id}.csv")
-            stats = _compute_traj_stats(ts_path, meta)
+            stats = _compute_traj_stats(ts_path, meta, tail_fraction=tail_fraction)
             if stats:
                 traj_records.append(stats)
 
@@ -153,13 +165,17 @@ def aggregate(results_dir: str) -> pd.DataFrame:
     return pd.DataFrame(rows_agg).sort_values(["L", "epsilon"]), pd.DataFrame(traj_records)
 
 
-def _load_traj_arrays(ts_path: str, meta: dict) -> dict | None:
-    """Load one trajectory's raw per-chunk m (and recovered E_int) arrays."""
+def _load_traj_arrays(ts_path: str, meta: dict, tail_fraction: float = 1.0) -> dict | None:
+    """Load one trajectory's raw per-chunk m (and recovered E_int) arrays.
+
+    tail_fraction < 1 keeps only the last fraction of each series (equilibrated tail).
+    """
     if not os.path.isfile(ts_path):
         return None
     ts = pd.read_csv(ts_path)
     if ts.empty or "m" not in ts.columns:
         return None
+    ts = ts.iloc[_tail_slice(len(ts), tail_fraction)]
 
     beta = float(meta["beta"])
     mu = float(meta["mu"])
@@ -198,11 +214,12 @@ def _jackknife(arrays: list[np.ndarray], stat_fn) -> tuple[float, float]:
     return full, err
 
 
-def aggregate_pooled(results_dir: str) -> pd.DataFrame:
+def aggregate_pooled(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFrame:
     """Pool every replica's samples per (L, ε), then compute χ, c, U4 once.
 
     Workaround for non-ergodic short runs: combining replicas reconstructs the full
     P(m) the per-trajectory estimator misses. Errors are leave-one-replica-out jackknife.
+    tail_fraction < 1 pools only each series' last fraction (equilibrated tail).
     """
     paths = find_susceptibility_csvs(results_dir)
     if not paths:
@@ -216,7 +233,7 @@ def aggregate_pooled(results_dir: str) -> pd.DataFrame:
             if not run_id:
                 continue
             ts_path = os.path.join(dirpath, f"m_timeseries_{run_id}.csv")
-            rec = _load_traj_arrays(ts_path, meta)
+            rec = _load_traj_arrays(ts_path, meta, tail_fraction=tail_fraction)
             if rec:
                 groups[(rec["L"], rec["epsilon"])].append(rec)
 
@@ -522,7 +539,15 @@ def main() -> None:
         action="store_true",
         help="Skip aggregation and replot peak_chi_vs_L from the existing CSV in --outdir.",
     )
+    parser.add_argument(
+        "--tail-fraction", type=float, default=1.0,
+        help="Use only the last fraction of each replica's series (e.g. 0.2 = last 20%%, "
+             "the equilibrated tail). Default 1.0 = full series. Point --outdir somewhere "
+             "separate to keep tail plots apart from full-data plots.",
+    )
     args = parser.parse_args()
+    if not 0.0 < args.tail_fraction <= 1.0:
+        parser.error("--tail-fraction must be in (0, 1].")
 
     if args.peak_only:
         ftag = "_pooled" if args.pooled else ""
@@ -531,12 +556,15 @@ def main() -> None:
         _draw_peak_chi_figure(peaks, args.outdir, pooled=args.pooled)
         return
 
+    if args.tail_fraction < 1.0:
+        print(f"Using last {args.tail_fraction:.0%} of each replica's series (equilibrated tail)")
+
     if args.pooled:
         print("Aggregation: POOLED (all replica samples combined before χ/c/U4)")
-        agg, traj_df = aggregate_pooled(args.results)
+        agg, traj_df = aggregate_pooled(args.results, tail_fraction=args.tail_fraction)
     else:
         print("Aggregation: per-trajectory then averaged")
-        agg, traj_df = aggregate(args.results)
+        agg, traj_df = aggregate(args.results, tail_fraction=args.tail_fraction)
 
     print_moments_summary(agg)
     plot_chi_vs_epsilon(agg, args.outdir, pooled=args.pooled)
