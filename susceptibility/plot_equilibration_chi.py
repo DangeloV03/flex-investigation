@@ -1,25 +1,30 @@
 """
 plot_equilibration_chi.py
 
-Equilibration test: χ^max(L) recomputed from only the *first* f fraction of each
-replica's time series, for f = 10%, 20%, …, 100%.
+Two equilibration diagnostics from the raw m(t) time series.
 
-Rationale: if a run is equilibrated (stationary) the peak susceptibility does not
-depend on how much of the trajectory you include — the first 10% of samples give the
-same χ^max as the full run. So each L's curve should be flat across f. A curve that is
-still rising or falling as f→1 means the estimator is still absorbing burn-in / drift,
-i.e. that L had not equilibrated over the plotted window.
+1. Expanding-prefix χ^max(L) (``--n-fractions``): χ^max recomputed from only the
+   *first* f fraction of each replica's series, for f = 10%, 20%, …, 100%. If a run
+   is equilibrated the peak susceptibility does not depend on how much of the
+   trajectory you include, so each L's curve is flat across f. A curve still rising
+   or falling as f→1 means the estimator is still absorbing burn-in / drift.
 
-Produces one line per square size L (7 curves). x-axis = fraction of time series used,
-y-axis = χ^max(L) = max over ε of the connected susceptibility.
+2. Rolling-window χ vs time (``--window``): instead of a cumulative prefix, a
+   fixed-width window slides along the trajectory and χ is recomputed inside each
+   window. The x-axis is *actual MC time* (not "use up to t%"), the y-axis is χ
+   evaluated locally around that time. Because early burn-in falls out the back of
+   the window instead of being permanently averaged in, drift is much more visible:
+   a flat line ⇒ stationary/equilibrated, a sloping or decaying line ⇒ not yet.
 
-χ is the same connected estimator used in plot_susceptibility (pooled path):
+Both use the same connected estimator as plot_susceptibility (pooled path):
     χ = N·β·(⟨m²⟩ − ⟨|m|⟩²)
-computed over the pooled, truncated samples of all replicas at each (L, ε).
+computed over the pooled samples of all replicas. For the rolling plot each L is
+shown at its peak ε (the ε that maximises the full-series χ).
 
 Usage:
     python plot_equilibration_chi.py --results susceptibility_results/exact --outdir plots/exact
     python plot_equilibration_chi.py --results susceptibility_results --n-fractions 10
+    python plot_equilibration_chi.py --results susceptibility_results --window 100 --stride 20
 """
 
 from __future__ import annotations
@@ -41,6 +46,14 @@ def _chi_stat(m: np.ndarray, N: int, beta: float) -> float:
     return float(N * beta * (np.mean(m ** 2) - np.mean(np.abs(m)) ** 2))
 
 
+def _meta_float(meta: dict, key: str) -> float:
+    """Parse a meta field to float, returning 0.0 for missing/blank/non-numeric."""
+    try:
+        return float(str(meta.get(key, "")).strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def load_groups(results_dir: str) -> dict[tuple[int, float], list[dict]]:
     """Group every replica's raw m array (+ beta, N) by (L, ε)."""
     paths = find_susceptibility_csvs(results_dir)
@@ -57,6 +70,10 @@ def load_groups(results_dir: str) -> dict[tuple[int, float], list[dict]]:
             ts_path = os.path.join(dirpath, f"m_timeseries_{run_id}.csv")
             rec = _load_traj_arrays(ts_path, meta)
             if rec is not None and rec["m"].size > 0:
+                rec["chunk_time"] = _meta_float(meta, "prod_time") and (
+                    _meta_float(meta, "prod_time") / (_meta_float(meta, "prod_chunks") or 1.0)
+                )
+                rec["eq_time"] = _meta_float(meta, "eq_time")
                 groups[(rec["L"], rec["epsilon"])].append(rec)
     if not groups:
         raise FileNotFoundError("No timeseries files found — check that runs have completed.")
@@ -100,6 +117,110 @@ def compute_equilibration_curves(
     return pd.DataFrame(rows)
 
 
+def _peak_epsilon(groups: dict[tuple[int, float], list[dict]], L: int) -> float | None:
+    """ε that maximises the full-series pooled χ for this L."""
+    best_eps, best_chi = None, -np.inf
+    for eps in sorted(eps for (l_val, eps) in groups if l_val == L):
+        recs = groups[(L, eps)]
+        beta, N = recs[0]["beta"], recs[0]["N"]
+        chi = _chi_stat(np.concatenate([r["m"] for r in recs]), N, beta)
+        if chi > best_chi:
+            best_eps, best_chi = eps, chi
+    return best_eps
+
+
+def compute_rolling_chi(
+    groups: dict[tuple[int, float], list[dict]], window: int, stride: int
+) -> pd.DataFrame:
+    """Rolling-window χ vs time for each L at its peak ε.
+
+    A fixed-width window of ``window`` chunks slides (step ``stride``) along the
+    trajectory. At each position every replica's m is truncated to that window and
+    the replicas are pooled to compute χ = Nβ(⟨m²⟩−⟨|m|⟩²), with a
+    leave-one-replica-out jackknife error. Window position is reported both as a
+    chunk index (center) and, when chunk timing is known, as absolute MC time.
+
+    Returns tidy rows: L, epsilon_peak, window, center_chunk, time, chi, chi_err,
+    n_replicas.
+    """
+    rows: list[dict] = []
+    Ls = sorted({key[0] for key in groups})
+
+    for L in Ls:
+        eps = _peak_epsilon(groups, L)
+        if eps is None:
+            continue
+        recs = groups[(L, eps)]
+        beta, N = recs[0]["beta"], recs[0]["N"]
+        chunk_time = recs[0].get("chunk_time") or 0.0
+        eq_time = recs[0].get("eq_time") or 0.0
+        T = min(r["m"].size for r in recs)  # common length across replicas
+        w = min(window, T)
+        if w < 1:
+            continue
+        for start in range(0, T - w + 1, max(1, stride)):
+            wins = [r["m"][start : start + w] for r in recs]
+            chi, chi_err = _jackknife(wins, lambda a, N=N, beta=beta: _chi_stat(a, N, beta))
+            center = start + w / 2.0
+            # Absolute MC time at the window center (production begins after eq_time).
+            time = eq_time + center * chunk_time if chunk_time else center
+            rows.append({
+                "L": L,
+                "epsilon_peak": float(eps),
+                "window": int(w),
+                "center_chunk": float(center),
+                "time": float(time),
+                "chi": chi,
+                "chi_err": chi_err,
+                "n_replicas": len(recs),
+            })
+    return pd.DataFrame(rows)
+
+
+def plot_rolling_chi(df: pd.DataFrame, outdir: str, log_y: bool = False) -> None:
+    os.makedirs(outdir, exist_ok=True)
+    has_time = bool(df["time"].to_numpy().any()) and not np.allclose(
+        df["time"], df["center_chunk"]
+    )
+    xcol = "time" if has_time else "center_chunk"
+    xlabel = "MC sweeps (production)" if has_time else "chunk index (window center)"
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for L_val, sub in df.groupby("L"):
+        L = int(L_val)  # type: ignore[arg-type]
+        sub = sub.sort_values(xcol)
+        style = L_PLOT_STYLE.get(L, {"color": "gray", "marker": "o"})
+        color = style["color"]
+        eps = sub["epsilon_peak"].iloc[0]
+        ax.errorbar(
+            sub[xcol],
+            sub["chi"],
+            yerr=sub["chi_err"],
+            fmt=f"{style['marker']}-",
+            color=color,
+            markerfacecolor="none",
+            markeredgecolor=color,
+            markeredgewidth=1.2,
+            markersize=4,
+            capsize=2,
+            elinewidth=0.8,
+            label=f"L = {L} (ε={eps:.2f})",
+        )
+    if log_y:
+        ax.set_yscale("log")
+    w = int(df["window"].iloc[0]) if not df.empty else 0
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(r"$\chi$ (rolling window)")
+    ax.set_title(rf"Rolling-window $\chi$ vs time (window = {w} chunks)")
+    ax.legend(fontsize=8, ncol=2)
+    ax.grid(True, which="both" if log_y else "major", alpha=0.3)
+    path = os.path.join(outdir, "rolling_chi_vs_time.png")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"Wrote {path}")
+
+
 def plot_equilibration_curves(df: pd.DataFrame, outdir: str, log_y: bool = False) -> None:
     os.makedirs(outdir, exist_ok=True)
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -140,21 +261,46 @@ def main() -> None:
     parser.add_argument("--outdir", default="plots/susceptibility")
     parser.add_argument(
         "--n-fractions", type=int, default=10,
-        help="Number of evenly spaced prefixes from (1/n) to 1.0 (default 10 → 10%%,20%%,…,100%%).",
+        help="Expanding-prefix plot: number of evenly spaced prefixes from (1/n) to 1.0 "
+             "(default 10 → 10%%,20%%,…,100%%).",
     )
-    parser.add_argument("--log-y", action="store_true", help="Log-scale the χ^max axis.")
+    parser.add_argument(
+        "--window", type=int, default=0,
+        help="Rolling-window plot: window width in chunks (fixed sample count). "
+             "0 (default) → auto = 10%% of the series length.",
+    )
+    parser.add_argument(
+        "--stride", type=int, default=0,
+        help="Rolling-window plot: step between window starts in chunks. "
+             "0 (default) → auto = window/4.",
+    )
+    parser.add_argument("--log-y", action="store_true", help="Log-scale the χ axis.")
     args = parser.parse_args()
 
-    fractions = np.arange(1, args.n_fractions + 1) / args.n_fractions
     groups = load_groups(args.results)
+
+    # Expanding-prefix χ^max(L) vs fraction (original diagnostic).
+    fractions = np.arange(1, args.n_fractions + 1) / args.n_fractions
     df = compute_equilibration_curves(groups, fractions)
     if df.empty:
         raise SystemExit("No curves computed — no usable (L, ε) groups found.")
-
     plot_equilibration_curves(df, args.outdir, log_y=args.log_y)
     csv_path = os.path.join(args.outdir, "max_chi_vs_time.csv")
     df.sort_values(["L", "fraction"]).to_csv(csv_path, index=False)
     print(f"Wrote {csv_path}")
+
+    # Rolling-window χ vs actual MC time.
+    series_len = min(min(r["m"].size for r in recs) for recs in groups.values())
+    window = args.window if args.window > 0 else max(1, series_len // 10)
+    stride = args.stride if args.stride > 0 else max(1, window // 4)
+    roll = compute_rolling_chi(groups, window, stride)
+    if roll.empty:
+        print("No rolling-window curves computed — skipping rolling plot.")
+        return
+    plot_rolling_chi(roll, args.outdir, log_y=args.log_y)
+    roll_csv = os.path.join(args.outdir, "rolling_chi_vs_time.csv")
+    roll.sort_values(["L", "center_chunk"]).to_csv(roll_csv, index=False)
+    print(f"Wrote {roll_csv}")
 
 
 if __name__ == "__main__":
