@@ -87,6 +87,7 @@ SIZES=(16 32 48 64 96 128 256)
 
 for SIZE in "${SIZES[@]}"; do
     echo "=== epsilon=${EPS} L=${SIZE} (cpus=${N}, batches=${NUM_BATCHES}) ==="
+    SECONDS=0
     "${LAUNCH[@]}" susceptibility/susceptibility_runner.py \
         --epsilon "$EPS" --L "$SIZE" \
         --cpus "$N" --num-batches "$NUM_BATCHES" \
@@ -94,4 +95,5 @@ for SIZE in "${SIZES[@]}"; do
         --seed-base "$SEED_BASE" --initial-fraction "$INITIAL_FRACTION" \
         --results-base "$RESULTS_BASE" \
         ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
+    echo ">>> epsilon=${EPS} L=${SIZE} took ${SECONDS}s ($((SECONDS/60))m$((SECONDS%60))s)"
 done
