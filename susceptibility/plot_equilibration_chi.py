@@ -60,8 +60,11 @@ def load_groups(results_dir: str) -> dict[tuple[int, float], list[dict]]:
     if not paths:
         raise FileNotFoundError(f"No susceptibility_data.csv under {results_dir}")
 
+    n_csv = len(paths)
+    print(f"[load] {n_csv} susceptibility_data.csv files under {results_dir}", flush=True)
     groups: dict[tuple[int, float], list[dict]] = defaultdict(list)
-    for csv_path in paths:
+    n_reps = 0
+    for i, csv_path in enumerate(paths, 1):
         dirpath = os.path.dirname(csv_path)
         for meta in read_susceptibility_csv(csv_path):
             run_id = str(meta.get("id", "")).strip()
@@ -75,6 +78,10 @@ def load_groups(results_dir: str) -> dict[tuple[int, float], list[dict]]:
                 )
                 rec["eq_time"] = _meta_float(meta, "eq_time")
                 groups[(rec["L"], rec["epsilon"])].append(rec)
+                n_reps += 1
+        if i % 25 == 0 or i == n_csv:
+            print(f"[load] {i}/{n_csv} dirs read, {n_reps} replicas, "
+                  f"{len(groups)} (L,ε) groups", flush=True)
     if not groups:
         raise FileNotFoundError("No timeseries files found — check that runs have completed.")
     return groups
@@ -89,8 +96,10 @@ def compute_equilibration_curves(
     """
     rows: list[dict] = []
     Ls = sorted({key[0] for key in groups})
+    print(f"[prefix] computing χ^max over {len(fractions)} fractions for L={Ls}", flush=True)
 
     for L in Ls:
+        print(f"[prefix] L={L} …", flush=True)
         eps_keys = sorted(eps for (l_val, eps) in groups if l_val == L)
         for f in fractions:
             best: dict | None = None
@@ -145,6 +154,7 @@ def compute_rolling_chi(
     """
     rows: list[dict] = []
     Ls = sorted({key[0] for key in groups})
+    print(f"[rolling] window={window} stride={stride} chunks for L={Ls}", flush=True)
 
     for L in Ls:
         eps = _peak_epsilon(groups, L)
@@ -158,7 +168,10 @@ def compute_rolling_chi(
         w = min(window, T)
         if w < 1:
             continue
-        for start in range(0, T - w + 1, max(1, stride)):
+        starts = range(0, T - w + 1, max(1, stride))
+        print(f"[rolling] L={L} peak ε={eps:.2f}, {len(recs)} replicas, "
+              f"{len(starts)} windows", flush=True)
+        for start in starts:
             wins = [r["m"][start : start + w] for r in recs]
             chi, chi_err = _jackknife(wins, lambda a, N=N, beta=beta: _chi_stat(a, N, beta))
             center = start + w / 2.0
