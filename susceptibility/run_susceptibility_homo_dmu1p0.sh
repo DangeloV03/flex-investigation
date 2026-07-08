@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=susc_exact
+#SBATCH --job-name=susc_homo_dmu1p0
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem-per-cpu=512M
@@ -86,7 +86,7 @@ else
     LAUNCH=(python -u)
 fi
 
-SIZES=(16 32 48 64 96 128 256)
+SIZES=(16 32 48 64 96 128)
 
 for SIZE in "${SIZES[@]}"; do
     echo "=== epsilon=${EPS} L=${SIZE} (cpus=${N}, batches=${NUM_BATCHES}) ==="
