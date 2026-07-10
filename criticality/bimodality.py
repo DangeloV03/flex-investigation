@@ -1,0 +1,750 @@
+"""
+bimodality.py
+
+Locate the critical drive strength epsilon_c of a coex run *independently* of the
+mu_coex calculation, by measuring how bimodal the column-order-parameter
+distribution of the stored configuration snapshots is.
+
+Physics (see criticality/bimodality.md):
+  Below epsilon_c the slab phase-separates into a liquid region and a gas region
+  with a single interface, so most columns sit at the liquid or the gas value and
+  P(phi_col) is BIMODAL. As epsilon -> epsilon_c the interface roughens and
+  delocalizes; above epsilon_c there is a single homogeneous phase and P(phi_col)
+  is UNIMODAL. Tracking a bimodality measure across the epsilon sweep and finding
+  where it crosses over from bimodal to unimodal gives epsilon_c.
+
+Data reality (differs from the generic spec; see json_runner.py / combo_paths.py):
+  * Snapshots are the *final* lattice per replica: results/<combo>/mu_sweeps/
+    mu<tag>/final_lattice_<id>.npy  (~4-8 per mu dir, uint32).
+  * Shape is (Lx, Ly) = (long, short). The slab interface runs along Lx (axis 0),
+    so L_long = Lx and L_short = Ly. The column reduction is a mean over the SHORT
+    axis (axis=1), giving one value per long-axis column x = 0 .. Lx-1.
+  * Three states {EMPTY=0, INERT=1, BONDING=2}. We reduce each column to the phi
+    order parameter phi_col = rho_bonding - rho_inert - rho_empty, i.e. the spin
+    map BONDING->+1, {INERT,EMPTY}->-1 averaged over the short axis (range [-1,1]),
+    matching analyzer.py's coexistence order parameter phi = 2*rho_bonding - 1.
+  * Each epsilon has a whole mu-sweep; phase separation only exists at
+    coexistence, so per epsilon we pool the snapshots from the mu dir nearest
+    mu_coex.
+
+Separation of concerns (each function is independently testable):
+  extraction   : column_op, extract_column_op, cache_column_op
+  mu selection : resolve_mu_coex, nearest_mu_dir
+  pooling      : pool_column_op          (single epsilon only, never across epsilon)
+  metric       : sarle_bc
+  sweep driver : sweep_bc
+  crossover    : locate_epsilon_c
+  orchestrator : find_criticality
+"""
+
+from __future__ import annotations
+
+import csv
+import glob
+import json
+import os
+import sys
+import time
+from typing import Optional
+
+import numpy as np
+
+# --- make sibling source folders importable (mirrors conftest.py / env.sh) ---
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)
+for _sub in ("coex", "susceptibility"):
+    _p = os.path.join(_ROOT, _sub)
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from combo_paths import combo_dir_name, mu_dir_name, param_tag, size_tag  # noqa: E402
+
+# Lattice state encoding (from coex/json_runner.py).
+EMPTY, INERT, BONDING = 0, 1, 2
+
+# Sarle heuristic cutoff: BC > 5/9 ~ "likely bimodal" (a convention, not a test).
+BC_BIMODAL_CUTOFF = 5.0 / 9.0
+
+# ---------------------------------------------------------------------------
+# tag helpers
+# ---------------------------------------------------------------------------
+
+def untag(tag: str) -> float:
+    """Inverse of combo_paths.param_tag: 'm2p0' -> -2.0, '0p5' -> 0.5."""
+    neg = tag.startswith("m")
+    body = tag[1:] if neg else tag
+    value = float(body.replace("p", "."))
+    return -value if neg else value
+
+
+# ---------------------------------------------------------------------------
+# Step 1 - column-order-parameter extraction
+# ---------------------------------------------------------------------------
+
+def column_op(snapshot: np.ndarray) -> np.ndarray:
+    """Per-column phi order parameter for one (Lx, Ly) snapshot.
+
+    Maps BONDING(=2) -> +1 and {INERT(=1), EMPTY(=0)} -> -1, then averages over
+    the short axis (axis=1). Returns a length-Lx array in [-1, 1]:
+    phi_col[x] = rho_bonding(x) - rho_inert(x) - rho_empty(x).
+    """
+    spin = np.where(snapshot == BONDING, 1.0, -1.0)
+    return spin.mean(axis=1)
+
+
+def extract_column_op(mu_dir: str) -> tuple[np.ndarray, dict]:
+    """Load every final_lattice_*.npy in a mu dir and stack their column ops.
+
+    Returns (arr, meta) where arr has shape (n_snapshots, Lx) and meta records
+    provenance: n_snapshots, Lx, Ly, and the source file paths.
+    """
+    paths = sorted(glob.glob(os.path.join(mu_dir, "final_lattice_*.npy")))
+    if not paths:
+        raise FileNotFoundError(f"no final_lattice_*.npy in {mu_dir}")
+    cols = []
+    Lx = Ly = None
+    for p in paths:
+        snap = np.load(p)
+        if snap.ndim != 2:
+            raise ValueError(f"{p}: expected 2D (Lx, Ly), got shape {snap.shape}")
+        if Lx is None:
+            Lx, Ly = int(snap.shape[0]), int(snap.shape[1])
+        cols.append(column_op(snap))
+    arr = np.asarray(cols, dtype=float)  # (n_snapshots, Lx)
+    meta = {
+        "n_snapshots": len(paths),
+        "Lx": Lx,
+        "Ly": Ly,
+        "source_paths": paths,
+    }
+    return arr, meta
+
+
+def cache_column_op(
+    mu_dir: str,
+    cache_dir: str,
+    *,
+    epsilon: float,
+    mu_used: float,
+    mu_coex: float,
+    combo_name: str,
+) -> tuple[np.ndarray, dict]:
+    """extract_column_op with an .npy cache + .json provenance sidecar.
+
+    Cache key: <combo_name>__mu<tag>. Reuses the cache when it is newer than
+    every source snapshot; otherwise recomputes and rewrites.
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+    key = f"{combo_name}__{mu_dir_name(mu_used)}"
+    npy_path = os.path.join(cache_dir, key + ".npy")
+    json_path = os.path.join(cache_dir, key + ".json")
+
+    sources = sorted(glob.glob(os.path.join(mu_dir, "final_lattice_*.npy")))
+    if os.path.isfile(npy_path) and os.path.isfile(json_path) and sources:
+        cache_mtime = os.path.getmtime(npy_path)
+        if all(os.path.getmtime(s) <= cache_mtime for s in sources):
+            arr = np.load(npy_path)
+            with open(json_path) as f:
+                meta = json.load(f)
+            return arr, meta
+
+    arr, meta = extract_column_op(mu_dir)
+    meta.update(
+        {
+            "epsilon": epsilon,
+            "mu_used": mu_used,
+            "mu_coex": mu_coex,
+            "combo_name": combo_name,
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    )
+    np.save(npy_path, arr)
+    with open(json_path, "w") as f:
+        json.dump(meta, f, indent=2)
+    return arr, meta
+
+
+# ---------------------------------------------------------------------------
+# mu selection - the mu-sweep gives one ensemble point per mu; we reduce over it
+# ---------------------------------------------------------------------------
+
+def _read_output_field(mu_dir: str, field: str) -> Optional[float]:
+    """First-row value of `field` from a mu dir's output.csv (e.g. signed mu,
+    beta). The dir name only encodes abs(mu), so the signed value must be read
+    from the CSV."""
+    path = os.path.join(mu_dir, "output.csv")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, newline="") as f:
+            for row in csv.DictReader(f):
+                return float(row[field])
+    except (KeyError, ValueError, StopIteration):
+        return None
+    return None
+
+
+def enumerate_mu_dirs(combo_dir: str) -> list[tuple[str, float]]:
+    """All (mu_dir, signed_mu) under combo_dir/mu_sweeps with a readable mu."""
+    out = []
+    for d in sorted(glob.glob(os.path.join(combo_dir, "mu_sweeps", "mu*"))):
+        if not os.path.isdir(d):
+            continue
+        mu = _read_output_field(d, "mu")
+        if mu is not None:
+            out.append((d, mu))
+    return out
+
+
+def nearest_mu_dir(combo_dir: str, mu_coex: float) -> tuple[str, float]:
+    """Return (mu_dir, mu) whose signed mu is closest to mu_coex."""
+    candidates = enumerate_mu_dirs(combo_dir)
+    if not candidates:
+        raise FileNotFoundError(
+            f"no mu dir with a readable output.csv under {combo_dir}/mu_sweeps"
+        )
+    return min(candidates, key=lambda dm: abs(dm[1] - mu_coex))
+
+
+def _mu_coex_from_phi_psi(combo_dir: str) -> Optional[float]:
+    """Interpolate the mu where phi crosses zero from phi_psi.csv."""
+    path = os.path.join(combo_dir, "phi_psi.csv")
+    if not os.path.isfile(path):
+        return None
+    mus, phis = [], []
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            try:
+                mus.append(float(row["mu"]))
+                phis.append(float(row["phi"]))
+            except (KeyError, ValueError):
+                continue
+    if len(mus) < 2:
+        return None
+    order = np.argsort(mus)
+    mus = np.asarray(mus)[order]
+    phis = np.asarray(phis)[order]
+    for i in range(len(mus) - 1):
+        if phis[i] == 0.0:
+            return float(mus[i])
+        if phis[i] * phis[i + 1] < 0:  # sign change -> linear interp to phi=0
+            t = phis[i] / (phis[i] - phis[i + 1])
+            return float(mus[i] + t * (mus[i + 1] - mus[i]))
+    return float(mus[int(np.argmin(np.abs(phis)))])  # else nearest to zero
+
+
+def resolve_mu_coex(
+    epsilon: float,
+    combo_dir: str,
+    *,
+    manage_csv: Optional[str] = None,
+    combo_params: Optional[dict] = None,
+) -> float:
+    """mu_coex for one epsilon: manage.csv mu_coex_FITTED, else phi_psi.csv, else 2*eps."""
+    if manage_csv and os.path.isfile(manage_csv):
+        from sweep_susceptibility import load_mu_map
+
+        cp = combo_params or {}
+        mu_map = load_mu_map(
+            manage_csv,
+            delta_f=cp.get("delta_f"),
+            delta_mu=cp.get("delta_mu"),
+            k=cp.get("k"),
+            scheme=cp.get("scheme"),
+        )
+        mu = mu_map.get(round(float(epsilon), 6))
+        if mu is not None:
+            return float(mu)
+    mu = _mu_coex_from_phi_psi(combo_dir)
+    if mu is not None:
+        return mu
+    return 2.0 * float(epsilon)
+
+
+# ---------------------------------------------------------------------------
+# Step 2 - pooling (single epsilon only, never across epsilon)
+# ---------------------------------------------------------------------------
+
+def pool_column_op(arr: np.ndarray) -> tuple[np.ndarray, int, int]:
+    """Flatten a single-epsilon (n_snapshots, Lx) column-op array.
+
+    Returns (pooled_1d, n_pooled, L_long). L_long (= Lx) is returned separately
+    because n_pooled conflates the true independent sample size (n_snapshots)
+    with the column count (columns within a snapshot are spatially correlated).
+    """
+    arr = np.asarray(arr, dtype=float)
+    L_long = int(arr.shape[1])
+    pooled = arr.reshape(-1)
+    return pooled, int(pooled.size), L_long
+
+
+# ---------------------------------------------------------------------------
+# Step 3 - Sarle's bimodality coefficient
+# ---------------------------------------------------------------------------
+
+def sarle_bc(pooled: np.ndarray) -> dict:
+    """Sarle's bimodality coefficient of a pooled 1D sample.
+
+    BC = (skew^2 + 1) / (kurtosis_excess + corr(n)),  corr(n)=3(n-1)^2/[(n-2)(n-3)].
+    Uses sample skewness and EXCESS kurtosis (Gaussian -> 0).
+
+    Reference limits:
+      * unimodal Gaussian            -> BC -> 1/3 as n -> inf
+      * two well-separated masses    -> BC -> 1   as n -> inf
+      * heuristic cutoff BC > 5/9    -> "likely bimodal" (a convention, not a test)
+    At the sample sizes here corr(n) sits very close to its asymptote of 3, so it
+    barely moves BC; it is included for correctness.
+    """
+    x = np.asarray(pooled, dtype=float).ravel()
+    n = x.size
+    if n < 4:
+        raise ValueError(f"need n >= 4 for the finite-sample correction, got {n}")
+    mean = float(x.mean())
+    std = float(x.std())  # population std (ddof=0)
+    if std == 0.0:
+        # A degenerate point mass: skew/kurtosis undefined; report a unimodal-ish BC.
+        return {
+            "n_pooled": n, "mean": mean, "std": 0.0,
+            "skew": 0.0, "kurtosis_excess": 0.0, "BC": float("nan"),
+        }
+    z = (x - mean) / std
+    skew = float(np.mean(z ** 3))
+    kurt_excess = float(np.mean(z ** 4) - 3.0)
+    corr = 3.0 * (n - 1) ** 2 / ((n - 2) * (n - 3))
+    bc = (skew ** 2 + 1.0) / (kurt_excess + corr)
+    return {
+        "n_pooled": n,
+        "mean": mean,
+        "std": std,
+        "skew": skew,
+        "kurtosis_excess": kurt_excess,
+        "BC": float(bc),
+    }
+
+
+# ---------------------------------------------------------------------------
+# CSV helper (append-as-you-go, header on first write)
+# ---------------------------------------------------------------------------
+
+def _append_row(csv_path: str, row: dict, fieldnames: list[str]) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(csv_path)), exist_ok=True)
+    exists = os.path.isfile(csv_path)
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        if not exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+BC_FIELDS = [
+    "scheme", "delta_f", "delta_mu", "k",
+    "epsilon", "beta", "beta_epsilon", "L_short", "L_long", "n_pooled",
+    "mean", "std", "skew", "kurtosis_excess", "BC",
+    "mu_at_max", "mu_coex", "n_snapshots", "n_mu_scanned",
+    "mu_reduction", "source_dir",
+]
+
+EPS_C_FIELDS = [
+    "L_short", "L_long", "x_axis", "criticality_estimate",
+    "epsilon_c_estimate", "beta", "method", "fit_uncertainty",
+]
+
+# Per-(Delta mu) criticality rows for the phase-diagram family.
+CRIT_FIELDS = [
+    "scheme", "delta_f", "delta_mu", "k", "L_short", "L_long", "x_axis",
+    "criticality_estimate", "epsilon_c_estimate", "beta", "method", "fit_uncertainty",
+]
+
+
+# ---------------------------------------------------------------------------
+# Step 3 driver - sweep BC across the epsilon sweep for one (scheme, size)
+# ---------------------------------------------------------------------------
+
+def discover_epsilons(base_dir: str, combo_params: dict) -> list[tuple[float, str]]:
+    """Find (epsilon, combo_dir) for every epsilon present for this scheme+size.
+
+    combo_params must contain scheme, delta_f, delta_mu, Lx, Ly (epsilon omitted).
+    """
+    prefix = combo_dir_name({**combo_params, "epsilon": 0.0}).rsplit("epsilon", 1)[0] + "epsilon"
+    found = []
+    for path in sorted(glob.glob(os.path.join(base_dir, prefix + "*"))):
+        if not os.path.isdir(path):
+            continue
+        tag = os.path.basename(path).rsplit("epsilon", 1)[1]
+        try:
+            eps = untag(tag)
+        except ValueError:
+            continue
+        found.append((eps, path))
+    found.sort(key=lambda t: t[0])
+    return found
+
+
+def sweep_bc(
+    base_dir: str,
+    combo_params: dict,
+    out_csv: str,
+    cache_dir: str,
+    *,
+    manage_csv: Optional[str] = None,
+    mu_reduction: str = "max",
+) -> list[dict]:
+    """Steps 1-3 across the epsilon sweep for one (scheme, size); append BC rows.
+
+    For each epsilon the mu-sweep provides several ensemble points. We reduce the
+    sweep to one bimodality number per epsilon:
+      * mu_reduction="max"          -> the MAXIMUM BC over the mu-sweep (default):
+        the most phase-separated ensemble point, analogous to peak-chi. This is
+        the quantity for the BC_max-vs-(beta*epsilon) crossover.
+      * mu_reduction="nearest_coex" -> BC at the single mu dir nearest mu_coex.
+
+    x-axis is beta*epsilon (beta read from the winning mu dir's output.csv,
+    default 1.0). Returns the per-epsilon rows (also appended to out_csv).
+    """
+    rows = []
+    for eps, combo_dir in discover_epsilons(base_dir, combo_params):
+        combo_name = os.path.basename(combo_dir)
+        cp = {**combo_params, "epsilon": eps}
+        mu_coex = resolve_mu_coex(eps, combo_dir, manage_csv=manage_csv, combo_params=cp)
+
+        mu_dirs = enumerate_mu_dirs(combo_dir)
+        if not mu_dirs:
+            print(f"[bimodality] skip eps={eps}: no mu dirs under {combo_dir}", flush=True)
+            continue
+        if mu_reduction == "nearest_coex":
+            mu_dirs = [min(mu_dirs, key=lambda dm: abs(dm[1] - mu_coex))]
+
+        best = None  # winning-mu stats (max BC over the sweep)
+        for mu_dir, mu in mu_dirs:
+            try:
+                arr, meta = cache_column_op(
+                    mu_dir, cache_dir,
+                    epsilon=eps, mu_used=mu, mu_coex=mu_coex, combo_name=combo_name,
+                )
+            except FileNotFoundError:
+                continue  # this mu dir has no snapshots; skip it, keep scanning
+            pooled, n_pooled, L_long = pool_column_op(arr)
+            stats = sarle_bc(pooled)
+            if not np.isfinite(stats["BC"]):
+                continue
+            if best is None or stats["BC"] > best["BC"]:
+                best = {
+                    **stats, "mu": mu, "mu_dir": mu_dir,
+                    "n_pooled": n_pooled, "L_long": L_long,
+                    "n_snapshots": meta["n_snapshots"],
+                }
+        if best is None:
+            print(f"[bimodality] skip eps={eps}: no finite BC over mu-sweep", flush=True)
+            continue
+
+        beta = _read_output_field(best["mu_dir"], "beta") or 1.0
+        row = {
+            "scheme": combo_params["scheme"],
+            "delta_f": combo_params["delta_f"],
+            "delta_mu": combo_params["delta_mu"],
+            "k": combo_params.get("k"),
+            "epsilon": eps,
+            "beta": beta,
+            "beta_epsilon": beta * eps,
+            "L_short": int(combo_params["Ly"]),
+            "L_long": best["L_long"],
+            "n_pooled": best["n_pooled"],
+            "mean": best["mean"],
+            "std": best["std"],
+            "skew": best["skew"],
+            "kurtosis_excess": best["kurtosis_excess"],
+            "BC": best["BC"],
+            "mu_at_max": best["mu"],
+            "mu_coex": mu_coex,
+            "n_snapshots": best["n_snapshots"],
+            "n_mu_scanned": len(mu_dirs),
+            "mu_reduction": mu_reduction,
+            "source_dir": best["mu_dir"],
+        }
+        _append_row(out_csv, row, BC_FIELDS)
+        rows.append(row)
+        print(
+            f"[bimodality] eps={eps:+.4f} beta*eps={beta * eps:+.4f} "
+            f"L={best['L_long']}x{combo_params['Ly']} n_mu={len(mu_dirs)} "
+            f"BC_max={best['BC']:.4f} @mu={best['mu']:+.4f}",
+            flush=True,
+        )
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Step 5 - locate epsilon_c
+# ---------------------------------------------------------------------------
+
+def _sigmoid(x, a, b, x_c, w):
+    # a = high-x (unimodal ~1/3) asymptote, b = low-x (bimodal) plateau;
+    # x_c = inflection point (the criticality estimate), w = crossover width.
+    z = np.clip((x - x_c) / w, -700.0, 700.0)  # avoid exp overflow warnings
+    return a + (b - a) / (1.0 + np.exp(z))
+
+
+def _threshold_crossing(x, bc, level=BC_BIMODAL_CUTOFF):
+    """Linear-interpolated x where BC(x) crosses `level` (descending)."""
+    for i in range(len(x) - 1):
+        y0, y1 = bc[i] - level, bc[i + 1] - level
+        if y0 == 0:
+            return float(x[i])
+        if y0 * y1 < 0:
+            t = y0 / (y0 - y1)
+            return float(x[i] + t * (x[i + 1] - x[i]))
+    return float("nan")
+
+
+def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilon") -> dict:
+    """Estimate the criticality for one size from its BC_max(x) crossover.
+
+    `x_col` is the sweep axis (default "beta_epsilon"; use "epsilon" for BC vs eps).
+    Prefers a sigmoid fit -> criticality = inflection point (uncertainty from the
+    fit covariance); falls back to the BC=5/9 threshold crossing if the fit fails.
+    Also reports epsilon_c_estimate = criticality / mean(beta) so downstream FSS
+    work has epsilon_c even when the x-axis is beta*epsilon.
+    `rows` is a list of BC rows (from sweep_bc or read from the BC CSV).
+    """
+    sel = [r for r in rows
+           if int(float(r["L_long"])) == int(L_long) and np.isfinite(float(r["BC"]))]
+    pts = sorted([(float(r[x_col]), float(r["BC"])) for r in sel], key=lambda t: t[0])
+    if len(pts) < 3:
+        raise ValueError(f"need >=3 finite BC points for L_long={L_long}, got {len(pts)}")
+    x = np.array([p[0] for p in pts])
+    bc = np.array([p[1] for p in pts])
+    L_short = int(float(sel[0]["L_short"]))
+    beta_mean = float(np.mean([float(r.get("beta", 1.0)) for r in sel]))
+
+    method = "sigmoid"
+    x_c = float("nan")
+    unc = float("nan")
+    try:
+        from scipy.optimize import curve_fit
+
+        p0 = [1.0 / 3.0, float(bc.max()), float(np.median(x)),
+              max((x.max() - x.min()) / 10.0, 1e-3)]
+        popt, pcov = curve_fit(_sigmoid, x, bc, p0=p0, maxfev=20000)
+        x_c = float(popt[2])
+        unc = float(np.sqrt(pcov[2, 2])) if np.all(np.isfinite(pcov)) else float("nan")
+        if not (x.min() <= x_c <= x.max()):  # fit ran away -> fall back
+            raise RuntimeError("sigmoid inflection outside sweep range")
+    except Exception as exc:
+        method = "threshold_5_9"
+        x_c = _threshold_crossing(x, bc)
+        unc = float("nan")
+        print(f"[bimodality] sigmoid fit fell back to threshold: {exc}", flush=True)
+
+    eps_c = x_c / beta_mean if (x_col == "beta_epsilon" and beta_mean) else x_c
+    return {
+        "L_short": L_short,
+        "L_long": int(L_long),
+        "x_axis": x_col,
+        "criticality_estimate": x_c,
+        "epsilon_c_estimate": eps_c,
+        "beta": beta_mean,
+        "method": method,
+        "fit_uncertainty": unc,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator - the requested "find criticality of a coex run" function
+# ---------------------------------------------------------------------------
+
+def find_criticality(
+    base_dir: str,
+    combo_params: dict,
+    *,
+    out_dir: str = "criticality",
+    manage_csv: Optional[str] = None,
+    make_plots: bool = True,
+) -> dict:
+    """Full path: coex run data -> epsilon_c for one (scheme, size).
+
+    combo_params: {scheme, delta_f, delta_mu, k, Lx, Ly} (epsilon omitted).
+    Writes <out_dir>/bc_vs_epsilon.csv and appends to <out_dir>/epsilon_c.csv,
+    caches column ops under <out_dir>/cache/column_op/, and (optionally) writes
+    plots. Returns the epsilon_c dict.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    bc_csv = os.path.join(out_dir, "bc_vs_epsilon.csv")
+    eps_c_csv = os.path.join(out_dir, "epsilon_c.csv")
+    cache_dir = os.path.join(out_dir, "cache", "column_op")
+
+    rows = sweep_bc(base_dir, combo_params, bc_csv, cache_dir, manage_csv=manage_csv)
+    if not rows:
+        raise RuntimeError(f"no BC rows produced for {combo_params} under {base_dir}")
+
+    L_long = int(combo_params["Lx"])
+    result = locate_epsilon_c(rows, L_long, x_col="beta_epsilon")
+    _append_row(eps_c_csv, result, EPS_C_FIELDS)
+
+    if make_plots:
+        try:
+            from plot_bimodality import plot_bc_vs_epsilon
+
+            size = f"{int(combo_params['Lx'])}x{int(combo_params['Ly'])}"
+            plot_bc_vs_epsilon(
+                bc_csv, os.path.join(out_dir, f"bc_max_vs_beta_epsilon_{size}.png"),
+                x_col="beta_epsilon", crit=result["criticality_estimate"],
+            )
+        except Exception as exc:  # plotting is non-critical
+            print(f"[bimodality] plotting skipped: {exc}", flush=True)
+
+    print(
+        f"[bimodality] criticality({L_long}x{combo_params['Ly']}) = "
+        f"(beta*eps)_c={result['criticality_estimate']:.4f} "
+        f"+/- {result['fit_uncertainty']}  "
+        f"[epsilon_c={result['epsilon_c_estimate']:.4f}] ({result['method']})",
+        flush=True,
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Phase diagram - a BC_max-vs-(beta*epsilon) curve per delta_mu (one scheme+size)
+# ---------------------------------------------------------------------------
+
+def discover_delta_mus(base_dir: str, scheme: str, delta_f: float,
+                       Lx: int, Ly: int) -> list[float]:
+    """All delta_mu values present on disk for this scheme+delta_f+size.
+
+    Combo dir names are {size}_{scheme}_deltaF{df}_dmu{dmu}_epsilon{eps} (k is
+    not in the path), so we glob the fixed prefix and parse the dmu tag.
+    """
+    prefix = f"{size_tag(Lx, Ly)}_{scheme}_deltaF{param_tag(delta_f)}_dmu"
+    dmus: set[float] = set()
+    for path in glob.glob(os.path.join(base_dir, prefix + "*")):
+        if not os.path.isdir(path):
+            continue
+        tail = os.path.basename(path)[len(prefix):]  # "{dmu_tag}_epsilon{eps_tag}"
+        if "_epsilon" not in tail:
+            continue
+        try:
+            dmus.add(round(untag(tail.split("_epsilon", 1)[0]), 6))
+        except ValueError:
+            continue
+    return sorted(dmus)
+
+
+def phase_diagram(
+    base_dir: str,
+    *,
+    scheme: str,
+    delta_f: float,
+    k: float,
+    Lx: int,
+    Ly: int,
+    delta_mus: Optional[list[float]] = None,
+    out_dir: str = "criticality",
+    manage_csv: Optional[str] = None,
+    mu_reduction: str = "max",
+    make_plots: bool = True,
+) -> list[dict]:
+    """BC_max-vs-(beta*epsilon) curve for each delta_mu at a fixed scheme+size.
+
+    Reproduces the "thermal phase diagram" family plot: one sigmoid per delta_mu,
+    y = max Sarle BC over the mu-sweep, x = beta*epsilon, and the sigmoid
+    inflection is that delta_mu's criticality. If delta_mus is None, every
+    delta_mu present on disk is used.
+
+    Writes <out_dir>/bc_vs_beta_epsilon.csv (all delta_mu, tagged) and
+    <out_dir>/criticality.csv (one row per delta_mu), and the family plot.
+    Returns the list of per-delta_mu criticality dicts.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    bc_csv = os.path.join(out_dir, "bc_vs_beta_epsilon.csv")
+    crit_csv = os.path.join(out_dir, "criticality.csv")
+    cache_dir = os.path.join(out_dir, "cache", "column_op")
+
+    if delta_mus is None:
+        delta_mus = discover_delta_mus(base_dir, scheme, delta_f, Lx, Ly)
+        if not delta_mus:
+            raise RuntimeError(
+                f"no {Lx}x{Ly} {scheme} deltaF={delta_f} combos under {base_dir}"
+            )
+        print(f"[bimodality] discovered delta_mu: {delta_mus}", flush=True)
+
+    results = []
+    for dmu in delta_mus:
+        combo = {"scheme": scheme, "delta_f": delta_f, "delta_mu": dmu,
+                 "k": k, "Lx": Lx, "Ly": Ly}
+        rows = sweep_bc(base_dir, combo, bc_csv, cache_dir,
+                        manage_csv=manage_csv, mu_reduction=mu_reduction)
+        if len(rows) < 3:
+            print(f"[bimodality] dmu={dmu}: only {len(rows)} epsilon points, "
+                  "skipping criticality fit", flush=True)
+            continue
+        res = locate_epsilon_c(rows, int(Lx), x_col="beta_epsilon")
+        res.update({"scheme": scheme, "delta_f": delta_f, "delta_mu": dmu, "k": k})
+        _append_row(crit_csv, res, CRIT_FIELDS)
+        results.append(res)
+        print(
+            f"[bimodality] dmu={dmu:+.3f}: (beta*eps)_c="
+            f"{res['criticality_estimate']:.4f} +/- {res['fit_uncertainty']} "
+            f"({res['method']})",
+            flush=True,
+        )
+
+    if make_plots and results:
+        try:
+            from plot_bimodality import plot_bc_family
+
+            size = f"{Lx}x{Ly}"
+            plot_bc_family(
+                bc_csv, os.path.join(out_dir, f"bc_max_phase_diagram_{size}.png"),
+            )
+        except Exception as exc:  # plotting is non-critical
+            print(f"[bimodality] family plot skipped: {exc}", flush=True)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    import argparse
+
+    p = argparse.ArgumentParser(
+        description="Bimodality-based criticality: max Sarle BC over the mu-sweep "
+                    "vs beta*epsilon, one curve per delta_mu; criticality = "
+                    "sigmoid inflection.",
+    )
+    p.add_argument("--base-dir", required=True,
+                   help="Dir holding the {size}_{scheme}_deltaF..._dmu..._epsilon* combos "
+                        "(e.g. /scratch/.../flex-investigation/results).")
+    p.add_argument("--scheme", default="homo")
+    p.add_argument("--delta-f", type=float, required=True)
+    p.add_argument("--k", type=float, default=1.0,
+                   help="Chemical rate (provenance only in max mode; not in dir name).")
+    p.add_argument("--Lx", type=int, required=True, help="Long axis (e.g. 160).")
+    p.add_argument("--Ly", type=int, required=True, help="Short axis (e.g. 16).")
+    p.add_argument("--delta-mus", type=float, nargs="*", default=None,
+                   help="Explicit delta_mu list; default discovers every one on disk.")
+    p.add_argument("--out-dir", default="criticality")
+    p.add_argument("--manage-csv", default=None,
+                   help="Optional coex manage CSV for mu_coex_FITTED (not needed in max mode).")
+    p.add_argument("--mu-reduction", choices=["max", "nearest_coex"], default="max")
+    p.add_argument("--no-plots", action="store_true")
+    args = p.parse_args()
+
+    results = phase_diagram(
+        args.base_dir,
+        scheme=args.scheme,
+        delta_f=args.delta_f,
+        k=args.k,
+        Lx=args.Lx,
+        Ly=args.Ly,
+        delta_mus=args.delta_mus,
+        out_dir=args.out_dir,
+        manage_csv=args.manage_csv,
+        mu_reduction=args.mu_reduction,
+        make_plots=not args.no_plots,
+    )
+    print(f"\n[bimodality] wrote {len(results)} delta_mu curve(s) to {args.out_dir}/")
+
+
+if __name__ == "__main__":
+    main()
