@@ -281,6 +281,36 @@ def test_run_fss_multisize(tmp_path):
     assert set(df["L_long"]) == {80, 160}
 
 
+def test_nested_scheme3_layout_discovery(tmp_path):
+    """scheme3 layout: base/dmu<X>/results/<combo>. results_roots + discovery
+    must find every delta_mu across the per-dmu results/ subfolders."""
+    base = str(tmp_path / "scheme3")
+    scheme, delta_f, k, Lx, Ly = "negative_drive", 0.0, 1.0, 60, 10
+    rng = np.random.default_rng(31)
+    epsilons = [-2.0, -1.9, -1.8, -1.7, -1.6, -1.5, -1.4]
+    dmu_folders = {"dmu1p0": 1.0, "dmu2p0": 2.0}
+    for folder, dmu in dmu_folders.items():
+        eps_c = -1.9 + 0.1 * dmu
+        for eps in epsilons:
+            cp = {"scheme": scheme, "delta_f": delta_f, "delta_mu": dmu,
+                  "k": k, "Lx": Lx, "Ly": Ly, "epsilon": eps}
+            cdir = os.path.join(base, folder, "results", bm.combo_dir_name(cp))
+            for mu in (-4.5, -4.4):
+                snaps = ([_phase_separated(Lx, Ly, rng) for _ in range(4)]
+                         if eps <= eps_c else
+                         [_homogeneous(Lx, Ly, rng) for _ in range(4)])
+                _write_mu_dir(os.path.join(cdir, "mu_sweeps", mu_dir_name(mu)),
+                              mu, snaps, cp, eps)
+
+    # discovery walks the nested results/ roots
+    assert bm.discover_delta_mus(base, scheme, delta_f, Lx, Ly) == [1.0, 2.0]
+
+    out_dir = str(tmp_path / "out")
+    results = bm.phase_diagram(base, scheme=scheme, delta_f=delta_f, k=k,
+                               Lx=Lx, Ly=Ly, out_dir=out_dir, make_plots=False)
+    assert {r["delta_mu"] for r in results} == {1.0, 2.0}
+
+
 def test_find_criticality_end_to_end(tmp_path):
     """Synthetic sweep: below eps_c -> phase separated (bimodal), above -> homo."""
     base = str(tmp_path / "results")

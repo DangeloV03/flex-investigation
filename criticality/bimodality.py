@@ -360,22 +360,45 @@ CRIT_FIELDS = [
 # Step 3 driver - sweep BC across the epsilon sweep for one (scheme, size)
 # ---------------------------------------------------------------------------
 
+def results_roots(base_dir: str) -> list[str]:
+    """Directories under base_dir that directly hold combo folders.
+
+    Handles two on-disk layouts transparently:
+      * flat campaign:  base_dir holds {size}_{scheme}_..._epsilon* combos
+        (the `results/` layout) -> [base_dir].
+      * nested campaign: base_dir holds per-delta_mu subdirs each with their own
+        `results/` (the `scheme3/dmu*/results/` layout) -> [dmu1p0/results, ...].
+    So --base-dir can point at either `results` or `scheme3` and Just Work.
+    """
+    roots: list[str] = []
+    if glob.glob(os.path.join(base_dir, "*_epsilon*")):  # combos live here directly
+        roots.append(base_dir)
+    if os.path.isdir(os.path.join(base_dir, "results")):  # single nested results/
+        roots.append(os.path.join(base_dir, "results"))
+    for r in sorted(glob.glob(os.path.join(base_dir, "*", "results"))):  # dmu*/results
+        if os.path.isdir(r):
+            roots.append(r)
+    return list(dict.fromkeys(roots)) or [base_dir]
+
+
 def discover_epsilons(base_dir: str, combo_params: dict) -> list[tuple[float, str]]:
     """Find (epsilon, combo_dir) for every epsilon present for this scheme+size.
 
     combo_params must contain scheme, delta_f, delta_mu, Lx, Ly (epsilon omitted).
+    Searches every results root (flat or nested layout, see results_roots).
     """
     prefix = combo_dir_name({**combo_params, "epsilon": 0.0}).rsplit("epsilon", 1)[0] + "epsilon"
     found = []
-    for path in sorted(glob.glob(os.path.join(base_dir, prefix + "*"))):
-        if not os.path.isdir(path):
-            continue
-        tag = os.path.basename(path).rsplit("epsilon", 1)[1]
-        try:
-            eps = untag(tag)
-        except ValueError:
-            continue
-        found.append((eps, path))
+    for root in results_roots(base_dir):
+        for path in sorted(glob.glob(os.path.join(root, prefix + "*"))):
+            if not os.path.isdir(path):
+                continue
+            tag = os.path.basename(path).rsplit("epsilon", 1)[1]
+            try:
+                eps = untag(tag)
+            except ValueError:
+                continue
+            found.append((eps, path))
     found.sort(key=lambda t: t[0])
     return found
 
@@ -641,16 +664,17 @@ def discover_delta_mus(base_dir: str, scheme: str, delta_f: float,
     """
     prefix = f"{size_tag(Lx, Ly)}_{scheme}_deltaF{param_tag(delta_f)}_dmu"
     dmus: set[float] = set()
-    for path in glob.glob(os.path.join(base_dir, prefix + "*")):
-        if not os.path.isdir(path):
-            continue
-        tail = os.path.basename(path)[len(prefix):]  # "{dmu_tag}_epsilon{eps_tag}"
-        if "_epsilon" not in tail:
-            continue
-        try:
-            dmus.add(round(untag(tail.split("_epsilon", 1)[0]), 6))
-        except ValueError:
-            continue
+    for root in results_roots(base_dir):
+        for path in glob.glob(os.path.join(root, prefix + "*")):
+            if not os.path.isdir(path):
+                continue
+            tail = os.path.basename(path)[len(prefix):]  # "{dmu_tag}_epsilon{eps_tag}"
+            if "_epsilon" not in tail:
+                continue
+            try:
+                dmus.add(round(untag(tail.split("_epsilon", 1)[0]), 6))
+            except ValueError:
+                continue
     return sorted(dmus)
 
 
