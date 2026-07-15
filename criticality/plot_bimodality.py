@@ -91,6 +91,33 @@ def plot_bc_family(bc_csv: str, out_png: str, *, x_col: str = "beta_epsilon") ->
     return out_png
 
 
+BC_UNIMODAL = 1.0 / 3.0
+BC_BIMODAL_CUTOFF = 5.0 / 9.0
+
+
+def _phi_col_bin_edges(Ly: int | None, *, bins: int = 60) -> int | np.ndarray:
+    """Discrete bin edges for averaged short-axis spins, or a fixed bin count."""
+    if Ly and Ly > 0:
+        step = 2.0 / Ly
+        pad = step / 2.0
+        return np.arange(-1.0 - pad, 1.0 + step + pad, step)
+    return bins
+
+
+def _panel_regime(d: dict) -> str:
+    if d["BC"] < BC_BIMODAL_CUTOFF:
+        return "homogeneous"
+    balance = d.get("balance")
+    if balance is None:
+        frac_liq = d.get("frac_liq")
+        frac_gas = d.get("frac_gas")
+        if frac_liq is not None and frac_gas is not None:
+            balance = min(frac_liq, frac_gas)
+    if balance is not None and balance >= 0.15:
+        return "phase-separated"
+    return "near criticality"
+
+
 def plot_pooled_histograms(data: list[dict], out_png: str, *, bins: int = 60,
                            title: str | None = None) -> str:
     """Figure 1: side-by-side P(phi_col) histograms at several epsilon (one size).
@@ -102,23 +129,31 @@ def plot_pooled_histograms(data: list[dict], out_png: str, *, bins: int = 60,
     """
     data = sorted(data, key=lambda d: d["epsilon"])
     n = len(data)
-    fig, axes = plt.subplots(1, n, figsize=(3.2 * n, 3.2), sharex=True)
+    fig, axes = plt.subplots(1, n, figsize=(3.4 * n, 3.4), sharex=True)
     if n == 1:
         axes = [axes]
     for ax, d in zip(axes, data):
         pooled = np.asarray(d["pooled"]).reshape(-1)
-        ax.hist(pooled, bins=bins, density=True, color="#4C72B0", alpha=0.75,
-                edgecolor="#2F4A7A", linewidth=0.6)
+        hist_bins = _phi_col_bin_edges(d.get("Ly"), bins=bins)
+        ax.hist(
+            pooled, bins=hist_bins, density=True, histtype="stepfilled",
+            color="#4C72B0", alpha=0.55, edgecolor="#2F4A7A", linewidth=0.8,
+        )
+        ax.axvline(-1.0, ls="--", c="#888888", lw=0.8, alpha=0.8)
+        ax.axvline(1.0, ls="--", c="#888888", lw=0.8, alpha=0.8)
+        regime = _panel_regime(d)
         ax.set_title(
-            rf"$\epsilon={d['epsilon']:.3f}$" + "\n" + rf"BC$={d['BC']:.2f}$",
+            rf"$\epsilon={d['epsilon']:.3f}$" + "\n"
+            + rf"BC$={d['BC']:.2f}$, {regime.replace('-', ' ')}",
             fontsize=10,
         )
         ax.set_xlim(-1.05, 1.05)
+        ax.set_ylim(bottom=0)
         ax.set_ylabel(r"$P(\phi_{col})$")
         ax.tick_params(labelsize=8)
     axes[-1].set_xlabel(r"$\phi_{col}$  (liquid $\to +1$, gas $\to -1$)")
     if title:
-        fig.suptitle(title, fontsize=11, y=1.02)
+        fig.suptitle(title, fontsize=11, y=1.03)
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
     fig.savefig(out_png, dpi=150, bbox_inches="tight")

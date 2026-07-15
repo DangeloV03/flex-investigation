@@ -222,7 +222,8 @@ def test_histogram_data_picks_coexistence_mu(tmp_path):
     _write_mu_dir(os.path.join(cdir, "mu_sweeps", mu_dir_name(0.0)),
                   0.0, [_phase_separated(60, 10, rng) for _ in range(5)], cp, -2.0)
 
-    data = bm.histogram_data(base, combo, [-2.0], str(tmp_path / "cache"))
+    data = bm.histogram_data(base, combo, [-2.0], str(tmp_path / "cache"),
+                             mu_reduction="max")
     assert len(data) == 1
     d = data[0]
     assert d["mu"] == pytest.approx(0.0)               # picked the bimodal mu
@@ -230,6 +231,32 @@ def test_histogram_data_picks_coexistence_mu(tmp_path):
     assert d["pooled"].ndim == 1
     # bimodal: column phi clusters near +1 (liquid) and -1 (gas)
     assert d["pooled"].max() > 0.5 and d["pooled"].min() < -0.5
+
+
+def test_histogram_data_balanced_prefers_even_phase_fractions(tmp_path):
+    """balanced mu selection should avoid a skewed all-gas snapshot when a more
+    even phase-separated mu exists with comparable BC."""
+    combo = {"scheme": "homo", "delta_f": 0.0, "delta_mu": 1.0, "k": 1.0,
+             "Lx": 60, "Ly": 10}
+    base = str(tmp_path / "results")
+    rng = np.random.default_rng(22)
+    cp = {**combo, "epsilon": -2.0}
+    cdir = os.path.join(base, bm.combo_dir_name(cp))
+
+    skewed = np.full((60, 10), bm.EMPTY, dtype=np.uint32)
+    skewed[:4, :] = bm.BONDING
+    balanced = _phase_separated(60, 10, rng)
+
+    _write_mu_dir(os.path.join(cdir, "mu_sweeps", mu_dir_name(-0.2)),
+                  -0.2, [skewed for _ in range(5)], cp, -2.0)
+    _write_mu_dir(os.path.join(cdir, "mu_sweeps", mu_dir_name(0.0)),
+                  0.0, [balanced for _ in range(5)], cp, -2.0)
+
+    data = bm.histogram_data(base, combo, [-2.0], str(tmp_path / "cache"),
+                             mu_reduction="balanced")
+    d = data[0]
+    assert d["mu"] == pytest.approx(0.0)
+    assert d["balance"] > 0.2
 
 
 def test_make_histogram_figure_writes_png(tmp_path):

@@ -412,16 +412,19 @@ def _best_mu_over_sweep(
     combo_name: str,
     mu_dirs: Optional[list[tuple[str, float]]] = None,
     keep_pooled: bool = False,
+    selection: str = "max",
 ) -> Optional[dict]:
-    """Scan the mu-sweep and return the stats dict of the mu with the MAX BC.
+    """Scan the mu-sweep and return the stats dict for one selected mu.
 
     Shared by sweep_bc (BC_max curve) and pooled_at_coexistence (histograms) so
-    both always pick the same coexistence mu. Returns None if no mu dir yields a
-    finite BC. With keep_pooled=True the winning pooled array is included.
+    both can pick the same mu when selection="max". selection="balanced" prefers
+    the mu with the most even liquid/gas column fractions among bimodal points
+    (for illustration histograms). Returns None if no mu dir yields a finite BC.
+    With keep_pooled=True the winning pooled array is included.
     """
     if mu_dirs is None:
         mu_dirs = enumerate_mu_dirs(combo_dir)
-    best = None
+    candidates = []
     for mu_dir, mu in mu_dirs:
         try:
             arr, meta = cache_column_op(
@@ -434,15 +437,26 @@ def _best_mu_over_sweep(
         stats = sarle_bc(pooled)
         if not np.isfinite(stats["BC"]):
             continue
-        if best is None or stats["BC"] > best["BC"]:
-            best = {
-                **stats, "mu": mu, "mu_dir": mu_dir,
-                "n_pooled": n_pooled, "L_long": L_long,
-                "n_snapshots": meta["n_snapshots"],
-            }
-            if keep_pooled:
-                best["pooled"] = pooled
-    return best
+        frac_liq = float((pooled > 0.75).mean())
+        frac_gas = float((pooled < -0.75).mean())
+        cand = {
+            **stats, "mu": mu, "mu_dir": mu_dir,
+            "n_pooled": n_pooled, "L_long": L_long, "Ly": meta["Ly"],
+            "n_snapshots": meta["n_snapshots"],
+            "frac_liq": frac_liq, "frac_gas": frac_gas,
+            "balance": min(frac_liq, frac_gas),
+        }
+        if keep_pooled:
+            cand["pooled"] = pooled
+        candidates.append(cand)
+
+    if not candidates:
+        return None
+    if selection == "balanced":
+        strong = [c for c in candidates if c["BC"] >= BC_BIMODAL_CUTOFF]
+        pool = strong if strong else candidates
+        return max(pool, key=lambda c: (c["balance"], c["BC"]))
+    return max(candidates, key=lambda c: c["BC"])
 
 
 def sweep_bc(
@@ -482,6 +496,7 @@ def sweep_bc(
         best = _best_mu_over_sweep(
             combo_dir, cache_dir,
             epsilon=eps, mu_coex=mu_coex, combo_name=combo_name, mu_dirs=mu_dirs,
+            selection=mu_reduction if mu_reduction != "nearest_coex" else "max",
         )
         if best is None:
             print(f"[bimodality] skip eps={eps}: no finite BC over mu-sweep", flush=True)
@@ -836,6 +851,7 @@ def pooled_at_coexistence(
         combo_dir, cache_dir,
         epsilon=eps, mu_coex=mu_coex, combo_name=os.path.basename(combo_dir),
         mu_dirs=mu_dirs, keep_pooled=True,
+        selection=mu_reduction if mu_reduction != "nearest_coex" else "max",
     )
     if best is None:
         raise ValueError(f"no finite BC at eps={eps} for {combo_dir}")
@@ -849,6 +865,7 @@ def histogram_data(
     cache_dir: str,
     *,
     manage_csv: Optional[str] = None,
+    mu_reduction: str = "balanced",
 ) -> list[dict]:
     """P(phi_col) samples at coexistence for each requested epsilon (nearest
     available), for a fixed (scheme, size, delta_mu). combo_params omits epsilon.
@@ -860,14 +877,19 @@ def histogram_data(
     for target in epsilons:
         eps = min(avail, key=lambda e: abs(e - target))
         best = pooled_at_coexistence(
-            base_dir, {**combo_params, "epsilon": eps}, cache_dir, manage_csv=manage_csv,
+            base_dir, {**combo_params, "epsilon": eps}, cache_dir,
+            manage_csv=manage_csv, mu_reduction=mu_reduction,
         )
         data.append({
             "epsilon": eps, "pooled": best["pooled"], "BC": best["BC"],
-            "mu": best["mu"], "n_pooled": best["n_pooled"],
+            "mu": best["mu"], "n_pooled": best["n_pooled"], "Ly": best.get("Ly"),
+            "frac_liq": best.get("frac_liq"), "frac_gas": best.get("frac_gas"),
+            "balance": best.get("balance"),
         })
         print(f"[bimodality] hist eps={eps:+.3f} BC={best['BC']:.3f} "
-              f"n_pooled={best['n_pooled']} @mu={best['mu']:+.3f}", flush=True)
+              f"n_pooled={best['n_pooled']} @mu={best['mu']:+.3f} "
+              f"liq={best.get('frac_liq', 0):.0%} gas={best.get('frac_gas', 0):.0%}",
+              flush=True)
     return data
 
 
@@ -879,11 +901,15 @@ def make_histogram_figure(
     *,
     cache_dir: Optional[str] = None,
     manage_csv: Optional[str] = None,
+    mu_reduction: str = "balanced",
 ) -> str:
     """Figure 1: side-by-side P(phi_col) histograms at several epsilon for one size."""
     if cache_dir is None:
         cache_dir = os.path.join(os.path.dirname(out_png) or ".", "cache", "column_op")
-    data = histogram_data(base_dir, combo_params, epsilons, cache_dir, manage_csv=manage_csv)
+    data = histogram_data(
+        base_dir, combo_params, epsilons, cache_dir,
+        manage_csv=manage_csv, mu_reduction=mu_reduction,
+    )
 
     from plot_bimodality import plot_pooled_histograms
 
@@ -984,7 +1010,10 @@ def _add_common(sp) -> None:
     sp.add_argument("--out-dir", default="criticality")
     sp.add_argument("--manage-csv", default=None,
                     help="Optional coex manage CSV for mu_coex_FITTED (not needed in max mode).")
-    sp.add_argument("--mu-reduction", choices=["max", "nearest_coex"], default="max")
+    sp.add_argument("--mu-reduction", choices=["max", "nearest_coex", "balanced"],
+                    default="max",
+                    help="How to pick one mu per epsilon: max BC (curves), "
+                         "nearest mu_coex, or balanced liquid/gas fractions (histograms).")
 
 
 def main() -> None:
@@ -1008,6 +1037,7 @@ def main() -> None:
     # histograms (Figure 1): P(phi_col) at several epsilon, one size + delta_mu.
     hg = sub.add_parser("histograms", help="Figure 1: P(phi_col) at several epsilon")
     _add_common(hg)
+    hg.set_defaults(mu_reduction="balanced")
     hg.add_argument("--Lx", type=int, required=True)
     hg.add_argument("--Ly", type=int, required=True)
     hg.add_argument("--delta-mu", type=float, required=True)
@@ -1053,6 +1083,7 @@ def main() -> None:
             args.base_dir, combo, args.epsilons, out_png,
             cache_dir=os.path.join(args.out_dir, "cache", "column_op"),
             manage_csv=args.manage_csv,
+            mu_reduction=args.mu_reduction,
         )
         print(f"\n[bimodality] wrote histogram figure {out_png}")
 
