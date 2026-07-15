@@ -322,6 +322,32 @@ def sarle_bc(pooled: np.ndarray) -> dict:
     }
 
 
+def bc_bootstrap_error(arr: np.ndarray, *, n_boot: int = 200, seed: int = 0) -> float:
+    """1-sigma bootstrap error on Sarle's BC for a (n_snapshots, Lx) column-op array.
+
+    Resamples whole SNAPSHOTS (rows) with replacement, not individual columns:
+    the independent units are the replicas, while columns within a snapshot are
+    spatially correlated (the interface is one connected object), so a naive
+    per-value bootstrap would understate the error. Returns the std of BC over
+    n_boot resamples; NaN if there are fewer than 2 snapshots.
+    """
+    arr = np.asarray(arr, dtype=float)
+    n = arr.shape[0]
+    if n < 2:
+        return float("nan")
+    rng = np.random.default_rng(seed)
+    bcs = []
+    for _ in range(n_boot):
+        pooled = arr[rng.integers(0, n, size=n)].reshape(-1)
+        try:
+            b = sarle_bc(pooled)["BC"]
+        except ValueError:
+            continue
+        if np.isfinite(b):
+            bcs.append(b)
+    return float(np.std(bcs, ddof=1)) if len(bcs) > 1 else float("nan")
+
+
 # ---------------------------------------------------------------------------
 # CSV helper (append-as-you-go, header on first write)
 # ---------------------------------------------------------------------------
@@ -339,7 +365,7 @@ def _append_row(csv_path: str, row: dict, fieldnames: list[str]) -> None:
 BC_FIELDS = [
     "scheme", "delta_f", "delta_mu", "k",
     "epsilon", "beta", "beta_epsilon", "L_short", "L_long", "n_pooled",
-    "mean", "std", "skew", "kurtosis_excess", "BC",
+    "mean", "std", "skew", "kurtosis_excess", "BC", "BC_err",
     "mu_at_max", "mu_coex", "n_snapshots", "n_mu_scanned",
     "mu_reduction", "source_dir",
 ]
@@ -413,6 +439,7 @@ def _best_mu_over_sweep(
     mu_dirs: Optional[list[tuple[str, float]]] = None,
     keep_pooled: bool = False,
     selection: str = "max",
+    n_boot: int = 200,
 ) -> Optional[dict]:
     """Scan the mu-sweep and return the stats dict for one selected mu.
 
@@ -420,7 +447,8 @@ def _best_mu_over_sweep(
     both can pick the same mu when selection="max". selection="balanced" prefers
     the mu with the most even liquid/gas column fractions among bimodal points
     (for illustration histograms). Returns None if no mu dir yields a finite BC.
-    With keep_pooled=True the winning pooled array is included.
+    The winner also carries a bootstrap error 'BC_err' (resampling snapshots);
+    with keep_pooled=True the winning pooled array is included.
     """
     if mu_dirs is None:
         mu_dirs = enumerate_mu_dirs(combo_dir)
@@ -440,7 +468,7 @@ def _best_mu_over_sweep(
         frac_liq = float((pooled > 0.75).mean())
         frac_gas = float((pooled < -0.75).mean())
         cand = {
-            **stats, "mu": mu, "mu_dir": mu_dir,
+            **stats, "mu": mu, "mu_dir": mu_dir, "arr": arr,
             "n_pooled": n_pooled, "L_long": L_long, "Ly": meta["Ly"],
             "n_snapshots": meta["n_snapshots"],
             "frac_liq": frac_liq, "frac_gas": frac_gas,
@@ -455,8 +483,12 @@ def _best_mu_over_sweep(
     if selection == "balanced":
         strong = [c for c in candidates if c["BC"] >= BC_BIMODAL_CUTOFF]
         pool = strong if strong else candidates
-        return max(pool, key=lambda c: (c["balance"], c["BC"]))
-    return max(candidates, key=lambda c: c["BC"])
+        winner = max(pool, key=lambda c: (c["balance"], c["BC"]))
+    else:
+        winner = max(candidates, key=lambda c: c["BC"])
+    # bootstrap error only for the winning mu (cheap: one point per epsilon)
+    winner["BC_err"] = bc_bootstrap_error(winner.pop("arr"), n_boot=n_boot)
+    return winner
 
 
 def sweep_bc(
@@ -519,6 +551,7 @@ def sweep_bc(
             "skew": best["skew"],
             "kurtosis_excess": best["kurtosis_excess"],
             "BC": best["BC"],
+            "BC_err": best.get("BC_err"),
             "mu_at_max": best["mu"],
             "mu_coex": mu_coex,
             "n_snapshots": best["n_snapshots"],
@@ -572,13 +605,24 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
     """
     sel = [r for r in rows
            if int(float(r["L_long"])) == int(L_long) and np.isfinite(float(r["BC"]))]
-    pts = sorted([(float(r[x_col]), float(r["BC"])) for r in sel], key=lambda t: t[0])
+
+    def _err(r):
+        try:
+            return float(r.get("BC_err"))
+        except (TypeError, ValueError):
+            return float("nan")
+
+    pts = sorted([(float(r[x_col]), float(r["BC"]), _err(r)) for r in sel],
+                 key=lambda t: t[0])
     if len(pts) < 3:
         raise ValueError(f"need >=3 finite BC points for L_long={L_long}, got {len(pts)}")
     x = np.array([p[0] for p in pts])
     bc = np.array([p[1] for p in pts])
+    bc_err = np.array([p[2] for p in pts])
     L_short = int(float(sel[0]["L_short"]))
     beta_mean = float(np.mean([float(r.get("beta", 1.0)) for r in sel]))
+    # weight the fit by the bootstrap errors when all are present and positive
+    sigma = bc_err if np.all(np.isfinite(bc_err) & (bc_err > 0)) else None
 
     method = "sigmoid"
     x_c = float("nan")
@@ -588,7 +632,8 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
 
         p0 = [1.0 / 3.0, float(bc.max()), float(np.median(x)),
               max((x.max() - x.min()) / 10.0, 1e-3)]
-        popt, pcov = curve_fit(_sigmoid, x, bc, p0=p0, maxfev=20000)
+        popt, pcov = curve_fit(_sigmoid, x, bc, p0=p0, sigma=sigma,
+                               absolute_sigma=sigma is not None, maxfev=20000)
         x_c = float(popt[2])
         unc = float(np.sqrt(pcov[2, 2])) if np.all(np.isfinite(pcov)) else float("nan")
         if not (x.min() <= x_c <= x.max()):  # fit ran away -> fall back

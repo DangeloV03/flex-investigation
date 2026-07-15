@@ -45,7 +45,9 @@ def plot_bc_vs_epsilon(
     for L_long, sub in df.groupby("L_long"):
         sub = sub.sort_values(x_col)
         L_short = int(sub["L_short"].iloc[0])
-        ax.plot(sub[x_col], sub["BC"], "o-", label=f"{int(L_long)}x{L_short}")
+        yerr = sub["BC_err"] if "BC_err" in sub.columns else None
+        ax.errorbar(sub[x_col], sub["BC"], yerr=yerr, fmt="o-", capsize=2,
+                    label=f"{int(L_long)}x{L_short}")
     ax.axhline(BC_UNIMODAL, ls=":", c="grey", lw=1, label="1/3 (Gaussian)")
     ax.axhline(BC_BIMODAL_CUTOFF, ls="--", c="grey", lw=1, label="5/9 (cutoff)")
     if crit is not None and np.isfinite(crit):
@@ -77,7 +79,9 @@ def plot_bc_family(bc_csv: str, out_png: str, *, x_col: str = "beta_epsilon") ->
         else:
             dmu = keys[0] if isinstance(keys, tuple) else keys
             label = f"$\\Delta\\mu$={dmu}"
-        ax.plot(sub[x_col], sub["BC"], "o-", ms=4, label=label)
+        yerr = sub["BC_err"] if "BC_err" in sub.columns else None
+        ax.errorbar(sub[x_col], sub["BC"], yerr=yerr, fmt="o-", ms=4, capsize=2,
+                    label=label)
     ax.axhline(BC_UNIMODAL, ls=":", c="grey", lw=1)
     ax.axhline(BC_BIMODAL_CUTOFF, ls="--", c="grey", lw=1)
     ax.set_xlabel(xlabel)

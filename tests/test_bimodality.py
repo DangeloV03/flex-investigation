@@ -170,6 +170,29 @@ def test_sweep_bc_max_over_mu(tmp_path):
     assert r["beta_epsilon"] == pytest.approx(2.0 * -2.0)  # beta*epsilon
 
 
+def test_bc_bootstrap_error():
+    rng = np.random.default_rng(0)
+    arr = np.concatenate([np.full((4, 50), -1.0), np.full((4, 50), 1.0)]) \
+        + rng.normal(0, 0.05, size=(8, 50))
+    err = bm.bc_bootstrap_error(arr, n_boot=100)
+    assert np.isfinite(err) and err >= 0.0
+    assert np.isnan(bm.bc_bootstrap_error(arr[:1]))  # <2 snapshots -> NaN
+
+
+def test_sweep_bc_writes_error_bar(tmp_path):
+    combo = {"scheme": "homo", "delta_f": 0.0, "delta_mu": 1.0, "k": 1.0,
+             "Lx": 60, "Ly": 10}
+    cp = {**combo, "epsilon": -2.0}
+    base = str(tmp_path / "results")
+    combo_dir = os.path.join(base, bm.combo_dir_name(cp))
+    rng = np.random.default_rng(9)
+    _write_mu_dir(os.path.join(combo_dir, "mu_sweeps", mu_dir_name(0.0)),
+                  0.0, [_phase_separated(60, 10, rng) for _ in range(8)], cp, -2.0)
+    rows = bm.sweep_bc(base, combo, str(tmp_path / "bc.csv"), str(tmp_path / "cache"))
+    assert "BC_err" in rows[0]
+    assert np.isfinite(rows[0]["BC_err"]) and rows[0]["BC_err"] >= 0.0
+
+
 def test_phase_diagram_family_over_dmu(tmp_path):
     """A BC_max-vs-(beta*epsilon) curve per delta_mu, with each curve's crossover
     shifted by delta_mu (the thermal-phase-diagram family plot)."""
