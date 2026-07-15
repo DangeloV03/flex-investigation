@@ -93,28 +93,34 @@ def plot_bc_family(bc_csv: str, out_png: str, *, x_col: str = "beta_epsilon") ->
 
 def plot_pooled_histograms(data: list[dict], out_png: str, *, bins: int = 60,
                            title: str | None = None) -> str:
-    """Figure 1: overlay P(phi_col) histograms at several epsilon (one size).
+    """Figure 1: side-by-side P(phi_col) histograms at several epsilon (one size).
 
     `data` is a list of dicts (from bimodality.histogram_data), each with:
       'epsilon', 'pooled' (1D column-op sample at coexistence), and 'BC'.
-    Curves are ordered and colored by epsilon so the bimodal (two humps, low
-    epsilon) -> unimodal (one hump, high epsilon) change reads left-to-right.
+    Panels are ordered left-to-right by epsilon so the bimodal (two humps, low
+    epsilon) -> unimodal (one hump, high epsilon) change is easy to read.
     """
     data = sorted(data, key=lambda d: d["epsilon"])
-    cmap = plt.get_cmap("viridis")
-    n = max(len(data) - 1, 1)
-    fig, ax = plt.subplots(figsize=(6, 4))
-    for i, d in enumerate(data):
+    n = len(data)
+    fig, axes = plt.subplots(1, n, figsize=(3.2 * n, 3.2), sharex=True)
+    if n == 1:
+        axes = [axes]
+    for ax, d in zip(axes, data):
         pooled = np.asarray(d["pooled"]).reshape(-1)
-        ax.hist(pooled, bins=bins, density=True, histtype="step", lw=1.8,
-                color=cmap(i / n),
-                label=f"$\\epsilon$={d['epsilon']:.3f}  (BC={d['BC']:.2f})")
-    ax.set_xlabel(r"$\phi_{col}$  (liquid $\to +1$, gas $\to -1$)")
-    ax.set_ylabel(r"$P(\phi_{col})$")
-    ax.set_title(title or r"Column order-parameter distribution")
-    ax.legend(fontsize=8)
+        ax.hist(pooled, bins=bins, density=True, color="#4C72B0", alpha=0.75,
+                edgecolor="#2F4A7A", linewidth=0.6)
+        ax.set_title(
+            rf"$\epsilon={d['epsilon']:.3f}$" + "\n" + rf"BC$={d['BC']:.2f}$",
+            fontsize=10,
+        )
+        ax.set_xlim(-1.05, 1.05)
+        ax.set_ylabel(r"$P(\phi_{col})$")
+        ax.tick_params(labelsize=8)
+    axes[-1].set_xlabel(r"$\phi_{col}$  (liquid $\to +1$, gas $\to -1$)")
+    if title:
+        fig.suptitle(title, fontsize=11, y=1.02)
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
-    fig.savefig(out_png, dpi=150)
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return out_png

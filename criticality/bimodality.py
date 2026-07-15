@@ -880,7 +880,7 @@ def make_histogram_figure(
     cache_dir: Optional[str] = None,
     manage_csv: Optional[str] = None,
 ) -> str:
-    """Figure 1: overlaid P(phi_col) histograms at several epsilon for one size."""
+    """Figure 1: side-by-side P(phi_col) histograms at several epsilon for one size."""
     if cache_dir is None:
         cache_dir = os.path.join(os.path.dirname(out_png) or ".", "cache", "column_op")
     data = histogram_data(base_dir, combo_params, epsilons, cache_dir, manage_csv=manage_csv)
