@@ -311,6 +311,28 @@ def test_nested_scheme3_layout_discovery(tmp_path):
     assert {r["delta_mu"] for r in results} == {1.0, 2.0}
 
 
+def test_inspect_coverage_reports_step(tmp_path):
+    """inspect_coverage reports the epsilon grid step and flags coarse grids."""
+    base = str(tmp_path / "results")
+    combo = {"scheme": "homo", "delta_f": 0.0, "delta_mu": 1.0, "k": 1.0,
+             "Lx": 60, "Ly": 10}
+    rng = np.random.default_rng(41)
+    # a coarse 0.1 grid
+    for eps in (-2.0, -1.9, -1.8, -1.7):
+        cp = {**combo, "epsilon": round(eps, 4)}
+        cdir = os.path.join(base, bm.combo_dir_name(cp))
+        _write_mu_dir(os.path.join(cdir, "mu_sweeps", mu_dir_name(0.0)),
+                      0.0, [_phase_separated(60, 10, rng)], cp, round(eps, 4))
+
+    rep = bm.inspect_coverage(base, scheme="homo", delta_f=0.0, k=1.0,
+                              Lx=60, Ly=10, ref_step=0.005)
+    assert len(rep) == 1
+    r = rep[0]
+    assert r["n_eps"] == 4
+    assert r["step_min"] == pytest.approx(0.1, abs=1e-6)
+    assert r["as_fine_as_ref"] is False        # 0.1 is coarser than 0.005
+
+
 def test_find_criticality_end_to_end(tmp_path):
     """Synthetic sweep: below eps_c -> phase separated (bimodal), above -> homo."""
     base = str(tmp_path / "results")

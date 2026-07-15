@@ -678,6 +678,61 @@ def discover_delta_mus(base_dir: str, scheme: str, delta_f: float,
     return sorted(dmus)
 
 
+# ---------------------------------------------------------------------------
+# Data-quality check - is the epsilon grid fine enough near the crossover?
+# ---------------------------------------------------------------------------
+
+def inspect_coverage(
+    base_dir: str,
+    *,
+    scheme: str,
+    delta_f: float,
+    k: float,
+    Lx: int,
+    Ly: int,
+    delta_mus: Optional[list[float]] = None,
+    ref_step: float = 0.005,
+) -> list[dict]:
+    """Report the epsilon grid per delta_mu (count, range, step min/median/max).
+
+    `ref_step` is the reference spacing to compare against (default 0.005, the
+    susceptibility sweep's step). Flags any delta_mu whose finest step is coarser
+    than ref_step so you can see where the coex grid under-resolves the crossover.
+    """
+    if delta_mus is None:
+        delta_mus = discover_delta_mus(base_dir, scheme, delta_f, Lx, Ly)
+    if not delta_mus:
+        print(f"[inspect] no {Lx}x{Ly} {scheme} deltaF={delta_f} combos under {base_dir}",
+              flush=True)
+        return []
+
+    report = []
+    print(f"[inspect] reference step = {ref_step} (susceptibility sweep)", flush=True)
+    for dmu in delta_mus:
+        cp = {"scheme": scheme, "delta_f": delta_f, "delta_mu": dmu,
+              "k": k, "Lx": Lx, "Ly": Ly}
+        eps = sorted(e for e, _ in discover_epsilons(base_dir, cp))
+        if not eps:
+            print(f"[inspect] dmu={dmu:+.2f}: no epsilons found", flush=True)
+            continue
+        d = np.diff(eps) if len(eps) > 1 else np.array([float("nan")])
+        step_min = float(np.min(d))
+        info = {
+            "delta_mu": dmu, "n_eps": len(eps),
+            "eps_min": eps[0], "eps_max": eps[-1],
+            "step_min": step_min, "step_median": float(np.median(d)),
+            "step_max": float(np.max(d)),
+            "as_fine_as_ref": bool(step_min <= ref_step + 1e-9),
+        }
+        report.append(info)
+        flag = "OK " if info["as_fine_as_ref"] else "COARSE"
+        print(f"[inspect] dmu={dmu:+.2f}  n_eps={len(eps):3d}  "
+              f"range=[{eps[0]:+.3f},{eps[-1]:+.3f}]  "
+              f"step min/med/max={step_min:.4f}/{np.median(d):.4f}/{np.max(d):.4f}"
+              f"  [{flag}]", flush=True)
+    return report
+
+
 def phase_diagram(
     base_dir: str,
     *,
@@ -967,6 +1022,16 @@ def main() -> None:
     fs.add_argument("--delta-mus", type=float, nargs="+", required=True,
                     help="delta_mu values (missing size/delta_mu combos are skipped).")
 
+    # inspect: report the epsilon grid fineness per delta_mu (data-quality check).
+    ins = sub.add_parser("inspect", help="report epsilon grid coverage/step per delta_mu")
+    _add_common(ins)
+    ins.add_argument("--Lx", type=int, required=True)
+    ins.add_argument("--Ly", type=int, required=True)
+    ins.add_argument("--delta-mus", type=float, nargs="*", default=None,
+                     help="Explicit delta_mu list; default discovers every one on disk.")
+    ins.add_argument("--ref-step", type=float, default=0.005,
+                     help="Reference epsilon step to compare against (default 0.005).")
+
     args = p.parse_args()
 
     if args.mode == "phase-diagram":
@@ -1000,6 +1065,12 @@ def main() -> None:
         )
         print(f"\n[bimodality] wrote {len(results)} (size,delta_mu) criticality "
               f"row(s) to {args.out_dir}/")
+
+    elif args.mode == "inspect":
+        inspect_coverage(
+            args.base_dir, scheme=args.scheme, delta_f=args.delta_f, k=args.k,
+            Lx=args.Lx, Ly=args.Ly, delta_mus=args.delta_mus, ref_step=args.ref_step,
+        )
 
 
 if __name__ == "__main__":
