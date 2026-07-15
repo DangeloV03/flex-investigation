@@ -10,8 +10,6 @@ Sanity-check plots for the bimodality-based epsilon_c pipeline (bimodality.py):
 
 from __future__ import annotations
 
-import glob
-import json
 import os
 
 import matplotlib
@@ -31,10 +29,17 @@ def plot_bc_vs_epsilon(
     *,
     x_col: str = "beta_epsilon",
     crit: float | None = None,
+    delta_mu: float | None = None,
+    title: str | None = None,
 ) -> str:
     """Max BC vs the sweep axis (beta*epsilon by default), one line per system
-    size, with the 1/3 and 5/9 reference lines and the criticality marker."""
+    size, with the 1/3 and 5/9 reference lines and an optional criticality marker.
+
+    Pass delta_mu to restrict to a single Delta mu (Figure 2: sizes at fixed dmu).
+    """
     df = pd.read_csv(bc_csv)
+    if delta_mu is not None and "delta_mu" in df.columns:
+        df = df[np.isclose(df["delta_mu"], delta_mu)]
     xlabel = r"$\beta\epsilon$" if x_col == "beta_epsilon" else r"$\epsilon$"
     fig, ax = plt.subplots(figsize=(6, 4))
     for L_long, sub in df.groupby("L_long"):
@@ -48,7 +53,7 @@ def plot_bc_vs_epsilon(
                    label=f"criticality={crit:.3f}")
     ax.set_xlabel(xlabel)
     ax.set_ylabel("max Sarle's BC")
-    ax.set_title(r"Max bimodality coefficient of $P(\phi_{col})$")
+    ax.set_title(title or r"Max bimodality coefficient of $P(\phi_{col})$")
     ax.legend(fontsize=8)
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
@@ -86,31 +91,27 @@ def plot_bc_family(bc_csv: str, out_png: str, *, x_col: str = "beta_epsilon") ->
     return out_png
 
 
-def plot_pooled_histograms(cache_dir: str, epsilons, out_png: str, *, bins: int = 60) -> str:
-    """Overlay P(phi_col) histograms for a few epsilon from cached column ops.
+def plot_pooled_histograms(data: list[dict], out_png: str, *, bins: int = 60,
+                           title: str | None = None) -> str:
+    """Figure 1: overlay P(phi_col) histograms at several epsilon (one size).
 
-    Reads <cache_dir>/*.npy (+ .json sidecar with 'epsilon'), selecting the cached
-    chunks whose epsilon is closest to each requested value.
+    `data` is a list of dicts (from bimodality.histogram_data), each with:
+      'epsilon', 'pooled' (1D column-op sample at coexistence), and 'BC'.
+    Curves are ordered and colored by epsilon so the bimodal (two humps, low
+    epsilon) -> unimodal (one hump, high epsilon) change reads left-to-right.
     """
-    entries = []
-    for jpath in sorted(glob.glob(os.path.join(cache_dir, "*.json"))):
-        with open(jpath) as f:
-            meta = json.load(f)
-        npy = jpath[:-5] + ".npy"
-        if "epsilon" in meta and os.path.isfile(npy):
-            entries.append((float(meta["epsilon"]), npy))
-    if not entries:
-        raise FileNotFoundError(f"no cached column ops with epsilon in {cache_dir}")
-
+    data = sorted(data, key=lambda d: d["epsilon"])
+    cmap = plt.get_cmap("viridis")
+    n = max(len(data) - 1, 1)
     fig, ax = plt.subplots(figsize=(6, 4))
-    for target in epsilons:
-        eps, npy = min(entries, key=lambda e: abs(e[0] - target))
-        pooled = np.load(npy).reshape(-1)
-        ax.hist(pooled, bins=bins, density=True, histtype="step",
-                label=f"$\\epsilon$={eps:.3f}")
-    ax.set_xlabel(r"$\phi_{col}$")
+    for i, d in enumerate(data):
+        pooled = np.asarray(d["pooled"]).reshape(-1)
+        ax.hist(pooled, bins=bins, density=True, histtype="step", lw=1.8,
+                color=cmap(i / n),
+                label=f"$\\epsilon$={d['epsilon']:.3f}  (BC={d['BC']:.2f})")
+    ax.set_xlabel(r"$\phi_{col}$  (liquid $\to +1$, gas $\to -1$)")
     ax.set_ylabel(r"$P(\phi_{col})$")
-    ax.set_title("Column order-parameter distribution")
+    ax.set_title(title or r"Column order-parameter distribution")
     ax.legend(fontsize=8)
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)

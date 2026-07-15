@@ -380,6 +380,48 @@ def discover_epsilons(base_dir: str, combo_params: dict) -> list[tuple[float, st
     return found
 
 
+def _best_mu_over_sweep(
+    combo_dir: str,
+    cache_dir: str,
+    *,
+    epsilon: float,
+    mu_coex: float,
+    combo_name: str,
+    mu_dirs: Optional[list[tuple[str, float]]] = None,
+    keep_pooled: bool = False,
+) -> Optional[dict]:
+    """Scan the mu-sweep and return the stats dict of the mu with the MAX BC.
+
+    Shared by sweep_bc (BC_max curve) and pooled_at_coexistence (histograms) so
+    both always pick the same coexistence mu. Returns None if no mu dir yields a
+    finite BC. With keep_pooled=True the winning pooled array is included.
+    """
+    if mu_dirs is None:
+        mu_dirs = enumerate_mu_dirs(combo_dir)
+    best = None
+    for mu_dir, mu in mu_dirs:
+        try:
+            arr, meta = cache_column_op(
+                mu_dir, cache_dir,
+                epsilon=epsilon, mu_used=mu, mu_coex=mu_coex, combo_name=combo_name,
+            )
+        except FileNotFoundError:
+            continue  # this mu dir has no snapshots; skip it, keep scanning
+        pooled, n_pooled, L_long = pool_column_op(arr)
+        stats = sarle_bc(pooled)
+        if not np.isfinite(stats["BC"]):
+            continue
+        if best is None or stats["BC"] > best["BC"]:
+            best = {
+                **stats, "mu": mu, "mu_dir": mu_dir,
+                "n_pooled": n_pooled, "L_long": L_long,
+                "n_snapshots": meta["n_snapshots"],
+            }
+            if keep_pooled:
+                best["pooled"] = pooled
+    return best
+
+
 def sweep_bc(
     base_dir: str,
     combo_params: dict,
@@ -414,25 +456,10 @@ def sweep_bc(
         if mu_reduction == "nearest_coex":
             mu_dirs = [min(mu_dirs, key=lambda dm: abs(dm[1] - mu_coex))]
 
-        best = None  # winning-mu stats (max BC over the sweep)
-        for mu_dir, mu in mu_dirs:
-            try:
-                arr, meta = cache_column_op(
-                    mu_dir, cache_dir,
-                    epsilon=eps, mu_used=mu, mu_coex=mu_coex, combo_name=combo_name,
-                )
-            except FileNotFoundError:
-                continue  # this mu dir has no snapshots; skip it, keep scanning
-            pooled, n_pooled, L_long = pool_column_op(arr)
-            stats = sarle_bc(pooled)
-            if not np.isfinite(stats["BC"]):
-                continue
-            if best is None or stats["BC"] > best["BC"]:
-                best = {
-                    **stats, "mu": mu, "mu_dir": mu_dir,
-                    "n_pooled": n_pooled, "L_long": L_long,
-                    "n_snapshots": meta["n_snapshots"],
-                }
+        best = _best_mu_over_sweep(
+            combo_dir, cache_dir,
+            epsilon=eps, mu_coex=mu_coex, combo_name=combo_name, mu_dirs=mu_dirs,
+        )
         if best is None:
             print(f"[bimodality] skip eps={eps}: no finite BC over mu-sweep", flush=True)
             continue
@@ -701,49 +728,254 @@ def phase_diagram(
 
 
 # ---------------------------------------------------------------------------
+# Figure 1 - P(phi_col) histograms at coexistence, several epsilon, one size
+# ---------------------------------------------------------------------------
+
+def pooled_at_coexistence(
+    base_dir: str,
+    combo_params: dict,
+    cache_dir: str,
+    *,
+    manage_csv: Optional[str] = None,
+    mu_reduction: str = "max",
+) -> dict:
+    """Pooled column-op sample (+stats) at the coexistence mu for one combo.
+
+    combo_params includes epsilon. Uses the exact same max-BC-over-mu selection
+    as sweep_bc, so the returned distribution is the one whose BC the curve
+    reports. Returns a dict with 'pooled', 'BC', 'mu', 'n_pooled', ...
+    """
+    combo_dir = os.path.join(base_dir, combo_dir_name(combo_params))
+    eps = combo_params["epsilon"]
+    mu_coex = resolve_mu_coex(eps, combo_dir, manage_csv=manage_csv, combo_params=combo_params)
+    mu_dirs = enumerate_mu_dirs(combo_dir)
+    if not mu_dirs:
+        raise FileNotFoundError(f"no mu dirs under {combo_dir}")
+    if mu_reduction == "nearest_coex":
+        mu_dirs = [min(mu_dirs, key=lambda dm: abs(dm[1] - mu_coex))]
+    best = _best_mu_over_sweep(
+        combo_dir, cache_dir,
+        epsilon=eps, mu_coex=mu_coex, combo_name=os.path.basename(combo_dir),
+        mu_dirs=mu_dirs, keep_pooled=True,
+    )
+    if best is None:
+        raise ValueError(f"no finite BC at eps={eps} for {combo_dir}")
+    return best
+
+
+def histogram_data(
+    base_dir: str,
+    combo_params: dict,
+    epsilons: list[float],
+    cache_dir: str,
+    *,
+    manage_csv: Optional[str] = None,
+) -> list[dict]:
+    """P(phi_col) samples at coexistence for each requested epsilon (nearest
+    available), for a fixed (scheme, size, delta_mu). combo_params omits epsilon.
+    """
+    avail = [eps for eps, _ in discover_epsilons(base_dir, combo_params)]
+    if not avail:
+        raise FileNotFoundError(f"no epsilon combos for {combo_params} under {base_dir}")
+    data = []
+    for target in epsilons:
+        eps = min(avail, key=lambda e: abs(e - target))
+        best = pooled_at_coexistence(
+            base_dir, {**combo_params, "epsilon": eps}, cache_dir, manage_csv=manage_csv,
+        )
+        data.append({
+            "epsilon": eps, "pooled": best["pooled"], "BC": best["BC"],
+            "mu": best["mu"], "n_pooled": best["n_pooled"],
+        })
+        print(f"[bimodality] hist eps={eps:+.3f} BC={best['BC']:.3f} "
+              f"n_pooled={best['n_pooled']} @mu={best['mu']:+.3f}", flush=True)
+    return data
+
+
+def make_histogram_figure(
+    base_dir: str,
+    combo_params: dict,
+    epsilons: list[float],
+    out_png: str,
+    *,
+    cache_dir: Optional[str] = None,
+    manage_csv: Optional[str] = None,
+) -> str:
+    """Figure 1: overlaid P(phi_col) histograms at several epsilon for one size."""
+    if cache_dir is None:
+        cache_dir = os.path.join(os.path.dirname(out_png) or ".", "cache", "column_op")
+    data = histogram_data(base_dir, combo_params, epsilons, cache_dir, manage_csv=manage_csv)
+
+    from plot_bimodality import plot_pooled_histograms
+
+    size = f"{int(combo_params['Lx'])}x{int(combo_params['Ly'])}"
+    title = (f"$P(\\phi_{{col}})$  {size}  $\\Delta\\mu$={combo_params['delta_mu']}"
+             "  (bimodal $\\to$ unimodal)")
+    plot_pooled_histograms(data, out_png, title=title)
+    return out_png
+
+
+# ---------------------------------------------------------------------------
+# Figure 2 - BC_max vs beta*epsilon for several sizes (finite-size study)
+# ---------------------------------------------------------------------------
+
+def run_fss(
+    base_dir: str,
+    *,
+    scheme: str,
+    delta_f: float,
+    k: float,
+    sizes: list[tuple[int, int]],
+    delta_mus: list[float],
+    out_dir: str = "criticality",
+    manage_csv: Optional[str] = None,
+    mu_reduction: str = "max",
+    make_plots: bool = True,
+) -> list[dict]:
+    """BC_max-vs-(beta*epsilon) for several slab sizes, one figure per delta_mu.
+
+    sizes: list of (Lx, Ly). For each (size, delta_mu) present on disk it runs
+    the BC_max sweep into one shared CSV (tagged by L and delta_mu) and fits the
+    criticality. Then, per delta_mu, it plots one curve per size (Figure 2) so
+    the crossover sharpening with L is visible. Missing (size, delta_mu) combos
+    are skipped. Returns the per-(size, delta_mu) criticality dicts.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    bc_csv = os.path.join(out_dir, "bc_vs_beta_epsilon.csv")
+    crit_csv = os.path.join(out_dir, "criticality.csv")
+    cache_dir = os.path.join(out_dir, "cache", "column_op")
+    for stale in (bc_csv, crit_csv):  # fresh: avoid duplicate rows on re-run
+        if os.path.isfile(stale):
+            os.remove(stale)
+
+    all_rows: list[dict] = []
+    results: list[dict] = []
+    for (Lx, Ly) in sizes:
+        for dmu in delta_mus:
+            combo = {"scheme": scheme, "delta_f": delta_f, "delta_mu": dmu,
+                     "k": k, "Lx": Lx, "Ly": Ly}
+            rows = sweep_bc(base_dir, combo, bc_csv, cache_dir,
+                            manage_csv=manage_csv, mu_reduction=mu_reduction)
+            if not rows:
+                print(f"[bimodality] no data for {Lx}x{Ly} dmu={dmu}; skipping",
+                      flush=True)
+                continue
+            all_rows.extend(rows)
+            if len(rows) >= 3:
+                res = locate_epsilon_c(rows, int(Lx), x_col="beta_epsilon")
+                res.update({"scheme": scheme, "delta_f": delta_f,
+                            "delta_mu": dmu, "k": k})
+                _append_row(crit_csv, res, CRIT_FIELDS)
+                results.append(res)
+                print(f"[bimodality] {Lx}x{Ly} dmu={dmu:+.2f}: (beta*eps)_c="
+                      f"{res['criticality_estimate']:.4f} +/- "
+                      f"{res['fit_uncertainty']} ({res['method']})", flush=True)
+
+    if make_plots and all_rows:
+        from plot_bimodality import plot_bc_vs_epsilon
+
+        for dmu in sorted({r["delta_mu"] for r in all_rows}):
+            out_png = os.path.join(out_dir, f"bc_vs_beta_epsilon_dmu{param_tag(dmu)}.png")
+            plot_bc_vs_epsilon(
+                bc_csv, out_png, delta_mu=dmu,
+                title=f"Max BC vs $\\beta\\epsilon$  $\\Delta\\mu$={dmu}",
+            )
+            print(f"[bimodality] wrote {out_png}", flush=True)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+def _parse_size(token: str) -> tuple[int, int]:
+    """'80x8' -> (80, 8) i.e. (Lx, Ly), matching the combo dir naming."""
+    lx, ly = token.lower().split("x")
+    return int(lx), int(ly)
+
+
+def _add_common(sp) -> None:
+    sp.add_argument("--base-dir", required=True,
+                    help="Dir holding the {size}_{scheme}_deltaF..._dmu..._epsilon* combos.")
+    sp.add_argument("--scheme", default="homo")
+    sp.add_argument("--delta-f", type=float, required=True)
+    sp.add_argument("--k", type=float, default=1.0,
+                    help="Chemical rate (provenance only in max mode; not in dir name).")
+    sp.add_argument("--out-dir", default="criticality")
+    sp.add_argument("--manage-csv", default=None,
+                    help="Optional coex manage CSV for mu_coex_FITTED (not needed in max mode).")
+    sp.add_argument("--mu-reduction", choices=["max", "nearest_coex"], default="max")
+
 
 def main() -> None:
     import argparse
 
     p = argparse.ArgumentParser(
-        description="Bimodality-based criticality: max Sarle BC over the mu-sweep "
-                    "vs beta*epsilon, one curve per delta_mu; criticality = "
-                    "sigmoid inflection.",
+        description="Bimodality-based criticality from coex snapshots: max Sarle BC "
+                    "over the mu-sweep vs beta*epsilon; criticality = sigmoid inflection.",
     )
-    p.add_argument("--base-dir", required=True,
-                   help="Dir holding the {size}_{scheme}_deltaF..._dmu..._epsilon* combos "
-                        "(e.g. /scratch/.../flex-investigation/results).")
-    p.add_argument("--scheme", default="homo")
-    p.add_argument("--delta-f", type=float, required=True)
-    p.add_argument("--k", type=float, default=1.0,
-                   help="Chemical rate (provenance only in max mode; not in dir name).")
-    p.add_argument("--Lx", type=int, required=True, help="Long axis (e.g. 160).")
-    p.add_argument("--Ly", type=int, required=True, help="Short axis (e.g. 16).")
-    p.add_argument("--delta-mus", type=float, nargs="*", default=None,
-                   help="Explicit delta_mu list; default discovers every one on disk.")
-    p.add_argument("--out-dir", default="criticality")
-    p.add_argument("--manage-csv", default=None,
-                   help="Optional coex manage CSV for mu_coex_FITTED (not needed in max mode).")
-    p.add_argument("--mu-reduction", choices=["max", "nearest_coex"], default="max")
-    p.add_argument("--no-plots", action="store_true")
+    sub = p.add_subparsers(dest="mode", required=True)
+
+    # phase-diagram: one size, a BC_max curve per delta_mu (family plot).
+    pd_ = sub.add_parser("phase-diagram", help="one size, a curve per delta_mu")
+    _add_common(pd_)
+    pd_.add_argument("--Lx", type=int, required=True, help="Long axis (e.g. 160).")
+    pd_.add_argument("--Ly", type=int, required=True, help="Short axis (e.g. 16).")
+    pd_.add_argument("--delta-mus", type=float, nargs="*", default=None,
+                     help="Explicit delta_mu list; default discovers every one on disk.")
+    pd_.add_argument("--no-plots", action="store_true")
+
+    # histograms (Figure 1): P(phi_col) at several epsilon, one size + delta_mu.
+    hg = sub.add_parser("histograms", help="Figure 1: P(phi_col) at several epsilon")
+    _add_common(hg)
+    hg.add_argument("--Lx", type=int, required=True)
+    hg.add_argument("--Ly", type=int, required=True)
+    hg.add_argument("--delta-mu", type=float, required=True)
+    hg.add_argument("--epsilons", type=float, nargs="+", required=True,
+                    help="epsilon values to show (nearest available is used).")
+
+    # fss (Figure 2): BC_max vs beta*epsilon for several sizes, per delta_mu.
+    fs = sub.add_parser("fss", help="Figure 2: BC_max vs beta*epsilon, several sizes")
+    _add_common(fs)
+    fs.add_argument("--sizes", nargs="+", required=True,
+                    help="LxxLy tokens, e.g. 80x8 160x16 320x32.")
+    fs.add_argument("--delta-mus", type=float, nargs="+", required=True,
+                    help="delta_mu values (missing size/delta_mu combos are skipped).")
+
     args = p.parse_args()
 
-    results = phase_diagram(
-        args.base_dir,
-        scheme=args.scheme,
-        delta_f=args.delta_f,
-        k=args.k,
-        Lx=args.Lx,
-        Ly=args.Ly,
-        delta_mus=args.delta_mus,
-        out_dir=args.out_dir,
-        manage_csv=args.manage_csv,
-        mu_reduction=args.mu_reduction,
-        make_plots=not args.no_plots,
-    )
-    print(f"\n[bimodality] wrote {len(results)} delta_mu curve(s) to {args.out_dir}/")
+    if args.mode == "phase-diagram":
+        results = phase_diagram(
+            args.base_dir, scheme=args.scheme, delta_f=args.delta_f, k=args.k,
+            Lx=args.Lx, Ly=args.Ly, delta_mus=args.delta_mus, out_dir=args.out_dir,
+            manage_csv=args.manage_csv, mu_reduction=args.mu_reduction,
+            make_plots=not args.no_plots,
+        )
+        print(f"\n[bimodality] wrote {len(results)} delta_mu curve(s) to {args.out_dir}/")
+
+    elif args.mode == "histograms":
+        combo = {"scheme": args.scheme, "delta_f": args.delta_f, "delta_mu": args.delta_mu,
+                 "k": args.k, "Lx": args.Lx, "Ly": args.Ly}
+        size = f"{args.Lx}x{args.Ly}"
+        out_png = os.path.join(
+            args.out_dir, f"pdf_phi_col_{size}_dmu{param_tag(args.delta_mu)}.png")
+        make_histogram_figure(
+            args.base_dir, combo, args.epsilons, out_png,
+            cache_dir=os.path.join(args.out_dir, "cache", "column_op"),
+            manage_csv=args.manage_csv,
+        )
+        print(f"\n[bimodality] wrote histogram figure {out_png}")
+
+    elif args.mode == "fss":
+        sizes = [_parse_size(s) for s in args.sizes]
+        results = run_fss(
+            args.base_dir, scheme=args.scheme, delta_f=args.delta_f, k=args.k,
+            sizes=sizes, delta_mus=args.delta_mus, out_dir=args.out_dir,
+            manage_csv=args.manage_csv, mu_reduction=args.mu_reduction,
+        )
+        print(f"\n[bimodality] wrote {len(results)} (size,delta_mu) criticality "
+              f"row(s) to {args.out_dir}/")
 
 
 if __name__ == "__main__":
