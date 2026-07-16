@@ -84,6 +84,7 @@ def _compute_traj_stats(ts_path: str, meta: dict, tail_fraction: float = 1.0) ->
     result: dict = {
         "L": L,
         "epsilon": float(meta["epsilon"]),
+        "beta": beta,
         "m_mean": m_mean,
         "abs_m_mean": abs_m_mean,
         "m2_mean": m2_mean,
@@ -142,6 +143,7 @@ def aggregate(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFrame:
         row: dict = {
             "L": int(l_val),
             "epsilon": float(eps),
+            "beta": float(sub["beta"].iloc[0]),
             "chi_mean": float(sub["chi"].mean()),
             "chi_stderr": _stderr(sub["chi"]),
             "m_mean": float(sub["m_mean"].mean()),
@@ -272,6 +274,7 @@ def aggregate_pooled(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFra
         row: dict = {
             "L": int(l_val),
             "epsilon": float(eps),
+            "beta": beta,
             "chi_mean": chi,
             "chi_stderr": chi_err,
             "m_mean": m_mean,
@@ -417,59 +420,84 @@ def plot_binder_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False)
     )
 
 
-def plot_fig7_panels(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
+def _fig7_beta_epsilon(df: pd.DataFrame) -> pd.Series:
+    """Sweep axis βε; beta defaults to 1.0 when absent (legacy aggregates)."""
+    beta = df["beta"] if "beta" in df.columns else 1.0
+    return beta * df["epsilon"]
+
+
+def plot_fig7_panels(agg_c: pd.DataFrame, agg_chi: pd.DataFrame, outdir: str) -> None:
     """Reproduce Fig. 7 of Kumar & Dasgupta (PRE 102, 052111): a two-panel figure with
-    (a) specific heat c vs ε (linear-y) and (b) susceptibility χ vs ε (log-y), each a
-    family of L curves. Here ε plays the role of temperature T in the paper.
+    (a) specific heat c vs βε (linear-y, per-trajectory aggregation) and
+    (b) susceptibility χ vs βε (log-y, pooled replica samples), each a family of L curves.
     """
-    ftag = "_pooled" if pooled else ""
-    suffix = " (pooled)" if pooled else ""
     os.makedirs(outdir, exist_ok=True)
 
-    have_c = "c_mean" in agg.columns and agg["c_mean"].notna().any()
+    have_c = "c_mean" in agg_c.columns and agg_c["c_mean"].notna().any()
     if not have_c:
         print("Fig 7 panel (a): no energy/heat-capacity data — plotting χ panel only.")
 
     fig, axes = plt.subplots(2, 1, figsize=(6.5, 8.5), sharex=True)
     ax_c, ax_chi = axes
 
-    def _series(ax, sub, y_col, yerr_col, color, style):
+    def _series(ax, sub, x, y_col, yerr_col, color, style):
         ax.errorbar(
-            sub["epsilon"], sub[y_col], yerr=sub[yerr_col],
+            x, sub[y_col], yerr=sub[yerr_col],
             fmt=f"{style['marker']}-", color=color,
             markerfacecolor="none", markeredgecolor=color, markeredgewidth=1.2,
             capsize=3, markersize=5, linewidth=1.0, label=f"L = {int(sub['L'].iloc[0])}",
         )
 
-    for l_val, sub in agg.sort_values("epsilon").groupby("L"):
+    for l_val, sub in agg_c.sort_values("epsilon").groupby("L"):
         style = L_PLOT_STYLE.get(int(l_val), {"color": "gray", "marker": "o"})
         color = style["color"]
-        if have_c:
-            c_sub = sub[sub["c_mean"].notna()]
-            if not c_sub.empty:
-                _series(ax_c, c_sub, "c_mean", "c_stderr", color, style)
+        c_sub = sub[sub["c_mean"].notna()]
+        if have_c and not c_sub.empty:
+            _series(ax_c, c_sub, _fig7_beta_epsilon(c_sub), "c_mean", "c_stderr", color, style)
+
+    for l_val, sub in agg_chi.sort_values("epsilon").groupby("L"):
+        style = L_PLOT_STYLE.get(int(l_val), {"color": "gray", "marker": "o"})
+        color = style["color"]
         chi_sub = sub[sub["chi_mean"] > 0]
         if not chi_sub.empty:
-            _series(ax_chi, chi_sub, "chi_mean", "chi_stderr", color, style)
+            _series(ax_chi, chi_sub, _fig7_beta_epsilon(chi_sub), "chi_mean", "chi_stderr",
+                    color, style)
 
-    ax_c.set_ylabel(r"$c(\varepsilon, L)$")
-    ax_c.set_title(r"(a) Specific heat vs $\varepsilon$" + suffix, loc="left", fontsize=11)
+    ax_c.set_ylabel(r"$c(\beta\varepsilon, L)$")
+    ax_c.set_title(r"(a) Specific heat vs $\beta\varepsilon$ (per replica)", loc="left", fontsize=11)
     ax_c.grid(True, alpha=0.3)
     ax_c.legend(fontsize=8, ncol=2)
 
     ax_chi.set_yscale("log")
-    ax_chi.set_xlabel(r"$\varepsilon$")
-    ax_chi.set_ylabel(r"$\chi(\varepsilon, L)$")
-    ax_chi.set_title(r"(b) Susceptibility vs $\varepsilon$ (log scale)" + suffix,
+    ax_chi.set_xlabel(r"$\beta\varepsilon$")
+    ax_chi.set_ylabel(r"$\chi(\beta\varepsilon, L)$")
+    ax_chi.set_title(r"(b) Susceptibility vs $\beta\varepsilon$ (log scale, pooled)",
                      loc="left", fontsize=11)
     ax_chi.grid(True, which="both", alpha=0.3)
     ax_chi.legend(fontsize=8, ncol=2)
 
-    path = os.path.join(outdir, f"fig7_c_chi_vs_epsilon{ftag}.png")
+    path = os.path.join(outdir, "fig7_c_chi_vs_beta_epsilon.png")
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"Wrote {path}")
+
+    c_cols = ["L", "epsilon", "beta", "c_mean", "c_stderr"]
+    chi_cols = ["L", "epsilon", "beta", "chi_mean", "chi_stderr"]
+    c_out = agg_c[[c for c in c_cols if c in agg_c.columns]].copy()
+    chi_out = agg_chi[[c for c in chi_cols if c in agg_chi.columns]].copy()
+    if "beta" not in c_out.columns:
+        c_out["beta"] = 1.0
+    if "beta" not in chi_out.columns:
+        chi_out["beta"] = 1.0
+    c_out = c_out.rename(columns={"c_mean": "c_mean_per_traj", "c_stderr": "c_stderr_per_traj"})
+    chi_out = chi_out.rename(columns={"chi_mean": "chi_mean_pooled", "chi_stderr": "chi_stderr_pooled"})
+    csv_df = pd.merge(c_out, chi_out, on=["L", "epsilon", "beta"], how="outer")
+    csv_df["beta_epsilon"] = csv_df["beta"] * csv_df["epsilon"]
+    csv_df = csv_df.sort_values(["L", "epsilon"])
+    csv_path = os.path.join(outdir, "fig7_c_chi_vs_beta_epsilon.csv")
+    csv_df.to_csv(csv_path, index=False)
+    print(f"Wrote {csv_path}")
 
 
 def _draw_peak_chi_figure(
@@ -634,8 +662,8 @@ def main() -> None:
     parser.add_argument(
         "--fig7-only",
         action="store_true",
-        help="Only reproduce the Fig. 7 two-panel figure (c vs ε and χ vs ε) and exit. "
-             "Skips the individual per-observable plots, peak-χ fit, and histograms.",
+        help="Only reproduce the Fig. 7 two-panel figure (c vs βε and χ vs βε) and exit. "
+             "Uses per-trajectory c and pooled χ. Skips other plots.",
     )
     parser.add_argument(
         "--fit-min-L", type=float, default=0.0,
@@ -656,6 +684,13 @@ def main() -> None:
     if args.tail_fraction < 1.0:
         print(f"Using last {args.tail_fraction:.0%} of each replica's series (equilibrated tail)")
 
+    if args.fig7_only:
+        print("Fig 7: per-trajectory c + pooled χ vs βε")
+        agg_c, _ = aggregate(args.results, tail_fraction=args.tail_fraction)
+        agg_chi, _ = aggregate_pooled(args.results, tail_fraction=args.tail_fraction)
+        plot_fig7_panels(agg_c, agg_chi, args.outdir)
+        return
+
     if args.pooled:
         print("Aggregation: POOLED (all replica samples combined before χ/c/U4)")
         agg, traj_df = aggregate_pooled(args.results, tail_fraction=args.tail_fraction)
@@ -663,12 +698,10 @@ def main() -> None:
         print("Aggregation: per-trajectory then averaged")
         agg, traj_df = aggregate(args.results, tail_fraction=args.tail_fraction)
 
-    if args.fig7_only:
-        plot_fig7_panels(agg, args.outdir, pooled=args.pooled)
-        return
-
     print_moments_summary(agg)
-    plot_fig7_panels(agg, args.outdir, pooled=args.pooled)
+    agg_c, _ = aggregate(args.results, tail_fraction=args.tail_fraction)
+    agg_chi, _ = aggregate_pooled(args.results, tail_fraction=args.tail_fraction)
+    plot_fig7_panels(agg_c, agg_chi, args.outdir)
     plot_chi_vs_epsilon(agg, args.outdir, pooled=args.pooled)
     plot_m_vs_epsilon(agg, args.outdir, pooled=args.pooled)
     plot_binder_vs_epsilon(agg, args.outdir, pooled=args.pooled)
