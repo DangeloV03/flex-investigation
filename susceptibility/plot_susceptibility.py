@@ -30,6 +30,24 @@ import pandas as pd
 
 from susceptibility_paths import find_susceptibility_csvs, read_susceptibility_csv
 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def resolve_repo_path(path: str) -> str:
+    """Resolve repo-relative paths whether the script is run from repo root or susceptibility/."""
+    if os.path.isabs(path):
+        return path
+    cwd_path = os.path.abspath(path)
+    if os.path.exists(cwd_path):
+        return cwd_path
+    repo_path = os.path.join(REPO_ROOT, path)
+    if os.path.exists(repo_path):
+        return repo_path
+    # Default write/read locations like plots/... live at repo root.
+    if path.startswith(("plots/", "susceptibility_results/")):
+        return repo_path
+    return cwd_path
+
 L_PLOT_STYLE: dict[int, dict[str, str]] = {
     16: {"color": "black", "marker": "o"},
     32: {"color": "red", "marker": "s"},
@@ -114,7 +132,11 @@ def aggregate(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFrame:
     """
     paths = find_susceptibility_csvs(results_dir)
     if not paths:
-        raise FileNotFoundError(f"No susceptibility_data.csv under {results_dir}")
+        raise FileNotFoundError(
+            f"No susceptibility_data.csv under {results_dir!r} "
+            f"(resolved: {os.path.abspath(results_dir)}). "
+            f"Pass --results relative to repo root, e.g. susceptibility_results/exact_2026-07-02"
+        )
 
     traj_records: list[dict] = []
     for csv_path in paths:
@@ -225,7 +247,11 @@ def aggregate_pooled(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFra
     """
     paths = find_susceptibility_csvs(results_dir)
     if not paths:
-        raise FileNotFoundError(f"No susceptibility_data.csv under {results_dir}")
+        raise FileNotFoundError(
+            f"No susceptibility_data.csv under {results_dir!r} "
+            f"(resolved: {os.path.abspath(results_dir)}). "
+            f"Pass --results relative to repo root, e.g. susceptibility_results/exact_2026-07-02"
+        )
 
     groups: dict[tuple[int, float], list[dict]] = defaultdict(list)
     for csv_path in paths:
@@ -704,6 +730,11 @@ def main() -> None:
     args = parser.parse_args()
     if not 0.0 < args.tail_fraction <= 1.0:
         parser.error("--tail-fraction must be in (0, 1].")
+
+    args.results = resolve_repo_path(args.results)
+    args.outdir = resolve_repo_path(args.outdir)
+    print(f"Results: {args.results}")
+    print(f"Outdir:  {args.outdir}")
 
     if args.peak_only:
         ftag = "_pooled" if args.pooled else ""
