@@ -378,15 +378,46 @@ def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False) ->
 def plot_m_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
     suffix = " (pooled)" if pooled else ""
     ftag = "_pooled" if pooled else ""
-    _plot_l_curves_vs_epsilon(
-        agg,
-        outdir,
-        y_col="abs_m_mean",
-        yerr_col="abs_m_mean_stderr",
-        ylabel=r"$\langle |m| \rangle$",
-        title=r"$\langle |m| \rangle$ vs $\varepsilon$" + suffix,
-        filename=f"abs_m_vs_epsilon{ftag}.png",
-    )
+    os.makedirs(outdir, exist_ok=True)
+
+    plot_df = agg.copy()
+    if "beta" not in plot_df.columns:
+        plot_df["beta"] = 1.0
+    plot_df["beta_epsilon"] = _beta_epsilon(plot_df)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for l_val, sub in plot_df.sort_values("beta_epsilon").groupby("L"):
+        l_int = int(l_val)
+        style = L_PLOT_STYLE.get(l_int, {"color": "gray", "marker": "o"})
+        color = style["color"]
+        ax.errorbar(
+            sub["beta_epsilon"],
+            sub["abs_m_mean"],
+            yerr=sub["abs_m_mean_stderr"],
+            fmt=f"{style['marker']}-",
+            color=color,
+            markerfacecolor="none",
+            markeredgecolor=color,
+            markeredgewidth=1.2,
+            capsize=3,
+            label=f"L = {l_int}",
+        )
+    ax.set_xlabel(r"$\beta\varepsilon$")
+    ax.set_ylabel(r"$\langle |m| \rangle$")
+    ax.set_title(r"$\langle |m| \rangle$ vs $\beta\varepsilon$" + suffix)
+    ax.legend(fontsize=8, ncol=2)
+    ax.grid(True, alpha=0.3)
+    png_path = os.path.join(outdir, f"abs_m_vs_beta_epsilon{ftag}.png")
+    fig.tight_layout()
+    fig.savefig(png_path, dpi=150)
+    plt.close(fig)
+    print(f"Wrote {png_path}")
+
+    csv_df = plot_df[["L", "epsilon", "beta", "beta_epsilon", "abs_m_mean", "abs_m_mean_stderr"]].copy()
+    csv_df = csv_df.sort_values(["L", "beta_epsilon"])
+    csv_path = os.path.join(outdir, f"abs_m_vs_beta_epsilon{ftag}.csv")
+    csv_df.to_csv(csv_path, index=False)
+    print(f"Wrote {csv_path}")
 
 
 def plot_heat_capacity_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
@@ -420,7 +451,7 @@ def plot_binder_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False)
     )
 
 
-def _fig7_beta_epsilon(df: pd.DataFrame) -> pd.Series:
+def _beta_epsilon(df: pd.DataFrame) -> pd.Series:
     """Sweep axis βε; beta defaults to 1.0 when absent (legacy aggregates)."""
     beta = df["beta"] if "beta" in df.columns else 1.0
     return beta * df["epsilon"]
@@ -453,14 +484,14 @@ def plot_fig7_panels(agg_c: pd.DataFrame, agg_chi: pd.DataFrame, outdir: str) ->
         color = style["color"]
         c_sub = sub[sub["c_mean"].notna()]
         if have_c and not c_sub.empty:
-            _series(ax_c, c_sub, _fig7_beta_epsilon(c_sub), "c_mean", "c_stderr", color, style)
+            _series(ax_c, c_sub, _beta_epsilon(c_sub), "c_mean", "c_stderr", color, style)
 
     for l_val, sub in agg_chi.sort_values("epsilon").groupby("L"):
         style = L_PLOT_STYLE.get(int(l_val), {"color": "gray", "marker": "o"})
         color = style["color"]
         chi_sub = sub[sub["chi_mean"] > 0]
         if not chi_sub.empty:
-            _series(ax_chi, chi_sub, _fig7_beta_epsilon(chi_sub), "chi_mean", "chi_stderr",
+            _series(ax_chi, chi_sub, _beta_epsilon(chi_sub), "chi_mean", "chi_stderr",
                     color, style)
 
     ax_c.set_ylabel(r"$c(\beta\varepsilon, L)$")
