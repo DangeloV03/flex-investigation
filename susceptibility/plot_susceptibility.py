@@ -289,7 +289,12 @@ def aggregate_pooled(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFra
 
         e_arrays = [r["e_int"] for r in recs if r["e_int"] is not None]
         if e_arrays:
-            c, c_err = _jackknife(e_arrays, lambda a, N=N: (np.mean(a ** 2) - np.mean(a) ** 2) / N)
+            # Match the per-trajectory convention: c = (⟨E²⟩-⟨E⟩²)/(N·T²·|ε|), T = 1/β.
+            T = 1.0 / beta
+            denom = N * T ** 2 * abs(float(eps))
+            c, c_err = _jackknife(
+                e_arrays, lambda a, denom=denom: (np.mean(a ** 2) - np.mean(a) ** 2) / denom
+            )
             row["c_mean"] = c
             row["c_stderr"] = c_err
         else:
@@ -410,6 +415,61 @@ def plot_binder_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False)
         title=r"Binder cumulant vs $\varepsilon$" + suffix,
         filename=f"binder_vs_epsilon{ftag}.png",
     )
+
+
+def plot_fig7_panels(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
+    """Reproduce Fig. 7 of Kumar & Dasgupta (PRE 102, 052111): a two-panel figure with
+    (a) specific heat c vs ε (linear-y) and (b) susceptibility χ vs ε (log-y), each a
+    family of L curves. Here ε plays the role of temperature T in the paper.
+    """
+    ftag = "_pooled" if pooled else ""
+    suffix = " (pooled)" if pooled else ""
+    os.makedirs(outdir, exist_ok=True)
+
+    have_c = "c_mean" in agg.columns and agg["c_mean"].notna().any()
+    if not have_c:
+        print("Fig 7 panel (a): no energy/heat-capacity data — plotting χ panel only.")
+
+    fig, axes = plt.subplots(2, 1, figsize=(6.5, 8.5), sharex=True)
+    ax_c, ax_chi = axes
+
+    def _series(ax, sub, y_col, yerr_col, color, style):
+        ax.errorbar(
+            sub["epsilon"], sub[y_col], yerr=sub[yerr_col],
+            fmt=f"{style['marker']}-", color=color,
+            markerfacecolor="none", markeredgecolor=color, markeredgewidth=1.2,
+            capsize=3, markersize=5, linewidth=1.0, label=f"L = {int(sub['L'].iloc[0])}",
+        )
+
+    for l_val, sub in agg.sort_values("epsilon").groupby("L"):
+        style = L_PLOT_STYLE.get(int(l_val), {"color": "gray", "marker": "o"})
+        color = style["color"]
+        if have_c:
+            c_sub = sub[sub["c_mean"].notna()]
+            if not c_sub.empty:
+                _series(ax_c, c_sub, "c_mean", "c_stderr", color, style)
+        chi_sub = sub[sub["chi_mean"] > 0]
+        if not chi_sub.empty:
+            _series(ax_chi, chi_sub, "chi_mean", "chi_stderr", color, style)
+
+    ax_c.set_ylabel(r"$c(\varepsilon, L)$")
+    ax_c.set_title(r"(a) Specific heat vs $\varepsilon$" + suffix, loc="left", fontsize=11)
+    ax_c.grid(True, alpha=0.3)
+    ax_c.legend(fontsize=8, ncol=2)
+
+    ax_chi.set_yscale("log")
+    ax_chi.set_xlabel(r"$\varepsilon$")
+    ax_chi.set_ylabel(r"$\chi(\varepsilon, L)$")
+    ax_chi.set_title(r"(b) Susceptibility vs $\varepsilon$ (log scale)" + suffix,
+                     loc="left", fontsize=11)
+    ax_chi.grid(True, which="both", alpha=0.3)
+    ax_chi.legend(fontsize=8, ncol=2)
+
+    path = os.path.join(outdir, f"fig7_c_chi_vs_epsilon{ftag}.png")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"Wrote {path}")
 
 
 def _draw_peak_chi_figure(
@@ -572,6 +632,12 @@ def main() -> None:
              "separate to keep tail plots apart from full-data plots.",
     )
     parser.add_argument(
+        "--fig7-only",
+        action="store_true",
+        help="Only reproduce the Fig. 7 two-panel figure (c vs ε and χ vs ε) and exit. "
+             "Skips the individual per-observable plots, peak-χ fit, and histograms.",
+    )
+    parser.add_argument(
         "--fit-min-L", type=float, default=0.0,
         help="Fit the χ^max vs L slope (γ/ν) using only L >= this value, excluding "
              "small-L corrections-to-scaling that bias the slope low. Default 0 = all L.",
@@ -597,7 +663,12 @@ def main() -> None:
         print("Aggregation: per-trajectory then averaged")
         agg, traj_df = aggregate(args.results, tail_fraction=args.tail_fraction)
 
+    if args.fig7_only:
+        plot_fig7_panels(agg, args.outdir, pooled=args.pooled)
+        return
+
     print_moments_summary(agg)
+    plot_fig7_panels(agg, args.outdir, pooled=args.pooled)
     plot_chi_vs_epsilon(agg, args.outdir, pooled=args.pooled)
     plot_m_vs_epsilon(agg, args.outdir, pooled=args.pooled)
     plot_binder_vs_epsilon(agg, args.outdir, pooled=args.pooled)
