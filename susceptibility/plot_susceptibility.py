@@ -723,6 +723,11 @@ def main() -> None:
              "Uses per-trajectory c and pooled χ. Skips other plots.",
     )
     parser.add_argument(
+        "--abs-m-only",
+        action="store_true",
+        help="Only plot ⟨|m|⟩ vs βε and write abs_m_vs_beta_epsilon.csv/png; then exit.",
+    )
+    parser.add_argument(
         "--fit-min-L", type=float, default=0.0,
         help="Fit the χ^max vs L slope (γ/ν) using only L >= this value, excluding "
              "small-L corrections-to-scaling that bias the slope low. Default 0 = all L.",
@@ -751,6 +756,16 @@ def main() -> None:
         agg_c, _ = aggregate(args.results, tail_fraction=args.tail_fraction)
         agg_chi, _ = aggregate_pooled(args.results, tail_fraction=args.tail_fraction)
         plot_fig7_panels(agg_c, agg_chi, args.outdir)
+        return
+
+    if args.abs_m_only:
+        if args.pooled:
+            print("⟨|m|⟩: pooled aggregation")
+            agg, _ = aggregate_pooled(args.results, tail_fraction=args.tail_fraction)
+        else:
+            print("⟨|m|⟩: per-trajectory then averaged")
+            agg, _ = aggregate(args.results, tail_fraction=args.tail_fraction)
+        plot_m_vs_epsilon(agg, args.outdir, pooled=args.pooled)
         return
 
     if args.pooled:
