@@ -37,14 +37,15 @@ def resolve_repo_path(path: str) -> str:
     """Resolve repo-relative paths whether the script is run from repo root or susceptibility/."""
     if os.path.isabs(path):
         return path
+    repo_path = os.path.join(REPO_ROOT, path)
+    # Campaign outputs (results, plots) always live at repo root — prefer that even
+    # when cwd is susceptibility/ and a similarly named empty dir exists under cwd.
+    if path.startswith(("plots/", "susceptibility_results/")):
+        return repo_path
     cwd_path = os.path.abspath(path)
     if os.path.exists(cwd_path):
         return cwd_path
-    repo_path = os.path.join(REPO_ROOT, path)
     if os.path.exists(repo_path):
-        return repo_path
-    # Default write/read locations like plots/... live at repo root.
-    if path.startswith(("plots/", "susceptibility_results/")):
         return repo_path
     return cwd_path
 
@@ -124,7 +125,11 @@ def _compute_traj_stats(ts_path: str, meta: dict, tail_fraction: float = 1.0) ->
     return result
 
 
-def aggregate(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFrame:
+def aggregate(
+    results_dir: str,
+    tail_fraction: float = 1.0,
+    verbose: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Scan for susceptibility_data.csv files under results_dir, load each replica's
     m_timeseries CSV, compute per-trajectory observables, then average over replicas
@@ -139,7 +144,11 @@ def aggregate(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFrame:
         )
 
     traj_records: list[dict] = []
-    for csv_path in paths:
+    n_paths = len(paths)
+    if verbose:
+        print(f'  Found {n_paths} run dirs; loading replica timeseries...', flush=True)
+    n_loaded = 0
+    for i_path, csv_path in enumerate(paths):
         dirpath = os.path.dirname(csv_path)
         meta_rows = read_susceptibility_csv(csv_path)
         for meta in meta_rows:
@@ -150,11 +159,20 @@ def aggregate(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFrame:
             stats = _compute_traj_stats(ts_path, meta, tail_fraction=tail_fraction)
             if stats:
                 traj_records.append(stats)
+                n_loaded += 1
+        if verbose and ((i_path + 1) % 10 == 0 or i_path + 1 == n_paths):
+            print(
+                f'  ... {i_path + 1}/{n_paths} run dirs, {n_loaded} replicas loaded',
+                flush=True,
+            )
 
     if not traj_records:
         raise FileNotFoundError(
             "No timeseries files found — check that runs have completed."
         )
+
+    if verbose:
+        print(f'  Aggregating {n_loaded} replicas into (L, ε) means...', flush=True)
 
     def _stderr(s: pd.Series) -> float:
         return float(s.std(ddof=1) / np.sqrt(len(s))) if len(s) > 1 else 0.0
@@ -238,7 +256,11 @@ def _jackknife(arrays: list[np.ndarray], stat_fn) -> tuple[float, float]:
     return full, err
 
 
-def aggregate_pooled(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFrame:
+def aggregate_pooled(
+    results_dir: str,
+    tail_fraction: float = 1.0,
+    verbose: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Pool every replica's samples per (L, ε), then compute χ, c, U4 once.
 
     Workaround for non-ergodic short runs: combining replicas reconstructs the full
@@ -254,7 +276,11 @@ def aggregate_pooled(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFra
         )
 
     groups: dict[tuple[int, float], list[dict]] = defaultdict(list)
-    for csv_path in paths:
+    n_paths = len(paths)
+    if verbose:
+        print(f'  Found {n_paths} run dirs; loading replica timeseries (pooled)...', flush=True)
+    n_loaded = 0
+    for i_path, csv_path in enumerate(paths):
         dirpath = os.path.dirname(csv_path)
         for meta in read_susceptibility_csv(csv_path):
             run_id = str(meta.get("id", "")).strip()
@@ -264,9 +290,21 @@ def aggregate_pooled(results_dir: str, tail_fraction: float = 1.0) -> pd.DataFra
             rec = _load_traj_arrays(ts_path, meta, tail_fraction=tail_fraction)
             if rec:
                 groups[(rec["L"], rec["epsilon"])].append(rec)
+                n_loaded += 1
+        if verbose and ((i_path + 1) % 10 == 0 or i_path + 1 == n_paths):
+            print(
+                f'  ... {i_path + 1}/{n_paths} run dirs, {n_loaded} replicas loaded',
+                flush=True,
+            )
 
     if not groups:
         raise FileNotFoundError("No timeseries files found — check that runs have completed.")
+
+    if verbose:
+        print(
+            f'  Pooling {n_loaded} replicas across {len(groups)} (L, ε) groups...',
+            flush=True,
+        )
 
     rows = []
     traj_rows: list[dict] = []

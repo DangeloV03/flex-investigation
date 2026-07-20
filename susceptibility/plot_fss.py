@@ -30,7 +30,7 @@ import pandas as pd
 from scipy.optimize import minimize
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from plot_susceptibility import aggregate, aggregate_pooled, L_PLOT_STYLE
+from plot_susceptibility import aggregate, aggregate_pooled, L_PLOT_STYLE, resolve_repo_path
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +125,7 @@ def optimise_fss(
     x0: list[float],
     x_range: tuple[float, float] = (-np.inf, np.inf),
     fixed: dict[str, float] | None = None,
+    verbose: bool = False,
 ) -> dict:
     """
     Minimise fss_quality via Nelder-Mead.
@@ -142,12 +143,21 @@ def optimise_fss(
 
     free_idx = [i for i, n in enumerate(names) if n not in fixed]
     free_x0 = [x0[i] for i in free_idx]
+    nfev = 0
 
     def objective(free_vals: np.ndarray) -> float:
+        nonlocal nfev
         full = list(x0)
         for k, fi in enumerate(free_idx):
             full[fi] = float(free_vals[k])
-        return fss_quality(full, dataset, x_range)
+        val = fss_quality(full, dataset, x_range)
+        nfev += 1
+        if verbose and (nfev == 1 or nfev % 25 == 0):
+            print(f'  ... optimizer eval {nfev}, S={val:.4f}', flush=True)
+        return val
+
+    if verbose:
+        print('  Running Nelder-Mead collapse optimizer...', flush=True)
 
     res = minimize(
         objective, free_x0, method='Nelder-Mead',
@@ -288,11 +298,17 @@ def main() -> None:
                       help='For χ: shift each L by its own ε*(L) instead of εc (Fig-11 style)')
 
     args = parser.parse_args()
+    args.results = resolve_repo_path(args.results)
+    args.outdir = resolve_repo_path(args.outdir)
     os.makedirs(args.outdir, exist_ok=True)
 
-    print('Loading data...')
-    agg = aggregate_pooled(args.results) if args.pooled else aggregate(args.results)
-    print(f'  L values: {sorted(agg["L"].unique())}')
+    print('Loading data...', flush=True)
+    print(f'  Results: {args.results}', flush=True)
+    if args.pooled:
+        agg, _ = aggregate_pooled(args.results, verbose=True)
+    else:
+        agg, _ = aggregate(args.results, verbose=True)
+    print(f'  Done loading. L values: {sorted(agg["L"].unique())}', flush=True)
     print(f'  ε range:  [{agg["epsilon"].min():.4f}, {agg["epsilon"].max():.4f}]')
 
     # Auto-detect εc from χ peak at the largest L available
@@ -317,7 +333,7 @@ def main() -> None:
     else:
         x0 = [args.xc, args.nu, -args.gamma_nu]
         print(f'  Initial: εc={x0[0]:.4f}  1/ν={x0[1]:.3f}  b=−γ/ν={x0[2]:.3f}')
-        res = optimise_fss(ds_chi, x0, x_range, fixed)
+        res = optimise_fss(ds_chi, x0, x_range, fixed, verbose=True)
         xc, inv_nu, b_chi = res['xc'], res['a'], res['b']
         gamma_nu = -b_chi
         print(f'  Best:    εc={xc:.6f}  1/ν={inv_nu:.4f}  γ/ν={gamma_nu:.4f}'
@@ -344,7 +360,7 @@ def main() -> None:
     else:
         x0 = [args.xc, args.nu, args.beta_nu]
         print(f'  Initial: εc={x0[0]:.4f}  1/ν={x0[1]:.3f}  b=β/ν={x0[2]:.3f}')
-        res = optimise_fss(ds_m, x0, x_range, fixed)
+        res = optimise_fss(ds_m, x0, x_range, fixed, verbose=True)
         xc_m, inv_nu_m, beta_nu = res['xc'], res['a'], res['b']
         print(f'  Best:    εc={xc_m:.6f}  1/ν={inv_nu_m:.4f}  β/ν={beta_nu:.4f}'
               f'  S={res["S"]:.4f}  (nfev={res["nfev"]})')
