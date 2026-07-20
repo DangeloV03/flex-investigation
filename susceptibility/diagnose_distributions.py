@@ -20,12 +20,15 @@ Usage:
     python diagnose_distributions.py
     python diagnose_distributions.py --results susceptibility_results --epsilon -1.73
     python diagnose_distributions.py --list           # show available ε and L
+    python diagnose_distributions.py --results susceptibility_results/exact_2026-07-02 \\
+        --epsilons -1.4 -1.76 -1.9 --outdir plots/diagnostics/exact
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 import matplotlib
 
@@ -35,6 +38,9 @@ import numpy as np
 import pandas as pd
 
 from susceptibility_paths import find_susceptibility_csvs, read_susceptibility_csv
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from plot_susceptibility import resolve_repo_path
 
 L_COLOR: dict[int, str] = {
     16: "black", 32: "red", 48: "#2ca02c", 64: "blue",
@@ -155,6 +161,74 @@ def collect(results_dir: str) -> pd.DataFrame:
 def pick_epsilon(df: pd.DataFrame, target: float) -> float:
     eps_values = np.sort(df["epsilon"].unique())
     return float(eps_values[int(np.argmin(np.abs(eps_values - target)))])
+
+
+def _eps_tag(eps: float) -> str:
+    return f"eps{abs(eps):.3f}".replace(".", "p")
+
+
+def plot_m_histograms_stacked(
+    df: pd.DataFrame,
+    epsilon_targets: list[float],
+    outdir: str,
+    *,
+    L_filter: int | None = None,
+    bins: int = 40,
+) -> str:
+    """Stacked P(m) histograms — one row per ε, all L overlaid (or a single L)."""
+    os.makedirs(outdir, exist_ok=True)
+
+    resolved: list[tuple[float, float]] = []
+    for target in epsilon_targets:
+        eps = pick_epsilon(df, target)
+        if not np.isclose(eps, target):
+            print(f"Note: ε={target} not found; using nearest available ε={eps:.4f}")
+        resolved.append((target, eps))
+
+    n_eps = len(resolved)
+    fig, axes = plt.subplots(n_eps, 1, figsize=(8.5, 3.0 * n_eps), squeeze=False)
+
+    for i, (target, eps) in enumerate(resolved):
+        ax = axes[i][0]
+        sub = df[np.isclose(df["epsilon"], eps)]
+        if sub.empty:
+            ax.set_title(f"ε = {eps:.4f}  (no data)", fontsize=10)
+            continue
+
+        Ls = [L_filter] if L_filter is not None else sorted(int(v) for v in sub["L"].unique())
+        for L_val in Ls:
+            rows = sub[sub["L"] == L_val]
+            if rows.empty:
+                continue
+            m_pool = np.concatenate(list(rows["m"]))
+            color = L_COLOR.get(L_val, "gray")
+            bc_m = sarle_bimodality(m_pool)
+            ax.hist(
+                m_pool, bins=bins, color=color, alpha=0.55, density=True,
+                label=rf"L={L_val}  BC={bc_m:.2f}",
+            )
+
+        ax.axvline(0.0, color="black", linewidth=0.9, linestyle="--", alpha=0.6)
+        ax.set_ylabel(r"$P(m)$", fontsize=9)
+        req = f" (requested {target:.3f})" if not np.isclose(eps, target) else ""
+        ax.set_title(rf"$\varepsilon = {eps:.4f}${req}", fontsize=10)
+        ax.legend(fontsize=7, ncol=2, loc="upper right")
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(labelsize=8)
+
+    axes[-1][0].set_xlabel("m", fontsize=10)
+    fig.suptitle(
+        r"Stacked $P(m)$ at several $\varepsilon$  (pooled replicas + chunks)",
+        fontsize=11,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+
+    tag = "_".join(_eps_tag(eps) for _, eps in resolved)
+    out_png = os.path.join(outdir, f"m_hist_stack_{tag}.png")
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    print(f"Wrote {out_png}")
+    return out_png
 
 
 def analyze(df: pd.DataFrame, eps: float, outdir: str) -> None:
@@ -382,9 +456,20 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Pooled P(m)/P(E_int) diagnostic for first-order vs continuous")
     p.add_argument("--results", default="susceptibility_results")
     p.add_argument("--epsilon", type=float, default=-1.73, help="target ε (snapped to nearest available)")
+    p.add_argument(
+        "--epsilons", type=float, nargs="+", default=None,
+        help="Several ε values → one stacked P(m) figure (rows = ε, curves = L)",
+    )
+    p.add_argument(
+        "--L", type=int, default=None,
+        help="In stacked mode, plot only this system size (default: overlay all L)",
+    )
     p.add_argument("--outdir", default="plots/diagnostics")
     p.add_argument("--list", action="store_true", help="list available ε and L, then exit")
     args = p.parse_args()
+
+    args.results = resolve_repo_path(args.results)
+    args.outdir = resolve_repo_path(args.outdir)
 
     df = collect(args.results)
     if args.list:
@@ -392,6 +477,16 @@ def main() -> None:
         eps_values = np.sort(df["epsilon"].unique())
         print(f"Available ε ({eps_values.size}): {eps_values.min():.3f} … {eps_values.max():.3f}")
         print("ε values:", ", ".join(f"{e:.3f}" for e in eps_values))
+        return
+
+    if args.epsilons:
+        if len(args.epsilons) == 1:
+            eps = pick_epsilon(df, args.epsilons[0])
+            if not np.isclose(eps, args.epsilons[0]):
+                print(f"Note: ε={args.epsilons[0]} not found; using nearest available ε={eps:.4f}")
+            analyze(df, eps, args.outdir)
+        else:
+            plot_m_histograms_stacked(df, args.epsilons, args.outdir, L_filter=args.L)
         return
 
     eps = pick_epsilon(df, args.epsilon)
