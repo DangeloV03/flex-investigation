@@ -3,7 +3,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem-per-cpu=512M
-#SBATCH --time=3-00:00:00
+#SBATCH --time=23:59:59
 # Logs go to an in-repo slurm_reports/ (repo is on /scratch, large quota) to keep
 # stdout/err off the small /home quota — /home filling makes jobs die with
 # "Disk quota exceeded" at their first print(). Relative path resolves to the
