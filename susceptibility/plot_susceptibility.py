@@ -749,6 +749,12 @@ def main() -> None:
         help="Skip aggregation and replot peak_chi_vs_L from the existing CSV in --outdir.",
     )
     parser.add_argument(
+        "--peak-chi-only",
+        action="store_true",
+        help="Only aggregate χ(ε,L), take max over ε per L, write peak_chi_vs_L csv/png "
+             "(respects --pooled). Skips Fig 7 and other plots to save memory.",
+    )
+    parser.add_argument(
         "--tail-fraction", type=float, default=1.0,
         help="Use only the last fraction of each replica's series (e.g. 0.2 = last 20%%, "
              "the equilibrated tail). Default 1.0 = full series. Point --outdir somewhere "
@@ -784,6 +790,17 @@ def main() -> None:
         csv_path = os.path.join(args.outdir, f"peak_chi_vs_L{ftag}.csv")
         peaks = pd.read_csv(csv_path)
         _draw_peak_chi_figure(peaks, args.outdir, pooled=args.pooled, fit_min_L=args.fit_min_L)
+        return
+
+    if args.peak_chi_only:
+        if args.pooled:
+            print("Peak χ vs L: pooled aggregation")
+            agg, _ = aggregate_pooled(args.results, tail_fraction=args.tail_fraction, verbose=True)
+        else:
+            print("Peak χ vs L: per-trajectory then averaged")
+            agg, _ = aggregate(args.results, tail_fraction=args.tail_fraction, verbose=True)
+        print_moments_summary(agg)
+        plot_peak_chi_vs_L(agg, args.outdir, pooled=args.pooled, fit_min_L=args.fit_min_L)
         return
 
     if args.tail_fraction < 1.0:

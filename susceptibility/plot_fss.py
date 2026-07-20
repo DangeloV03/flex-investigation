@@ -17,10 +17,14 @@ Usage examples:
     python plot_fss.py --results susceptibility_results --xc -1.75
     python plot_fss.py --pooled --xc -1.75 --xr -5 5 --peak_shift
     python plot_fss.py --fix_xc --xc -1.75 --fix_nu --nu 1.0
+
+By default LOO jackknife errors (drop one L at a time) are printed and saved to
+fss_fit_results.json. Pass --no-errors for point estimates only.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -174,6 +178,81 @@ def optimise_fss(
     }
 
 
+def loo_jackknife_fss_errors(
+    dataset: dict[float, np.ndarray],
+    x0: list[float],
+    x_range: tuple[float, float],
+    fixed: dict[str, float] | None,
+    verbose: bool = False,
+) -> dict[str, float]:
+    """Leave-one-L-out jackknife stderr on (εc, a, b) after a collapse fit."""
+    L_list = sorted(dataset.keys())
+    n = len(L_list)
+    nan = {'xc_err': float('nan'), 'a_err': float('nan'), 'b_err': float('nan')}
+    if n < 3:
+        return nan
+
+    partials: list[list[float]] = []
+    for i, L_drop in enumerate(L_list):
+        sub = {L: dataset[L] for L in L_list if L != L_drop}
+        if verbose:
+            print(f'  ... LOO jackknife {i + 1}/{n} (drop L={int(L_drop)})', flush=True)
+        res = optimise_fss(sub, x0, x_range, fixed, verbose=False)
+        partials.append([res['xc'], res['a'], res['b']])
+
+    arr = np.array(partials)
+    mean = arr.mean(axis=0)
+    err = np.sqrt((n - 1) / n * np.sum((arr - mean) ** 2, axis=0))
+    return {'xc_err': float(err[0]), 'a_err': float(err[1]), 'b_err': float(err[2])}
+
+
+def _fmt_pm(val: float, err: float, prec: int = 4) -> str:
+    if not np.isfinite(err):
+        return f'{val:.{prec}f}'
+    return f'{val:.{prec}f} ± {err:.{prec}f}'
+
+
+def _fit_record(
+    label: str,
+    res: dict,
+    err: dict[str, float] | None,
+    *,
+    b_is_gamma_nu: bool = False,
+) -> dict:
+    """Normalised fit dict for printing and JSON export."""
+    gamma_nu = -res['b'] if b_is_gamma_nu else None
+    gamma_nu_err = err['b_err'] if (b_is_gamma_nu and err) else None
+    beta_nu = res['b'] if not b_is_gamma_nu else None
+    beta_nu_err = err['b_err'] if (not b_is_gamma_nu and err) else None
+    rec: dict = {
+        'observable': label,
+        'epsilon_c': res['xc'],
+        'epsilon_c_err': err['xc_err'] if err else float('nan'),
+        'inv_nu': res['a'],
+        'inv_nu_err': err['a_err'] if err else float('nan'),
+        'S': res['S'],
+        'nfev': res['nfev'],
+        'success': res['success'],
+    }
+    if b_is_gamma_nu:
+        rec['gamma_nu'] = gamma_nu
+        rec['gamma_nu_err'] = gamma_nu_err
+    else:
+        rec['beta_nu'] = beta_nu
+        rec['beta_nu_err'] = beta_nu_err
+    return rec
+
+
+def _print_fit_record(rec: dict) -> None:
+    print(f"  εc     = {_fmt_pm(rec['epsilon_c'], rec['epsilon_c_err'], 6)}")
+    print(f"  1/ν    = {_fmt_pm(rec['inv_nu'], rec['inv_nu_err'])}")
+    if 'gamma_nu' in rec:
+        print(f"  γ/ν    = {_fmt_pm(rec['gamma_nu'], rec['gamma_nu_err'])}")
+    else:
+        print(f"  β/ν    = {_fmt_pm(rec['beta_nu'], rec['beta_nu_err'])}")
+    print(f"  S      = {rec['S']:.4f}  (nfev={rec['nfev']})")
+
+
 # ---------------------------------------------------------------------------
 # Collapse plot
 # ---------------------------------------------------------------------------
@@ -296,6 +375,8 @@ def main() -> None:
     grp3 = parser.add_argument_group('visualisation')
     grp3.add_argument('--peak_shift', action='store_true',
                       help='For χ: shift each L by its own ε*(L) instead of εc (Fig-11 style)')
+    grp3.add_argument('--no-errors', action='store_true',
+                      help='Skip LOO jackknife stderr (faster; point estimates only)')
 
     args = parser.parse_args()
     args.results = resolve_repo_path(args.results)
@@ -325,6 +406,13 @@ def main() -> None:
     if args.fix_nu:
         fixed['a'] = args.nu
 
+    fit_results: dict = {
+        'results_dir': args.results,
+        'x_range': list(x_range) if np.isfinite(x_range[0]) else None,
+        'pooled': args.pooled,
+        'peak_shift_chi': args.peak_shift,
+    }
+
     # ------------------------------------------------------------------ χ --
     print('\n=== χ FSS collapse (Fig 11 analog) ===')
     ds_chi = _build_dataset(agg, 'chi_mean', 'chi_stderr')
@@ -336,18 +424,28 @@ def main() -> None:
         res = optimise_fss(ds_chi, x0, x_range, fixed, verbose=True)
         xc, inv_nu, b_chi = res['xc'], res['a'], res['b']
         gamma_nu = -b_chi
-        print(f'  Best:    εc={xc:.6f}  1/ν={inv_nu:.4f}  γ/ν={gamma_nu:.4f}'
-              f'  S={res["S"]:.4f}  (nfev={res["nfev"]})')
+        err = None
+        if not args.no_errors:
+            print('  LOO jackknife errors (drop one L at a time):')
+            err = loo_jackknife_fss_errors(ds_chi, x0, x_range, fixed, verbose=True)
+        chi_rec = _fit_record('chi', res, err, b_is_gamma_nu=True)
+        fit_results['chi'] = chi_rec
+        print('  Best:')
+        _print_fit_record(chi_rec)
 
         x_lbl = (r'$(\varepsilon - \varepsilon^*(L))\,L^{1/\nu}$' if args.peak_shift
                  else r'$(\varepsilon - \varepsilon_c)\,L^{1/\nu}$')
+        title = (
+            rf'$\chi$ FSS — $\varepsilon_c={_fmt_pm(xc, chi_rec["epsilon_c_err"], 4)}$, '
+            rf'$1/\nu={_fmt_pm(inv_nu, chi_rec["inv_nu_err"], 3)}$, '
+            rf'$\gamma/\nu={_fmt_pm(gamma_nu, chi_rec["gamma_nu_err"], 3)}$'
+        )
         plot_collapse(
             ds_chi, xc, inv_nu, b_chi,
             outpath=os.path.join(args.outdir, 'fss_chi_collapse.png'),
             xlabel=x_lbl,
             ylabel=r'$\chi\,L^{-\gamma/\nu}$',
-            title=(rf'$\chi$ FSS — '
-                   rf'$\varepsilon_c={xc:.4f}$,  $1/\nu={inv_nu:.3f}$,  $\gamma/\nu={gamma_nu:.3f}$'),
+            title=title,
             x_range=x_range,
             use_peak_shift=args.peak_shift,
         )
@@ -362,18 +460,35 @@ def main() -> None:
         print(f'  Initial: εc={x0[0]:.4f}  1/ν={x0[1]:.3f}  b=β/ν={x0[2]:.3f}')
         res = optimise_fss(ds_m, x0, x_range, fixed, verbose=True)
         xc_m, inv_nu_m, beta_nu = res['xc'], res['a'], res['b']
-        print(f'  Best:    εc={xc_m:.6f}  1/ν={inv_nu_m:.4f}  β/ν={beta_nu:.4f}'
-              f'  S={res["S"]:.4f}  (nfev={res["nfev"]})')
+        err = None
+        if not args.no_errors:
+            print('  LOO jackknife errors (drop one L at a time):')
+            err = loo_jackknife_fss_errors(ds_m, x0, x_range, fixed, verbose=True)
+        m_rec = _fit_record('abs_m', res, err, b_is_gamma_nu=False)
+        fit_results['abs_m'] = m_rec
+        print('  Best:')
+        _print_fit_record(m_rec)
 
+        title = (
+            rf'$|m|$ FSS — $\varepsilon_c={_fmt_pm(xc_m, m_rec["epsilon_c_err"], 4)}$, '
+            rf'$1/\nu={_fmt_pm(inv_nu_m, m_rec["inv_nu_err"], 3)}$, '
+            rf'$\beta/\nu={_fmt_pm(beta_nu, m_rec["beta_nu_err"], 3)}$'
+        )
         plot_collapse(
             ds_m, xc_m, inv_nu_m, beta_nu,
             outpath=os.path.join(args.outdir, 'fss_m_collapse.png'),
             xlabel=r'$(\varepsilon - \varepsilon_c)\,L^{1/\nu}$',
             ylabel=r'$\langle|m|\rangle\,L^{\beta/\nu}$',
-            title=(rf'$|m|$ FSS — '
-                   rf'$\varepsilon_c={xc_m:.4f}$,  $1/\nu={inv_nu_m:.3f}$,  $\beta/\nu={beta_nu:.3f}$'),
+            title=title,
             x_range=x_range,
         )
+
+    if fit_results.keys() - {'results_dir', 'x_range', 'pooled', 'peak_shift_chi'}:
+        json_path = os.path.join(args.outdir, 'fss_fit_results.json')
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(fit_results, f, indent=2)
+            f.write('\n')
+        print(f'\nWrote {json_path}')
 
 
 if __name__ == '__main__':
