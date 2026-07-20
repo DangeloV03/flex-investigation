@@ -18,8 +18,9 @@ Usage examples:
     python plot_fss.py --pooled --xc -1.75 --xr -5 5 --peak_shift
     python plot_fss.py --fix_xc --xc -1.75 --fix_nu --nu 1.0
 
-By default LOO jackknife errors (drop one L at a time) are printed and saved to
-fss_fit_results.json. Pass --no-errors for point estimates only.
+By default Melchert S+1 errors are computed (autoScale -getErrors): for each
+optimised parameter, find where the collapse quality S increases to S+1 while
+holding the other parameters fixed. Pass --no-errors for point estimates only.
 """
 from __future__ import annotations
 
@@ -178,38 +179,106 @@ def optimise_fss(
     }
 
 
-def loo_jackknife_fss_errors(
+def _root_bisection(func, x_min: float, x_max: float, epsilon: float = 1e-5) -> float:
+    """Bisection root finder (Melchert autoScale rootBisection)."""
+    f_min = func(x_min)
+    f_max = func(x_max)
+    while abs(x_max - x_min) > epsilon:
+        x_mid = 0.5 * (x_min + x_max)
+        f_mid = func(x_mid)
+        if f_min * f_mid <= 0.0:
+            x_max, f_max = x_mid, f_mid
+        else:
+            x_min, f_min = x_mid, f_mid
+    return 0.5 * (x_min + x_max)
+
+
+def _get_brackets(func, mid_val: float, fac: float = 0.01, max_iter: int = 200) -> tuple[list[float], list[float]]:
+    """Bracket roots of func on either side of mid_val (Melchert getBrackets)."""
+    mid_f = func(mid_val)
+    l_val = mid_val * (1.0 - fac)
+    l_f = func(l_val)
+    n = 0
+    while l_f * mid_f > 0.0 and n < max_iter:
+        l_val *= 1.0 - fac
+        mid_f = l_f
+        l_f = func(l_val)
+        n += 1
+    l_brack = [l_val, mid_val]
+
+    mid_f = func(mid_val)
+    r_val = mid_val * (1.0 + fac)
+    r_f = func(r_val)
+    n = 0
+    while r_f * mid_f > 0.0 and n < max_iter:
+        r_val *= 1.0 + fac
+        mid_f = r_f
+        r_f = func(r_val)
+        n += 1
+    r_brack = [mid_val, r_val]
+    return l_brack, r_brack
+
+
+def s_plus_one_fss_errors(
     dataset: dict[float, np.ndarray],
-    x0: list[float],
+    best: dict,
     x_range: tuple[float, float],
     fixed: dict[str, float] | None,
     verbose: bool = False,
 ) -> dict[str, float]:
-    """Leave-one-L-out jackknife stderr on (εc, a, b) after a collapse fit."""
-    L_list = sorted(dataset.keys())
-    n = len(L_list)
-    nan = {'xc_err': float('nan'), 'a_err': float('nan'), 'b_err': float('nan')}
-    if n < 3:
-        return nan
+    """
+    Melchert S+1 error analysis (autoScale -getErrors).
 
-    partials: list[list[float]] = []
-    for i, L_drop in enumerate(L_list):
-        sub = {L: dataset[L] for L in L_list if L != L_drop}
-        if verbose:
-            print(f'  ... LOO jackknife {i + 1}/{n} (drop L={int(L_drop)})', flush=True)
-        res = optimise_fss(sub, x0, x_range, fixed, verbose=False)
-        partials.append([res['xc'], res['a'], res['b']])
+    For each optimised scaling parameter, bracket where S increases to S_best+1
+    while holding the other parameters fixed. Returns asymmetric +/- errors.
+    """
+    names = ['xc', 'a', 'b']
+    fixed = fixed or {}
+    scale_par = [best['xc'], best['a'], best['b']]
+    best_s = best['S']
+    nan = {f'{n}_err_lo': float('nan') for n in names} | {f'{n}_err_hi': float('nan') for n in names}
 
-    arr = np.array(partials)
-    mean = arr.mean(axis=0)
-    err = np.sqrt((n - 1) / n * np.sum((arr - mean) ** 2, axis=0))
-    return {'xc_err': float(err[0]), 'a_err': float(err[1]), 'b_err': float(err[2])}
+    out: dict[str, float] = {}
+    for par_id, name in enumerate(names):
+        if name in fixed:
+            out[f'{name}_err_lo'] = 0.0
+            out[f'{name}_err_hi'] = 0.0
+            continue
+
+        piv = scale_par[par_id]
+
+        def objective(val: float, par_id: int = par_id) -> float:
+            trial = list(scale_par)
+            trial[par_id] = val
+            return fss_quality(trial, dataset, x_range) - (best_s + 1.0)
+
+        try:
+            l_brack, r_brack = _get_brackets(objective, piv)
+            err_lo = _root_bisection(objective, l_brack[0], l_brack[1])
+            err_hi = _root_bisection(objective, r_brack[0], r_brack[1])
+            out[f'{name}_err_lo'] = abs(piv - err_lo)
+            out[f'{name}_err_hi'] = abs(err_hi - piv)
+            if verbose:
+                print(
+                    f'  S+1 {name}:  -{out[f"{name}_err_lo"]:.6g}  '
+                    f'+{out[f"{name}_err_hi"]:.6g}',
+                    flush=True,
+                )
+        except Exception:
+            out[f'{name}_err_lo'] = float('nan')
+            out[f'{name}_err_hi'] = float('nan')
+
+    return out if out else nan
 
 
-def _fmt_pm(val: float, err: float, prec: int = 4) -> str:
-    if not np.isfinite(err):
+def _fmt_pm(val: float, err_lo: float, err_hi: float, prec: int = 4) -> str:
+    if not (np.isfinite(err_lo) and np.isfinite(err_hi)):
         return f'{val:.{prec}f}'
-    return f'{val:.{prec}f} ± {err:.{prec}f}'
+    if err_lo == 0.0 and err_hi == 0.0:
+        return f'{val:.{prec}f}'
+    if abs(err_lo - err_hi) <= max(10 ** (-prec), 1e-12 * abs(val)):
+        return f'{val:.{prec}f} ± {err_hi:.{prec}f}'
+    return f'{val:.{prec}f} +{err_hi:.{prec}f}/-{err_lo:.{prec}f}'
 
 
 def _fit_record(
@@ -220,36 +289,53 @@ def _fit_record(
     b_is_gamma_nu: bool = False,
 ) -> dict:
     """Normalised fit dict for printing and JSON export."""
-    gamma_nu = -res['b'] if b_is_gamma_nu else None
-    gamma_nu_err = err['b_err'] if (b_is_gamma_nu and err) else None
-    beta_nu = res['b'] if not b_is_gamma_nu else None
-    beta_nu_err = err['b_err'] if (not b_is_gamma_nu and err) else None
+    def _errs(prefix: str) -> tuple[float, float]:
+        if not err:
+            return float('nan'), float('nan')
+        return err[f'{prefix}_err_lo'], err[f'{prefix}_err_hi']
+
+    xc_lo, xc_hi = _errs('xc')
+    a_lo, a_hi = _errs('a')
+    b_lo, b_hi = _errs('b')
     rec: dict = {
         'observable': label,
         'epsilon_c': res['xc'],
-        'epsilon_c_err': err['xc_err'] if err else float('nan'),
+        'epsilon_c_err_lo': xc_lo,
+        'epsilon_c_err_hi': xc_hi,
         'inv_nu': res['a'],
-        'inv_nu_err': err['a_err'] if err else float('nan'),
+        'inv_nu_err_lo': a_lo,
+        'inv_nu_err_hi': a_hi,
         'S': res['S'],
         'nfev': res['nfev'],
         'success': res['success'],
+        'error_method': 'melchert_s_plus_one',
     }
     if b_is_gamma_nu:
-        rec['gamma_nu'] = gamma_nu
-        rec['gamma_nu_err'] = gamma_nu_err
+        rec['gamma_nu'] = -res['b']
+        rec['gamma_nu_err_lo'] = b_lo
+        rec['gamma_nu_err_hi'] = b_hi
     else:
-        rec['beta_nu'] = beta_nu
-        rec['beta_nu_err'] = beta_nu_err
+        rec['beta_nu'] = res['b']
+        rec['beta_nu_err_lo'] = b_lo
+        rec['beta_nu_err_hi'] = b_hi
     return rec
 
 
 def _print_fit_record(rec: dict) -> None:
-    print(f"  εc     = {_fmt_pm(rec['epsilon_c'], rec['epsilon_c_err'], 6)}")
-    print(f"  1/ν    = {_fmt_pm(rec['inv_nu'], rec['inv_nu_err'])}")
+    print(
+        f"  εc     = {_fmt_pm(rec['epsilon_c'], rec['epsilon_c_err_lo'], rec['epsilon_c_err_hi'], 6)}"
+    )
+    print(
+        f"  1/ν    = {_fmt_pm(rec['inv_nu'], rec['inv_nu_err_lo'], rec['inv_nu_err_hi'])}"
+    )
     if 'gamma_nu' in rec:
-        print(f"  γ/ν    = {_fmt_pm(rec['gamma_nu'], rec['gamma_nu_err'])}")
+        print(
+            f"  γ/ν    = {_fmt_pm(rec['gamma_nu'], rec['gamma_nu_err_lo'], rec['gamma_nu_err_hi'])}"
+        )
     else:
-        print(f"  β/ν    = {_fmt_pm(rec['beta_nu'], rec['beta_nu_err'])}")
+        print(
+            f"  β/ν    = {_fmt_pm(rec['beta_nu'], rec['beta_nu_err_lo'], rec['beta_nu_err_hi'])}"
+        )
     print(f"  S      = {rec['S']:.4f}  (nfev={rec['nfev']})")
 
 
@@ -376,7 +462,7 @@ def main() -> None:
     grp3.add_argument('--peak_shift', action='store_true',
                       help='For χ: shift each L by its own ε*(L) instead of εc (Fig-11 style)')
     grp3.add_argument('--no-errors', action='store_true',
-                      help='Skip LOO jackknife stderr (faster; point estimates only)')
+                      help='Skip Melchert S+1 parameter errors (point estimates only)')
 
     args = parser.parse_args()
     args.results = resolve_repo_path(args.results)
@@ -426,8 +512,8 @@ def main() -> None:
         gamma_nu = -b_chi
         err = None
         if not args.no_errors:
-            print('  LOO jackknife errors (drop one L at a time):')
-            err = loo_jackknife_fss_errors(ds_chi, x0, x_range, fixed, verbose=True)
+            print('  Melchert S+1 errors (autoScale -getErrors):')
+            err = s_plus_one_fss_errors(ds_chi, res, x_range, fixed, verbose=True)
         chi_rec = _fit_record('chi', res, err, b_is_gamma_nu=True)
         fit_results['chi'] = chi_rec
         print('  Best:')
@@ -436,9 +522,9 @@ def main() -> None:
         x_lbl = (r'$(\varepsilon - \varepsilon^*(L))\,L^{1/\nu}$' if args.peak_shift
                  else r'$(\varepsilon - \varepsilon_c)\,L^{1/\nu}$')
         title = (
-            rf'$\chi$ FSS — $\varepsilon_c={_fmt_pm(xc, chi_rec["epsilon_c_err"], 4)}$, '
-            rf'$1/\nu={_fmt_pm(inv_nu, chi_rec["inv_nu_err"], 3)}$, '
-            rf'$\gamma/\nu={_fmt_pm(gamma_nu, chi_rec["gamma_nu_err"], 3)}$'
+            rf'$\chi$ FSS — $\varepsilon_c={_fmt_pm(xc, chi_rec["epsilon_c_err_lo"], chi_rec["epsilon_c_err_hi"], 4)}$, '
+            rf'$1/\nu={_fmt_pm(inv_nu, chi_rec["inv_nu_err_lo"], chi_rec["inv_nu_err_hi"], 3)}$, '
+            rf'$\gamma/\nu={_fmt_pm(gamma_nu, chi_rec["gamma_nu_err_lo"], chi_rec["gamma_nu_err_hi"], 3)}$'
         )
         plot_collapse(
             ds_chi, xc, inv_nu, b_chi,
@@ -462,17 +548,17 @@ def main() -> None:
         xc_m, inv_nu_m, beta_nu = res['xc'], res['a'], res['b']
         err = None
         if not args.no_errors:
-            print('  LOO jackknife errors (drop one L at a time):')
-            err = loo_jackknife_fss_errors(ds_m, x0, x_range, fixed, verbose=True)
+            print('  Melchert S+1 errors (autoScale -getErrors):')
+            err = s_plus_one_fss_errors(ds_m, res, x_range, fixed, verbose=True)
         m_rec = _fit_record('abs_m', res, err, b_is_gamma_nu=False)
         fit_results['abs_m'] = m_rec
         print('  Best:')
         _print_fit_record(m_rec)
 
         title = (
-            rf'$|m|$ FSS — $\varepsilon_c={_fmt_pm(xc_m, m_rec["epsilon_c_err"], 4)}$, '
-            rf'$1/\nu={_fmt_pm(inv_nu_m, m_rec["inv_nu_err"], 3)}$, '
-            rf'$\beta/\nu={_fmt_pm(beta_nu, m_rec["beta_nu_err"], 3)}$'
+            rf'$|m|$ FSS — $\varepsilon_c={_fmt_pm(xc_m, m_rec["epsilon_c_err_lo"], m_rec["epsilon_c_err_hi"], 4)}$, '
+            rf'$1/\nu={_fmt_pm(inv_nu_m, m_rec["inv_nu_err_lo"], m_rec["inv_nu_err_hi"], 3)}$, '
+            rf'$\beta/\nu={_fmt_pm(beta_nu, m_rec["beta_nu_err_lo"], m_rec["beta_nu_err_hi"], 3)}$'
         )
         plot_collapse(
             ds_m, xc_m, inv_nu_m, beta_nu,
