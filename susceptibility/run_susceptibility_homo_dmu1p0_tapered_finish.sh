@@ -1,29 +1,19 @@
 #!/bin/bash
-#SBATCH --job-name=susc_homo_taper
+#SBATCH --job-name=susc_taper_fin
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem-per-cpu=512M
 #SBATCH --time=2-23:59:59
-# Logs go to an in-repo slurm_reports/ (repo is on /scratch, large quota) to keep
-# stdout/err off the small /home quota — /home filling makes jobs die with
-# "Disk quota exceeded" at their first print(). Relative path resolves to the
-# sbatch submit dir (repo root). %x = job name, %j = job id.
 #SBATCH --output=slurm_reports/%x_%j.out
 #SBATCH --error=slurm_reports/%x_%j.err
 #
-# Driven homo Δμ=1 susceptibility with ε-dependent run times (fitted μ from coex).
-# At ε_c = −1.76: eq 7.5× and prod 2.5× the homo 1× baseline; multipliers taper
-# linearly to 1× at the grid edges [−2.0, −1.4]. See susceptibility/taper_times.py.
+# Finish partial homo Δμ=1 tapered runs: large L only (default 64 96 128).
+# Same ε-tapered times as run_susceptibility_homo_dmu1p0_tapered.sh.
 #
-# Args (passed by sbatch/bash):
-#   $1  epsilon       (required)
-#   $2  results_base  (required; e.g. susceptibility_results/homo_dmu1p0_2026-07-19)
-#   $3  num_batches   (optional, default 1)
-#   $4  mu            (optional; fitted mu_coex from manage CSV)
-#   $5  delta_f       (optional; empty => runner default)
-#   $6  delta_mu      (optional; empty => runner default)
-#   $7  k             (optional; empty => runner default)
-#   $8  scheme        (optional; empty => runner default)
+# Override sizes at submit time, e.g. only L=96,128 for a near-complete ε:
+#   sbatch --export=ALL,TAPER_SIZES="96 128" susceptibility/run_susceptibility_homo_dmu1p0_tapered_finish.sh ...
+#
+# Args: same as run_susceptibility_homo_dmu1p0_tapered.sh ($1 eps, $2 results_base, ...)
 
 set -euo pipefail
 
@@ -35,7 +25,7 @@ DELTA_F=${5:-}
 DELTA_MU=${6:-}
 K_ARG=${7:-}
 SCHEME=${8:-}
-N=${SLURM_CPUS_PER_TASK:-2}     # 16 under SLURM -> num_parallel_runs; 2 locally
+N=${SLURM_CPUS_PER_TASK:-2}
 
 EXTRA_ARGS=()
 [[ -n "$MU"       ]] && EXTRA_ARGS+=(--mu "$MU")
@@ -72,7 +62,13 @@ else
     LAUNCH=(python -u)
 fi
 
-SIZES=(16 32 48 64 96 128)
+if [[ -n "${TAPER_SIZES:-}" ]]; then
+    read -ra SIZES <<< "$TAPER_SIZES"
+else
+    SIZES=(64 96 128)
+fi
+
+echo "finish sizes for eps=${EPS}: ${SIZES[*]}"
 
 for SIZE in "${SIZES[@]}"; do
     echo "=== epsilon=${EPS} L=${SIZE} (cpus=${N}, batches=${NUM_BATCHES}, eq=${EQ_TIME}, prod=${PROD_TIME}) ==="
