@@ -376,6 +376,141 @@ BC_FIELDS = [
     "mu_reduction", "source_dir",
 ]
 
+
+def _resolve_data_path(path: str, *, base_dir: str | None = None) -> str:
+    """Resolve a CSV path (absolute, cwd-relative, or under base_dir/PROJECT_ROOT)."""
+    if os.path.isabs(path):
+        return path
+    for root in (os.getcwd(), base_dir, os.environ.get("PROJECT_ROOT")):
+        if not root:
+            continue
+        candidate = os.path.normpath(os.path.join(root, path))
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.normpath(os.path.join(os.getcwd(), path))
+
+
+def _column_op_cache_key(row: dict) -> str:
+    cp = {
+        "scheme": row["scheme"],
+        "delta_f": float(row["delta_f"]),
+        "delta_mu": float(row["delta_mu"]),
+        "k": float(row["k"]) if row.get("k") not in (None, "") else 1.0,
+        "Lx": int(row["L_long"]),
+        "Ly": int(row["L_short"]),
+        "epsilon": float(row["epsilon"]),
+    }
+    combo_name = combo_dir_name({**cp, "epsilon": cp["epsilon"]})
+    return f"{combo_name}__{mu_dir_name(float(row['mu_at_max']))}"
+
+
+def _load_column_op_for_row(
+    row: dict,
+    cache_dir: str,
+    *,
+    base_dir: str | None = None,
+) -> Optional[np.ndarray]:
+    """Load the winning-mu column-op array for one BC CSV row."""
+    key = _column_op_cache_key(row)
+    npy_path = os.path.join(cache_dir, key + ".npy")
+    if os.path.isfile(npy_path):
+        return np.load(npy_path)
+
+    source = row.get("source_dir")
+    if source:
+        mu_dir = _resolve_data_path(source, base_dir=base_dir)
+        if os.path.isdir(mu_dir):
+            try:
+                arr, _ = extract_column_op(mu_dir)
+                return arr
+            except FileNotFoundError:
+                pass
+
+    if base_dir:
+        cp = {
+            "scheme": row["scheme"],
+            "delta_f": float(row["delta_f"]),
+            "delta_mu": float(row["delta_mu"]),
+            "k": float(row["k"]) if row.get("k") not in (None, "") else 1.0,
+            "Lx": int(row["L_long"]),
+            "Ly": int(row["L_short"]),
+            "epsilon": float(row["epsilon"]),
+        }
+        combo_dir = os.path.join(
+            _resolve_data_path(base_dir),
+            combo_dir_name({**cp, "epsilon": cp["epsilon"]}),
+        )
+        mu_dir = os.path.join(combo_dir, "mu_sweeps", mu_dir_name(float(row["mu_at_max"])))
+        if os.path.isdir(mu_dir):
+            try:
+                arr, _ = extract_column_op(mu_dir)
+                return arr
+            except FileNotFoundError:
+                pass
+    return None
+
+
+def _bc_err_is_finite(row: dict) -> bool:
+    err = row.get("BC_err")
+    if err in (None, ""):
+        return False
+    try:
+        val = float(err)
+    except (TypeError, ValueError):
+        return False
+    return bool(np.isfinite(val) and val > 0)
+
+
+def backfill_bc_err(
+    bc_csv: str,
+    *,
+    cache_dir: str | None = None,
+    base_dir: str | None = None,
+) -> tuple[int, int, int]:
+    """Fill missing BC_err from column-op cache or source snapshots.
+
+    Returns (newly_filled, already_present, total_rows).
+    Rewrites bc_csv in place when any row is updated.
+    """
+    with open(bc_csv, newline="") as f:
+        reader = csv.DictReader(f)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+    if "BC_err" not in fieldnames:
+        fieldnames.append("BC_err")
+    if cache_dir is None:
+        cache_dir = os.path.join(os.path.dirname(os.path.abspath(bc_csv)), "cache", "column_op")
+
+    filled = already = 0
+    for row in rows:
+        if _bc_err_is_finite(row):
+            already += 1
+            continue
+        arr = _load_column_op_for_row(row, cache_dir, base_dir=base_dir)
+        if arr is None:
+            continue
+        err = bc_bootstrap_error(arr)
+        if np.isfinite(err) and err > 0:
+            row["BC_err"] = err
+            filled += 1
+
+    if filled:
+        with open(bc_csv, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+    return filled, already, len(rows)
+
+
+def _bc_err_stats(rows: list[dict]) -> tuple[int, float, float]:
+    vals = []
+    for row in rows:
+        if _bc_err_is_finite(row):
+            vals.append(float(row["BC_err"]))
+    if not vals:
+        return 0, float("nan"), float("nan")
+    return len(vals), float(min(vals)), float(max(vals))
+
 EPS_C_FIELDS = [
     "L_short", "L_long", "x_axis", "criticality_estimate",
     "epsilon_c_estimate", "beta", "method", "fit_uncertainty",
@@ -1271,6 +1406,12 @@ def main() -> None:
                     help="Optional criticality.csv for transition brackets.")
     rp.add_argument("--no-transition-bracket", action="store_true",
                     help="BC_err bars only; skip orange transition shading and crit markers.")
+    rp.add_argument("--cache-dir", default=None,
+                    help="column_op cache dir (default: <csv-dir>/cache/column_op).")
+    rp.add_argument("--base-dir", default=None,
+                    help="Resolve source_dir / combo paths (e.g. results).")
+    rp.add_argument("--skip-backfill", action="store_true",
+                    help="Do not recompute missing BC_err from cache/snapshots.")
 
     # histograms (Figure 1): P(phi_col) at several epsilon, one size + delta_mu.
     hg = sub.add_parser("histograms", help="Figure 1: P(phi_col) at several epsilon")
@@ -1332,6 +1473,34 @@ def main() -> None:
         from plot_bimodality import plot_bc_family
 
         bc_csv = args.bc_csv
+        bc_csv = os.path.abspath(bc_csv)
+        if not args.skip_backfill:
+            filled, already, total = backfill_bc_err(
+                bc_csv,
+                cache_dir=args.cache_dir,
+                base_dir=args.base_dir,
+            )
+            print(
+                f"[bimodality] BC_err backfill: filled {filled}, "
+                f"already present {already}, total {total}",
+                flush=True,
+            )
+        with open(bc_csv, newline="") as f:
+            rows = list(csv.DictReader(f))
+        n_err, err_min, err_max = _bc_err_stats(rows)
+        if n_err == 0:
+            print(
+                "[bimodality] WARNING: no finite BC_err in CSV — plot will have no "
+                "error bars. Ensure cache/column_op/*.npy exists beside the CSV, or "
+                "pass --base-dir results so source snapshots can be read.",
+                flush=True,
+            )
+        else:
+            print(
+                f"[bimodality] BC_err: {n_err}/{len(rows)} rows, "
+                f"range [{err_min:.4g}, {err_max:.4g}]",
+                flush=True,
+            )
         with open(bc_csv, newline="") as f:
             row = next(csv.DictReader(f))
         L_long = int(row["L_long"])

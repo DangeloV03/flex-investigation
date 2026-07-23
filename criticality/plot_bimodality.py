@@ -48,6 +48,10 @@ def plot_bc_vs_epsilon(
         sub = sub.sort_values(x_col)
         L_short = int(sub["L_short"].iloc[0])
         yerr = sub["BC_err"] if "BC_err" in sub.columns else None
+        if yerr is not None:
+            yerr = pd.to_numeric(yerr, errors="coerce")
+            if not yerr.notna().any():
+                yerr = None
         ax.errorbar(sub[x_col], sub["BC"], yerr=yerr, fmt="o-", capsize=2,
                     label=f"{int(L_long)}x{L_short}")
     _draw_transition_bracket(ax, crit_row, x_col=x_col)
@@ -123,8 +127,12 @@ def _plot_bc_curves_on_ax(
             dmu = keys[0] if isinstance(keys, tuple) else keys
             label = f"$\\Delta\\mu$={dmu}"
         yerr = sub["BC_err"] if "BC_err" in sub.columns else None
-        ax.errorbar(sub[x_col], sub["BC"], yerr=yerr, fmt="o-", ms=4, capsize=2,
-                    label=label, zorder=3)
+        if yerr is not None:
+            yerr = pd.to_numeric(yerr, errors="coerce")
+            if not yerr.notna().any():
+                yerr = None
+        ax.errorbar(sub[x_col], sub["BC"], yerr=yerr, fmt="o-", ms=4, capsize=3,
+                    capthick=1.2, elinewidth=1.2, label=label, zorder=3)
     ax.axhline(BC_UNIMODAL, ls=":", c="grey", lw=1)
     ax.axhline(BC_BIMODAL_CUTOFF, ls="--", c="grey", lw=1)
     ax.set_xlabel(xlabel)

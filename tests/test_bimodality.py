@@ -257,6 +257,30 @@ def test_plot_bc_family_no_transition_bracket(tmp_path):
     assert os.path.isfile(out_png)
 
 
+def test_backfill_bc_err_from_cache(tmp_path):
+    """Rows without BC_err get bootstrap errors from column_op cache."""
+    rng = np.random.default_rng(7)
+    arr = np.stack([_phase_separated(60, 10, rng) for _ in range(6)], axis=0)
+    cache_dir = tmp_path / "cache" / "column_op"
+    cache_dir.mkdir(parents=True)
+    key = "60x10_homo_deltaF0p0_dmu1p0_epsilonm2p0__mu1234567"
+    np.save(cache_dir / f"{key}.npy", arr)
+    bc_csv = tmp_path / "bc.csv"
+    pd.DataFrame([{
+        "scheme": "homo", "delta_f": 0.0, "delta_mu": 1.0, "k": 1.0,
+        "epsilon": -2.0, "beta": 1.0, "beta_epsilon": -2.0,
+        "L_short": 10, "L_long": 60, "BC": 0.95, "mu_at_max": 1.234567,
+    }]).to_csv(bc_csv, index=False)
+    filled, already, total = bm.backfill_bc_err(
+        str(bc_csv), cache_dir=str(cache_dir),
+    )
+    assert total == 1
+    assert filled == 1
+    df = pd.read_csv(bc_csv)
+    assert np.isfinite(df["BC_err"].iloc[0])
+    assert df["BC_err"].iloc[0] > 0
+
+
 def test_plot_bc_scheme_comparison(tmp_path):
     """Side-by-side scheme comparison figure includes BC_err vertical bars."""
     from plot_bimodality import plot_bc_scheme_comparison
