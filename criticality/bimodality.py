@@ -910,6 +910,7 @@ def phase_diagram(
     manage_csv: Optional[str] = None,
     mu_reduction: str = "max",
     make_plots: bool = True,
+    show_transition_bracket: bool = True,
 ) -> list[dict]:
     """BC_max-vs-(beta*epsilon) curve for each delta_mu at a fixed scheme+size.
 
@@ -966,6 +967,7 @@ def phase_diagram(
             plot_bc_family(
                 bc_csv, os.path.join(out_dir, f"bc_max_phase_diagram_{size}.png"),
                 crit_csv=crit_csv,
+                show_transition_bracket=show_transition_bracket,
             )
         except Exception as exc:  # plotting is non-critical
             print(f"[bimodality] family plot skipped: {exc}", flush=True)
@@ -1253,6 +1255,22 @@ def main() -> None:
     pd_.add_argument("--delta-mus", type=float, nargs="*", default=None,
                      help="Explicit delta_mu list; default discovers every one on disk.")
     pd_.add_argument("--no-plots", action="store_true")
+    pd_.add_argument("--no-transition-bracket", action="store_true",
+                     help="Family plot: BC_err bars only (no orange transition shading).")
+
+    # replot-family: regenerate PNG from an existing bc_vs_beta_epsilon.csv.
+    rp = sub.add_parser(
+        "replot-family",
+        help="replot bc_vs_beta_epsilon.csv with BC_err bars (no recomputation)",
+    )
+    rp.add_argument("--bc-csv", required=True,
+                    help="Existing bc_vs_beta_epsilon.csv from phase-diagram.")
+    rp.add_argument("--out", default=None,
+                    help="Output PNG path (default: bc_max_phase_diagram_{L}.png beside CSV).")
+    rp.add_argument("--crit-csv", default=None,
+                    help="Optional criticality.csv for transition brackets.")
+    rp.add_argument("--no-transition-bracket", action="store_true",
+                    help="BC_err bars only; skip orange transition shading and crit markers.")
 
     # histograms (Figure 1): P(phi_col) at several epsilon, one size + delta_mu.
     hg = sub.add_parser("histograms", help="Figure 1: P(phi_col) at several epsilon")
@@ -1306,8 +1324,34 @@ def main() -> None:
             Lx=args.Lx, Ly=args.Ly, delta_mus=args.delta_mus, out_dir=args.out_dir,
             manage_csv=args.manage_csv, mu_reduction=args.mu_reduction,
             make_plots=not args.no_plots,
+            show_transition_bracket=not args.no_transition_bracket,
         )
         print(f"\n[bimodality] wrote {len(results)} delta_mu curve(s) to {args.out_dir}/")
+
+    elif args.mode == "replot-family":
+        from plot_bimodality import plot_bc_family
+
+        bc_csv = args.bc_csv
+        df_head = pd.read_csv(bc_csv, nrows=1)
+        L_long = int(df_head["L_long"].iloc[0])
+        L_short = int(df_head["L_short"].iloc[0])
+        size = f"{L_long}x{L_short}"
+        out_png = args.out or os.path.join(
+            os.path.dirname(os.path.abspath(bc_csv)),
+            f"bc_max_phase_diagram_{size}.png",
+        )
+        crit_csv = args.crit_csv
+        if crit_csv is None:
+            default_crit = os.path.join(os.path.dirname(os.path.abspath(bc_csv)), "criticality.csv")
+            if os.path.isfile(default_crit):
+                crit_csv = default_crit
+        plot_bc_family(
+            bc_csv,
+            out_png,
+            crit_csv=crit_csv,
+            show_transition_bracket=not args.no_transition_bracket,
+        )
+        print(f"\n[bimodality] wrote family plot {out_png}")
 
     elif args.mode == "histograms":
         combo = {"scheme": args.scheme, "delta_f": args.delta_f, "delta_mu": args.delta_mu,

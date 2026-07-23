@@ -166,15 +166,19 @@ def plot_bc_family(
     *,
     x_col: str = "beta_epsilon",
     crit_csv: str | None = None,
+    show_transition_bracket: bool = True,
 ) -> str:
     """Thermal-phase-diagram family: max BC vs beta*epsilon, one curve per
     delta_mu (further split by system size if more than one L is present).
 
-    If crit_csv is provided (criticality.csv from phase_diagram), each curve
-    gets a sigmoid marker and a shaded transition bracket.
+    Vertical bars use ``BC_err`` from the CSV. If ``crit_csv`` is provided and
+    ``show_transition_bracket`` is True, each curve also gets a sigmoid marker
+    and a shaded transition bracket.
     """
     df = pd.read_csv(bc_csv)
-    crit_df = pd.read_csv(crit_csv) if crit_csv and os.path.isfile(crit_csv) else None
+    crit_df = None
+    if show_transition_bracket and crit_csv and os.path.isfile(crit_csv):
+        crit_df = pd.read_csv(crit_csv)
     fig, ax = plt.subplots(figsize=(7.5, 5.5))
     _plot_bc_curves_on_ax(ax, df, x_col=x_col)
     bracket_labeled = False

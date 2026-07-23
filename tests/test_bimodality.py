@@ -231,6 +231,32 @@ def test_phase_diagram_family_over_dmu(tmp_path):
     assert os.path.isfile(os.path.join(out_dir, "criticality.csv"))
 
 
+def test_plot_bc_family_no_transition_bracket(tmp_path):
+    """Family plot with show_transition_bracket=False skips orange shading."""
+    from plot_bimodality import plot_bc_family
+
+    rows = []
+    for dmu in [0.0, 1.0]:
+        for i, eps in enumerate([-2.0, -1.8, -1.6]):
+            rows.append({
+                "delta_mu": dmu, "L_long": 160, "L_short": 16,
+                "beta_epsilon": eps, "BC": 0.9 - 0.1 * i,
+                "BC_err": 0.02,
+            })
+    bc_csv = str(tmp_path / "bc.csv")
+    pd.DataFrame(rows).to_csv(bc_csv, index=False)
+    crit_csv = str(tmp_path / "crit.csv")
+    pd.DataFrame([{
+        "delta_mu": 0.0, "L_long": 160, "criticality_estimate": -1.7,
+        "transition_x_high": -1.85, "transition_x_low": -1.55,
+        "transition_bc_high": 0.85, "transition_bc_low": 0.65,
+        "transition_half_width": 0.15,
+    }]).to_csv(crit_csv, index=False)
+    out_png = str(tmp_path / "family.png")
+    plot_bc_family(bc_csv, out_png, crit_csv=crit_csv, show_transition_bracket=False)
+    assert os.path.isfile(out_png)
+
+
 def test_plot_bc_scheme_comparison(tmp_path):
     """Side-by-side scheme comparison figure includes BC_err vertical bars."""
     from plot_bimodality import plot_bc_scheme_comparison
