@@ -65,6 +65,12 @@ EMPTY, INERT, BONDING = 0, 1, 2
 # Sarle heuristic cutoff: BC > 5/9 ~ "likely bimodal" (a convention, not a test).
 BC_BIMODAL_CUTOFF = 5.0 / 9.0
 
+# Transition-bracket defaults: where BC has fallen partway down the crossover.
+# Used to quote an honest uncertainty when the sigmoid inflection sits on a
+# flat, noisy plateau (see criticality/UNCERTAINTY.md).
+TRANSITION_BC_HIGH = 0.85
+TRANSITION_BC_LOW = 0.65
+
 # ---------------------------------------------------------------------------
 # tag helpers
 # ---------------------------------------------------------------------------
@@ -373,12 +379,18 @@ BC_FIELDS = [
 EPS_C_FIELDS = [
     "L_short", "L_long", "x_axis", "criticality_estimate",
     "epsilon_c_estimate", "beta", "method", "fit_uncertainty",
+    "transition_bc_high", "transition_bc_low",
+    "transition_x_high", "transition_x_low", "transition_half_width",
+    "transition_half_width_envelope", "recommended_uncertainty",
 ]
 
 # Per-(Delta mu) criticality rows for the phase-diagram family.
 CRIT_FIELDS = [
     "scheme", "delta_f", "delta_mu", "k", "L_short", "L_long", "x_axis",
     "criticality_estimate", "epsilon_c_estimate", "beta", "method", "fit_uncertainty",
+    "transition_bc_high", "transition_bc_low",
+    "transition_x_high", "transition_x_low", "transition_half_width",
+    "transition_half_width_envelope", "recommended_uncertainty",
 ]
 
 
@@ -593,6 +605,88 @@ def _threshold_crossing(x, bc, level=BC_BIMODAL_CUTOFF):
     return float("nan")
 
 
+def _crossing_on_descending_curve(
+    x: np.ndarray, bc: np.ndarray, level: float,
+) -> float:
+    """First x (scanning left->right) where BC(x) crosses `level` downward."""
+    return _threshold_crossing(x, bc, level)
+
+
+def _crossing_envelope(
+    x: np.ndarray,
+    bc: np.ndarray,
+    bc_err: np.ndarray,
+    level: float,
+) -> tuple[float, float]:
+    """Min/max crossing x at `level` using BC +/- BC_err on segment endpoints."""
+    crossings: list[float] = []
+    for i in range(len(x) - 1):
+        e0, e1 = float(x[i]), float(x[i + 1])
+        b0n, b1n = float(bc[i]), float(bc[i + 1])
+        s0 = float(bc_err[i]) if np.isfinite(bc_err[i]) else 0.0
+        s1 = float(bc_err[i + 1]) if np.isfinite(bc_err[i + 1]) else 0.0
+        for ds0, ds1 in ((-1, -1), (-1, 1), (1, -1), (1, 1)):
+            b0, b1 = b0n + ds0 * s0, b1n + ds1 * s1
+            y0, y1 = b0 - level, b1 - level
+            if y0 == 0:
+                crossings.append(e0)
+            elif y0 * y1 < 0:
+                t = y0 / (y0 - y1)
+                crossings.append(e0 + t * (e1 - e0))
+    if crossings:
+        return min(crossings), max(crossings)
+    c = _crossing_on_descending_curve(x, bc, level)
+    return c, c
+
+
+def transition_bracket(
+    x: np.ndarray,
+    bc: np.ndarray,
+    bc_err: Optional[np.ndarray] = None,
+    *,
+    bc_high: float = TRANSITION_BC_HIGH,
+    bc_low: float = TRANSITION_BC_LOW,
+) -> dict:
+    """Bracket a gradual BC crossover using two contour levels.
+
+    On a flat, noisy curve the sigmoid inflection is poorly constrained. This
+    reports the beta*epsilon (or epsilon) interval where BC falls from bc_high
+    to bc_low, plus a wider envelope when BC_err is available.
+
+    Returns NaNs when a contour is never crossed on the supplied sweep.
+    """
+    x = np.asarray(x, dtype=float)
+    bc = np.asarray(bc, dtype=float)
+    order = np.argsort(x)
+    x, bc = x[order], bc[order]
+    if bc_err is not None:
+        bc_err = np.asarray(bc_err, dtype=float)[order]
+
+    x_high = _crossing_on_descending_curve(x, bc, bc_high)
+    x_low = _crossing_on_descending_curve(x, bc, bc_low)
+    half = float("nan")
+    if np.isfinite(x_high) and np.isfinite(x_low) and x_low > x_high:
+        half = (x_low - x_high) / 2.0
+
+    half_env = float("nan")
+    if bc_err is not None and np.all(np.isfinite(bc_err) & (bc_err > 0)):
+        hi_lo, hi_hi = _crossing_envelope(x, bc, bc_err, bc_high)
+        lo_lo, lo_hi = _crossing_envelope(x, bc, bc_err, bc_low)
+        if all(np.isfinite(v) for v in (hi_lo, lo_hi)) and lo_hi > hi_lo:
+            half_env = (lo_hi - hi_lo) / 2.0
+
+    recommended = half_env if np.isfinite(half_env) else half
+    return {
+        "transition_bc_high": bc_high,
+        "transition_bc_low": bc_low,
+        "transition_x_high": x_high,
+        "transition_x_low": x_low,
+        "transition_half_width": half,
+        "transition_half_width_envelope": half_env,
+        "recommended_uncertainty": recommended,
+    }
+
+
 def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilon") -> dict:
     """Estimate the criticality for one size from its BC_max(x) crossover.
 
@@ -645,6 +739,12 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
         print(f"[bimodality] sigmoid fit fell back to threshold: {exc}", flush=True)
 
     eps_c = x_c / beta_mean if (x_col == "beta_epsilon" and beta_mean) else x_c
+    bracket = transition_bracket(x, bc, bc_err)
+    recommended = bracket["transition_half_width"]
+    if not np.isfinite(recommended):
+        recommended = bracket["transition_half_width_envelope"]
+    if not np.isfinite(recommended):
+        recommended = unc
     return {
         "L_short": L_short,
         "L_long": int(L_long),
@@ -654,6 +754,8 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
         "beta": beta_mean,
         "method": method,
         "fit_uncertainty": unc,
+        **bracket,
+        "recommended_uncertainty": recommended,
     }
 
 
@@ -697,14 +799,16 @@ def find_criticality(
             plot_bc_vs_epsilon(
                 bc_csv, os.path.join(out_dir, f"bc_max_vs_beta_epsilon_{size}.png"),
                 x_col="beta_epsilon", crit=result["criticality_estimate"],
+                crit_row=result,
             )
         except Exception as exc:  # plotting is non-critical
             print(f"[bimodality] plotting skipped: {exc}", flush=True)
 
+    rec = result.get("recommended_uncertainty", result["fit_uncertainty"])
     print(
         f"[bimodality] criticality({L_long}x{combo_params['Ly']}) = "
         f"(beta*eps)_c={result['criticality_estimate']:.4f} "
-        f"+/- {result['fit_uncertainty']}  "
+        f"+/- {rec} (transition bracket; sigmoid fit +/- {result['fit_uncertainty']})  "
         f"[epsilon_c={result['epsilon_c_estimate']:.4f}] ({result['method']})",
         flush=True,
     )
@@ -845,9 +949,11 @@ def phase_diagram(
         res.update({"scheme": scheme, "delta_f": delta_f, "delta_mu": dmu, "k": k})
         _append_row(crit_csv, res, CRIT_FIELDS)
         results.append(res)
+        rec = res.get("recommended_uncertainty", res["fit_uncertainty"])
         print(
             f"[bimodality] dmu={dmu:+.3f}: (beta*eps)_c="
-            f"{res['criticality_estimate']:.4f} +/- {res['fit_uncertainty']} "
+            f"{res['criticality_estimate']:.4f} +/- {rec} "
+            f"(transition; sigmoid +/- {res['fit_uncertainty']}) "
             f"({res['method']})",
             flush=True,
         )
@@ -859,11 +965,80 @@ def phase_diagram(
             size = f"{Lx}x{Ly}"
             plot_bc_family(
                 bc_csv, os.path.join(out_dir, f"bc_max_phase_diagram_{size}.png"),
+                crit_csv=crit_csv,
             )
         except Exception as exc:  # plotting is non-critical
             print(f"[bimodality] family plot skipped: {exc}", flush=True)
 
     return results
+
+
+def scheme_comparison(
+    panels: list[dict],
+    *,
+    out_dir: str = "criticality/scheme_comparison",
+    mu_reduction: str = "max",
+) -> str:
+    """Side-by-side Scheme 1 vs Scheme 3 BC_max family plots with error bars.
+
+    Each entry in ``panels`` is a dict with keys:
+      base_dir, scheme, delta_f, k, Lx, Ly, delta_mus, title
+    and optional manage_csv. Runs ``phase_diagram`` per panel (no per-panel
+    family plot), then writes one combined PNG via ``plot_bc_scheme_comparison``.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    plot_panels: list[tuple[str, str]] = []
+    for i, panel in enumerate(panels):
+        sub_out = os.path.join(out_dir, f"panel{i}")
+        os.makedirs(sub_out, exist_ok=True)
+        phase_diagram(
+            panel["base_dir"],
+            scheme=panel["scheme"],
+            delta_f=panel["delta_f"],
+            k=panel["k"],
+            Lx=panel["Lx"],
+            Ly=panel["Ly"],
+            delta_mus=panel["delta_mus"],
+            out_dir=sub_out,
+            manage_csv=panel.get("manage_csv"),
+            mu_reduction=mu_reduction,
+            make_plots=False,
+        )
+        bc_csv = os.path.join(sub_out, "bc_vs_beta_epsilon.csv")
+        plot_panels.append((bc_csv, panel["title"]))
+
+    from plot_bimodality import plot_bc_scheme_comparison
+
+    size = f"{panels[0]['Lx']}x{panels[0]['Ly']}"
+    out_png = os.path.join(out_dir, f"bc_max_scheme_comparison_{size}.png")
+    plot_bc_scheme_comparison(plot_panels, out_png)
+    print(f"[bimodality] wrote comparison figure {out_png}", flush=True)
+    return out_png
+
+
+# Default panel configs for the standard Scheme 1 vs Scheme 3 comparison figure.
+DEFAULT_SCHEME_COMPARISON_PANELS = [
+    {
+        "title": "Scheme 1: Homogenous",
+        "base_dir": "results",
+        "scheme": "homo",
+        "delta_f": 0.0,
+        "k": 1.0,
+        "Lx": 160,
+        "Ly": 16,
+        "delta_mus": [-1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0],
+    },
+    {
+        "title": "Scheme 3: Negative",
+        "base_dir": "scheme3",
+        "scheme": "negative_drive",
+        "delta_f": 0.0,
+        "k": 0.1,
+        "Lx": 160,
+        "Ly": 16,
+        "delta_mus": [1.0, 2.0, 3.0, 4.0, 4.5],
+    },
+]
 
 
 # ---------------------------------------------------------------------------
@@ -1107,6 +1282,22 @@ def main() -> None:
     ins.add_argument("--ref-step", type=float, default=0.005,
                      help="Reference epsilon step to compare against (default 0.005).")
 
+    # scheme-comparison: side-by-side Scheme 1 vs Scheme 3 family plots + error bars.
+    sc = sub.add_parser(
+        "scheme-comparison",
+        help="Scheme 1 vs Scheme 3 side-by-side BC_max family plot (with BC_err bars)",
+    )
+    sc.add_argument("--out-dir", default="criticality/scheme_comparison")
+    sc.add_argument("--mu-reduction", choices=["max", "nearest_coex", "balanced"],
+                    default="max")
+    sc.add_argument(
+        "--plot-only",
+        nargs="+",
+        metavar="CSV:TITLE",
+        help="Skip recomputation; plot existing CSVs as PANEL (e.g. "
+             "criticality/s1/bc_vs_beta_epsilon.csv:Scheme\\ 1:\\ Homogenous).",
+    )
+
     args = p.parse_args()
 
     if args.mode == "phase-diagram":
@@ -1147,6 +1338,29 @@ def main() -> None:
             args.base_dir, scheme=args.scheme, delta_f=args.delta_f, k=args.k,
             Lx=args.Lx, Ly=args.Ly, delta_mus=args.delta_mus, ref_step=args.ref_step,
         )
+
+    elif args.mode == "scheme-comparison":
+        if args.plot_only:
+            from plot_bimodality import plot_bc_scheme_comparison
+
+            panels = []
+            for spec in args.plot_only:
+                csv, title = spec.split(":", 1)
+                panels.append((csv, title.replace("\\ ", " ")))
+            size = "160x16"
+            out_png = os.path.join(args.out_dir, f"bc_max_scheme_comparison_{size}.png")
+            plot_bc_scheme_comparison(panels, out_png)
+            print(f"\n[bimodality] wrote comparison figure {out_png}")
+        else:
+            out_png = scheme_comparison(
+                DEFAULT_SCHEME_COMPARISON_PANELS,
+                out_dir=args.out_dir,
+                mu_reduction=args.mu_reduction,
+            )
+            print(f"\n[bimodality] wrote comparison figure {out_png}")
+
+    else:
+        raise SystemExit(f"unknown mode: {args.mode}")
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ def plot_bc_vs_epsilon(
     *,
     x_col: str = "beta_epsilon",
     crit: float | None = None,
+    crit_row: dict | None = None,
     delta_mu: float | None = None,
     title: str | None = None,
 ) -> str:
@@ -36,6 +37,7 @@ def plot_bc_vs_epsilon(
     size, with the 1/3 and 5/9 reference lines and an optional criticality marker.
 
     Pass delta_mu to restrict to a single Delta mu (Figure 2: sizes at fixed dmu).
+    Pass crit_row (from locate_epsilon_c) to shade the transition bracket.
     """
     df = pd.read_csv(bc_csv)
     if delta_mu is not None and "delta_mu" in df.columns:
@@ -48,11 +50,12 @@ def plot_bc_vs_epsilon(
         yerr = sub["BC_err"] if "BC_err" in sub.columns else None
         ax.errorbar(sub[x_col], sub["BC"], yerr=yerr, fmt="o-", capsize=2,
                     label=f"{int(L_long)}x{L_short}")
+    _draw_transition_bracket(ax, crit_row, x_col=x_col)
     ax.axhline(BC_UNIMODAL, ls=":", c="grey", lw=1, label="1/3 (Gaussian)")
     ax.axhline(BC_BIMODAL_CUTOFF, ls="--", c="grey", lw=1, label="5/9 (cutoff)")
     if crit is not None and np.isfinite(crit):
-        ax.axvline(crit, ls="-", c="crimson", lw=1,
-                   label=f"criticality={crit:.3f}")
+        ax.axvline(crit, ls="-", c="crimson", lw=1.2,
+                   label=rf"$\epsilon_c$ sigmoid={crit:.3f}")
     ax.set_xlabel(xlabel)
     ax.set_ylabel("max Sarle's BC")
     ax.set_title(title or r"Max bimodality coefficient of $P(\phi_{col})$")
@@ -64,13 +67,53 @@ def plot_bc_vs_epsilon(
     return out_png
 
 
-def plot_bc_family(bc_csv: str, out_png: str, *, x_col: str = "beta_epsilon") -> str:
-    """Thermal-phase-diagram family: max BC vs beta*epsilon, one curve per
-    delta_mu (further split by system size if more than one L is present)."""
-    df = pd.read_csv(bc_csv)
+def _draw_transition_bracket(ax, crit_row: dict | None, *, x_col: str = "beta_epsilon") -> None:
+    """Shade the transition region and draw BC contour lines from crit_row."""
+    if not crit_row:
+        return
+    try:
+        x_hi = float(crit_row["transition_x_high"])
+        x_lo = float(crit_row["transition_x_low"])
+        bc_hi = float(crit_row.get("transition_bc_high", TRANSITION_BC_HIGH))
+        bc_lo = float(crit_row.get("transition_bc_low", TRANSITION_BC_LOW))
+    except (KeyError, TypeError, ValueError):
+        return
+    if not (np.isfinite(x_hi) and np.isfinite(x_lo) and x_lo > x_hi):
+        return
+    ax.axhspan(bc_lo, bc_hi, color="#FEF3C7", alpha=0.35, zorder=0,
+               label="BC transition levels")
+    ax.axvspan(x_hi, x_lo, color="#FDBA74", alpha=0.22, zorder=0,
+               label=r"$\beta\epsilon$ transition region")
+    ax.axhline(bc_hi, ls="--", c="#D97706", lw=1, alpha=0.9)
+    ax.axhline(bc_lo, ls="--", c="#D97706", lw=1, alpha=0.9)
+    half = crit_row.get("transition_half_width")
+    if half is not None and np.isfinite(float(half)):
+        mid = 0.5 * (x_hi + x_lo)
+        y_text = max(bc_lo - 0.08, 0.05)
+        ax.annotate(
+            rf"$\pm {float(half):.3f}$",
+            xy=(mid, bc_lo), xytext=(mid, y_text),
+            ha="center", fontsize=8, color="#92400E",
+        )
+
+
+# Default transition levels (mirrors bimodality.py).
+TRANSITION_BC_HIGH = 0.85
+TRANSITION_BC_LOW = 0.65
+
+_INNER_TITLE = r"Max bimodality coefficient of $P(\phi_{col})$ vs $\beta\epsilon$"
+
+
+def _plot_bc_curves_on_ax(
+    ax,
+    df: pd.DataFrame,
+    *,
+    x_col: str = "beta_epsilon",
+    legend: bool = True,
+) -> None:
+    """One curve per delta_mu (and L if multiple sizes), with BC_err vertical bars."""
     xlabel = r"$\beta\epsilon$" if x_col == "beta_epsilon" else r"$\epsilon$"
     multi_L = df["L_long"].nunique() > 1
-    fig, ax = plt.subplots(figsize=(7, 5))
     for keys, sub in df.groupby(["delta_mu", "L_long"] if multi_L else ["delta_mu"]):
         sub = sub.sort_values(x_col)
         if multi_L:
@@ -81,13 +124,88 @@ def plot_bc_family(bc_csv: str, out_png: str, *, x_col: str = "beta_epsilon") ->
             label = f"$\\Delta\\mu$={dmu}"
         yerr = sub["BC_err"] if "BC_err" in sub.columns else None
         ax.errorbar(sub[x_col], sub["BC"], yerr=yerr, fmt="o-", ms=4, capsize=2,
-                    label=label)
+                    label=label, zorder=3)
     ax.axhline(BC_UNIMODAL, ls=":", c="grey", lw=1)
     ax.axhline(BC_BIMODAL_CUTOFF, ls="--", c="grey", lw=1)
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Max Bimodality Coefficient")
-    ax.set_title(r"Max bimodality coefficient of $P(\phi_{col})$ vs $\beta\epsilon$")
-    ax.legend(fontsize=8)
+    if legend:
+        ax.legend(fontsize=8, loc="upper right")
+
+
+def plot_bc_scheme_comparison(
+    panels: list[tuple[str, str]],
+    out_png: str,
+    *,
+    x_col: str = "beta_epsilon",
+) -> str:
+    """Side-by-side BC_max-vs-(beta*epsilon) family plots (Scheme 1 vs Scheme 3).
+
+    `panels` is a list of (bc_csv, panel_heading) pairs, e.g.
+    [("criticality/scheme1/bc_vs_beta_epsilon.csv", "Scheme 1: Homogenous"), ...].
+    Each CSV is the output of ``phase_diagram``; vertical bars use ``BC_err``.
+    """
+    n = len(panels)
+    fig, axes = plt.subplots(1, n, figsize=(7 * n, 5.5), sharey=True)
+    if n == 1:
+        axes = [axes]
+    for ax, (bc_csv, heading) in zip(axes, panels):
+        df = pd.read_csv(bc_csv)
+        _plot_bc_curves_on_ax(ax, df, x_col=x_col)
+        ax.set_title(f"{heading}\n{_INNER_TITLE}", fontsize=10)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    return out_png
+
+
+def plot_bc_family(
+    bc_csv: str,
+    out_png: str,
+    *,
+    x_col: str = "beta_epsilon",
+    crit_csv: str | None = None,
+) -> str:
+    """Thermal-phase-diagram family: max BC vs beta*epsilon, one curve per
+    delta_mu (further split by system size if more than one L is present).
+
+    If crit_csv is provided (criticality.csv from phase_diagram), each curve
+    gets a sigmoid marker and a shaded transition bracket.
+    """
+    df = pd.read_csv(bc_csv)
+    crit_df = pd.read_csv(crit_csv) if crit_csv and os.path.isfile(crit_csv) else None
+    fig, ax = plt.subplots(figsize=(7.5, 5.5))
+    _plot_bc_curves_on_ax(ax, df, x_col=x_col)
+    bracket_labeled = False
+    if crit_df is not None:
+        multi_L = df["L_long"].nunique() > 1
+        for keys, sub in df.groupby(["delta_mu", "L_long"] if multi_L else ["delta_mu"]):
+            dmu = keys[0] if isinstance(keys, tuple) else keys
+            L_long = keys[1] if multi_L else int(sub["L_long"].iloc[0])
+            match = crit_df[np.isclose(crit_df["delta_mu"], dmu)]
+            if multi_L:
+                match = match[np.isclose(match["L_long"], L_long)]
+            if not len(match):
+                continue
+            crit_row = match.iloc[0].to_dict()
+            x_c = crit_row.get("criticality_estimate")
+            if x_c is not None and np.isfinite(float(x_c)):
+                ax.axvline(float(x_c), ls="-", c="crimson", lw=1.2, alpha=0.85, zorder=2)
+            if not bracket_labeled:
+                _draw_transition_bracket(ax, crit_row, x_col=x_col)
+                bracket_labeled = True
+            else:
+                try:
+                    x_hi = float(crit_row["transition_x_high"])
+                    x_lo = float(crit_row["transition_x_low"])
+                    if np.isfinite(x_hi) and np.isfinite(x_lo) and x_lo > x_hi:
+                        ax.axvspan(x_hi, x_lo, color="#FDBA74", alpha=0.18, zorder=0)
+                        ax.axvline(float(crit_row["criticality_estimate"]), ls="-",
+                                   c="crimson", lw=1.2, alpha=0.85, zorder=2)
+                except (KeyError, TypeError, ValueError):
+                    pass
+    ax.set_title(_INNER_TITLE)
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
     fig.savefig(out_png, dpi=150)

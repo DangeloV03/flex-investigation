@@ -231,6 +231,29 @@ def test_phase_diagram_family_over_dmu(tmp_path):
     assert os.path.isfile(os.path.join(out_dir, "criticality.csv"))
 
 
+def test_plot_bc_scheme_comparison(tmp_path):
+    """Side-by-side scheme comparison figure includes BC_err vertical bars."""
+    from plot_bimodality import plot_bc_scheme_comparison
+
+    rng = np.random.default_rng(99)
+    rows = []
+    for dmu in [0.0, 1.0]:
+        for i, eps in enumerate([-2.0, -1.8, -1.6]):
+            rows.append({
+                "delta_mu": dmu, "L_long": 60, "L_short": 10,
+                "beta_epsilon": eps, "BC": 0.9 - 0.1 * i - 0.05 * dmu,
+                "BC_err": 0.01 + 0.005 * rng.random(),
+            })
+    csv = str(tmp_path / "bc.csv")
+    pd.DataFrame(rows).to_csv(csv, index=False)
+    out_png = str(tmp_path / "compare.png")
+    plot_bc_scheme_comparison(
+        [(csv, "Scheme 1: Homogenous"), (csv, "Scheme 3: Negative")],
+        out_png,
+    )
+    assert os.path.isfile(out_png)
+
+
 def test_histogram_data_picks_coexistence_mu(tmp_path):
     """Figure 1 data: at one epsilon with a bimodal mu and a unimodal mu,
     histogram_data must return the bimodal (max-BC, coexistence) mu's sample."""
@@ -381,6 +404,42 @@ def test_inspect_coverage_reports_step(tmp_path):
     assert r["n_eps"] == 4
     assert r["step_min"] == pytest.approx(0.1, abs=1e-6)
     assert r["as_fine_as_ref"] is False        # 0.1 is coarser than 0.005
+
+
+def test_transition_bracket_gradual_crossover():
+    """Flat noisy plateau then gradual drop: half-width >> sigmoid unc."""
+    x = np.linspace(-2.0, -1.4, 121)
+    bc = np.where(x < -1.85, 0.92, np.where(x > -1.65, 0.55, 0.80 - 0.5 * (x + 1.75)))
+    bracket = bm.transition_bracket(x, bc)
+    assert np.isfinite(bracket["transition_x_high"])
+    assert np.isfinite(bracket["transition_x_low"])
+    assert bracket["transition_x_low"] > bracket["transition_x_high"]
+    assert bracket["transition_half_width"] > 0.03
+
+
+def test_locate_epsilon_c_includes_transition_fields(tmp_path):
+    base = str(tmp_path / "results")
+    combo = {"scheme": "homo", "delta_f": 0.0, "delta_mu": 1.0, "k": 1.0,
+             "Lx": 60, "Ly": 10}
+    rng = np.random.default_rng(4)
+    eps_true_c = -1.7
+    epsilons = [-2.0, -1.9, -1.8, -1.7, -1.6, -1.5, -1.4]
+    for eps in epsilons:
+        cp = {**combo, "epsilon": eps}
+        combo_dir = os.path.join(base, bm.combo_dir_name(cp))
+        for mu in (-0.3, 0.0, 0.3):
+            if eps <= eps_true_c:
+                snaps = [_phase_separated(60, 10, rng) for _ in range(5)]
+            else:
+                snaps = [_homogeneous(60, 10, rng) for _ in range(5)]
+            _write_mu_dir(os.path.join(combo_dir, "mu_sweeps", mu_dir_name(mu)),
+                          mu, snaps, cp, epsilon=eps)
+
+    rows = bm.sweep_bc(base, combo, str(tmp_path / "bc.csv"), str(tmp_path / "cache"))
+    result = bm.locate_epsilon_c(rows, 60, x_col="beta_epsilon")
+    assert "transition_half_width" in result
+    assert "recommended_uncertainty" in result
+    assert np.isfinite(result["transition_half_width"])
 
 
 def test_find_criticality_end_to_end(tmp_path):
