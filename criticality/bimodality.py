@@ -1332,9 +1332,10 @@ def main() -> None:
         from plot_bimodality import plot_bc_family
 
         bc_csv = args.bc_csv
-        df_head = pd.read_csv(bc_csv, nrows=1)
-        L_long = int(df_head["L_long"].iloc[0])
-        L_short = int(df_head["L_short"].iloc[0])
+        with open(bc_csv, newline="") as f:
+            row = next(csv.DictReader(f))
+        L_long = int(row["L_long"])
+        L_short = int(row["L_short"])
         size = f"{L_long}x{L_short}"
         out_png = args.out or os.path.join(
             os.path.dirname(os.path.abspath(bc_csv)),
