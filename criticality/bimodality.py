@@ -1390,8 +1390,8 @@ def main() -> None:
 
             panels = []
             for spec in args.plot_only:
-                csv, title = spec.split(":", 1)
-                panels.append((csv, title.replace("\\ ", " ")))
+                panel_csv, title = spec.split(":", 1)
+                panels.append((panel_csv, title.replace("\\ ", " ")))
             size = "160x16"
             out_png = os.path.join(args.out_dir, f"bc_max_scheme_comparison_{size}.png")
             plot_bc_scheme_comparison(panels, out_png)
