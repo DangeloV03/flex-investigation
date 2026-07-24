@@ -9,11 +9,16 @@ and enters the low well (below 75% of the trace minimum), or vice versa.  For
 normalized m ∈ [-1, 1] at full saturation this is equivalent to crossing ±0.75.
 
 By default only ε values within eps_crit ± eps_window are included (see
-post_presentation_notes.md).
+post_presentation_notes.md).  Pass --epsilon to analyse a single ε instead.
 
 Usage:
     python susceptibility/count_mag_jumps.py \\
         --results susceptibility_results/eq_12p5x_<date> \\
+        --outdir plots/eq_timetest/12p5x
+
+    python susceptibility/count_mag_jumps.py \\
+        --results susceptibility_results/eq_12p5x_<date> \\
+        --epsilon -1.85 \\
         --outdir plots/eq_timetest/12p5x
 
     python susceptibility/count_mag_jumps.py --list \\
@@ -81,20 +86,40 @@ def _stderr(vals: np.ndarray) -> float:
     return float(np.std(vals, ddof=1) / np.sqrt(n))
 
 
+def _eps_tag(eps: float) -> str:
+    return f"eps{abs(eps):.3f}".replace(".", "p")
+
+
+def pick_epsilon(groups: dict[tuple[int, float], dict], target: float) -> float:
+    """Snap *target* to the nearest ε present in *groups*."""
+    eps_values = np.sort([eps for _, eps in groups])
+    return float(eps_values[int(np.argmin(np.abs(eps_values - target)))])
+
+
 def analyze_jumps(
     groups: dict[tuple[int, float], dict],
     *,
     eps_crit: float,
     eps_window: float,
+    epsilon: float | None,
     frac: float,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Return (summary by L×ε, summary by L, per-replica detail)."""
-    eps_lo = eps_crit - eps_window
-    eps_hi = eps_crit + eps_window
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, float | None]:
+    """Return (summary by L×ε, summary by L, per-replica detail, selected ε or None)."""
+    if epsilon is not None:
+        eps_use = pick_epsilon(groups, epsilon)
+        eps_lo = eps_hi = eps_use
+        selected_eps = eps_use
+    else:
+        eps_lo = eps_crit - eps_window
+        eps_hi = eps_crit + eps_window
+        selected_eps = None
 
     detail_rows: list[dict] = []
     for (L, eps), g in sorted(groups.items()):
-        if not (eps_lo <= eps <= eps_hi):
+        if epsilon is not None:
+            if not np.isclose(eps, eps_use):
+                continue
+        elif not (eps_lo <= eps <= eps_hi):
             continue
         for rep_idx, m_arr in enumerate(g["replicas"]):
             detail_rows.append({
@@ -108,7 +133,7 @@ def analyze_jumps(
     detail = pd.DataFrame(detail_rows)
     if detail.empty:
         empty = pd.DataFrame()
-        return empty, empty, empty
+        return empty, empty, empty, selected_eps
 
     summary = (
         detail.groupby(["L", "epsilon"], as_index=False)
@@ -128,10 +153,17 @@ def analyze_jumps(
         by_L.loc[by_L["L"] == L, "J_stderr"] = _stderr(vals)
     by_L = by_L.sort_values("L")
 
-    return summary, by_L, detail
+    return summary, by_L, detail, selected_eps
 
 
-def plot_J_vs_L(by_L: pd.DataFrame, out_path: str, *, eps_crit: float, eps_window: float) -> None:
+def plot_J_vs_L(
+    by_L: pd.DataFrame,
+    out_path: str,
+    *,
+    eps_crit: float,
+    eps_window: float,
+    epsilon: float | None = None,
+) -> None:
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
     L = by_L["L"].to_numpy(float)
     J = by_L["J_mean"].to_numpy(float)
@@ -146,10 +178,11 @@ def plot_J_vs_L(by_L: pd.DataFrame, out_path: str, *, eps_crit: float, eps_windo
     ax.set_xscale("log")
     ax.set_xlabel("L")
     ax.set_ylabel(r"$\langle J \rangle$")
-    ax.set_title(
-        rf"Average magnetization jumps vs $L$ "
-        rf"($\varepsilon \in [{eps_crit - eps_window:.2f},\, {eps_crit + eps_window:.2f}]$)"
-    )
+    if epsilon is not None:
+        title_eps = rf"$\varepsilon = {epsilon:.3f}$"
+    else:
+        title_eps = rf"$\varepsilon \in [{eps_crit - eps_window:.2f},\, {eps_crit + eps_window:.2f}]$"
+    ax.set_title(rf"Average magnetization jumps vs $L$ ({title_eps})")
     ax.grid(True, which="both", alpha=0.3)
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
@@ -186,9 +219,11 @@ def main() -> int:
                    help="Susceptibility results tree (e.g. susceptibility_results/eq_12p5x_2026-07-20)")
     p.add_argument("--outdir", default="plots/eq_timetest/12p5x")
     p.add_argument("--eps-crit", type=float, default=-1.75,
-                   help="Central ε for the analysis window (default: -1.75)")
+                   help="Central ε for the analysis window (default: -1.75; ignored with --epsilon)")
     p.add_argument("--eps-window", type=float, default=0.1,
-                   help="Half-width of ε window around eps_crit (default: 0.1)")
+                   help="Half-width of ε window around eps_crit (default: 0.1; ignored with --epsilon)")
+    p.add_argument("--epsilon", type=float, default=None,
+                   help="Analyse a single ε only (snaps to nearest available); writes tagged outputs")
     p.add_argument("--frac", type=float, default=0.75,
                    help="Fraction of trace max/min for well thresholds (default: 0.75)")
     p.add_argument("--list", action="store_true", help="List available L and ε, then exit")
@@ -214,29 +249,50 @@ def main() -> int:
         print(f"ε in [{lo:.3f}, {hi:.3f}]: {len(in_window)} values")
         return 0
 
-    summary, by_L, detail = analyze_jumps(
+    summary, by_L, detail, selected_eps = analyze_jumps(
         groups,
         eps_crit=args.eps_crit,
         eps_window=args.eps_window,
+        epsilon=args.epsilon,
         frac=args.frac,
     )
 
     if detail.empty:
-        lo, hi = args.eps_crit - args.eps_window, args.eps_crit + args.eps_window
-        print(
-            f"ERROR: no replicas in ε ∈ [{lo:.3f}, {hi:.3f}]. "
-            f"Use --list to inspect available data or adjust --eps-crit / --eps-window.",
-            file=sys.stderr,
-        )
+        if args.epsilon is not None:
+            print(
+                f"ERROR: no replicas at ε={args.epsilon:.4f} "
+                f"(nearest available: {selected_eps}). "
+                f"Use --list to inspect available data.",
+                file=sys.stderr,
+            )
+        else:
+            lo, hi = args.eps_crit - args.eps_window, args.eps_crit + args.eps_window
+            print(
+                f"ERROR: no replicas in ε ∈ [{lo:.3f}, {hi:.3f}]. "
+                f"Use --list to inspect available data or adjust --eps-crit / --eps-window.",
+                file=sys.stderr,
+            )
         return 1
 
-    os.makedirs(args.outdir, exist_ok=True)
-    detail.to_csv(os.path.join(args.outdir, "J_per_replica.csv"), index=False)
-    summary.to_csv(os.path.join(args.outdir, "J_vs_epsilon.csv"), index=False)
-    by_L.to_csv(os.path.join(args.outdir, "J_vs_L.csv"), index=False)
+    if args.epsilon is not None and not np.isclose(selected_eps, args.epsilon):
+        print(f"Note: ε={args.epsilon} not found; using nearest available ε={selected_eps:.4f}")
 
-    print(f"\n⟨J⟩ vs L  (ε ∈ [{args.eps_crit - args.eps_window:.3f}, "
-          f"{args.eps_crit + args.eps_window:.3f}], n={detail.shape[0]} replicas):")
+    tag = _eps_tag(selected_eps) if selected_eps is not None else ""
+    suffix = f"_{tag}" if tag else ""
+
+    os.makedirs(args.outdir, exist_ok=True)
+    detail.to_csv(os.path.join(args.outdir, f"J_per_replica{suffix}.csv"), index=False)
+    summary.to_csv(os.path.join(args.outdir, f"J_vs_epsilon{suffix}.csv"), index=False)
+    by_L.to_csv(os.path.join(args.outdir, f"J_vs_L{suffix}.csv"), index=False)
+
+    if selected_eps is not None:
+        eps_label = f"ε = {selected_eps:.3f}"
+    else:
+        eps_label = (
+            f"ε ∈ [{args.eps_crit - args.eps_window:.3f}, "
+            f"{args.eps_crit + args.eps_window:.3f}]"
+        )
+    print(f"\n⟨J⟩ vs L  ({eps_label}, n={detail.shape[0]} replicas):")
     print(f"{'L':>6} {'⟨J⟩':>8} {'stderr':>8} {'n_rep':>6}")
     for _, row in by_L.iterrows():
         print(f"{int(row['L']):>6} {row['J_mean']:>8.2f} {row['J_stderr']:>8.2f} "
@@ -244,11 +300,13 @@ def main() -> int:
 
     plot_J_vs_L(
         by_L,
-        os.path.join(args.outdir, "J_vs_L.png"),
+        os.path.join(args.outdir, f"J_vs_L{suffix}.png"),
         eps_crit=args.eps_crit,
         eps_window=args.eps_window,
+        epsilon=selected_eps,
     )
-    plot_J_vs_eps(summary, os.path.join(args.outdir, "J_vs_epsilon.png"))
+    if selected_eps is None:
+        plot_J_vs_eps(summary, os.path.join(args.outdir, "J_vs_epsilon.png"))
     return 0
 
 
