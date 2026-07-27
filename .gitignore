@@ -37,6 +37,7 @@ test_samples/
 susceptibility_samples/
 results/
 susceptibility_results/
+coex_eq/
 plots/
 test_run_out/
 

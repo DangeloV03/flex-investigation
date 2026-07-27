@@ -342,10 +342,10 @@ def enqueue_jobs(
 
     n_added = prepend_pending(paths, path=manifest_path)
 
-    for json_path, mu in zip(paths, mu_values):
-        if json_path not in known and n_added > 0:
+    if n_added > 0:
+        for json_path, mu in zip(paths, mu_values):
             print(f"[analyzer] Enqueued {json_path} (mu={mu:.6f})")
-    if n_added == 0 and paths and not all(p in known for p in paths):
+    elif paths and not all(p in known for p in paths):
         print(
             f"[analyzer] WARNING: wrote {len(paths)} JSON(s) but added 0 to "
             f"'{manifest_path}' (paths may be duplicates in that manifest)",

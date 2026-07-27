@@ -50,11 +50,13 @@ FAILURE_STATES = {
     "OUT_OF_MEMORY",
     "PREEMPTED",
 }
-# Ly -> Slurm wall time (current campaign is Ly=32-heavy)
+# Ly -> Slurm wall time (scales roughly with area; Lx = 10*Ly)
 LY_WALLTIME = {
     8: "02:00:00",
     16: "04:00:00",
+    20: "06:00:00",
     32: "08:00:00",
+    40: "24:00:00",
 }
 DEFAULT_WALLTIME = "08:00:00"
 

@@ -99,17 +99,19 @@ pip install -r requirements.txt
 **Add the environment script to your `~/.bashrc`** so everything is set up automatically every time you log in:
 
 ```bash
-echo 'source /scratch/gpfs/WJACOBS/$USER/flex-investigation/scripts/env.sh' >> ~/.bashrc
+echo 'source /scratch/gpfs/WJACOBS/$USER/flex-investigation/env.sh' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-`scripts/env.sh` does several things at once: loads the Anaconda module, activates the `lattice` conda environment, sets the `LD_LIBRARY_PATH` needed by the Rust extension, exports `PROJECT_ROOT`, and prints a quick status summary so you can see if imports are working. You should see output like:
+`env.sh` (at the repo root) does several things at once: loads the Anaconda module, activates the `lattice` conda environment, sets the `LD_LIBRARY_PATH` needed by the Rust extension, exports `PROJECT_ROOT`, puts the `coex/` and `susceptibility/` source folders on `PYTHONPATH`, `cd`s you into the project, and prints a quick status summary so you can see if imports are working. You should see output like:
 
 ```
 flex-investigation environment
   host:            della9
   PROJECT_ROOT:    /scratch/gpfs/WJACOBS/<your-netid>/flex-investigation
+  LATTICE_GAS_ROOT:/home/<your-netid>/software/lattice-gas
   CONDA_PREFIX:    /home/<your-netid>/.conda/envs/lattice
+  pwd:             /scratch/gpfs/WJACOBS/<your-netid>/flex-investigation
   import check:    OK
 ```
 

@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Run bimodality criticality for each finished equilibrium coex size.
+#
+# Expects coex_eq/ly<N>/results from ./coex/run_eq_multi_L_campaign.sh.
+# Writes criticality/eq_ly<N>/{bc_vs_beta_epsilon.csv,criticality.csv,*.png}.
+#
+# Usage (after coex is analyzed):
+#   ./coex/run_eq_multi_L_criticality.sh           # all of 16 20 40
+#   ./coex/run_eq_multi_L_criticality.sh 20 40     # subset
+#   ./coex/run_eq_multi_L_criticality.sh compare   # βε_c / με_c vs L summary table
+
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$PROJECT_DIR"
+export PYTHONPATH="$PROJECT_DIR/coex:$PROJECT_DIR/susceptibility:$PROJECT_DIR:$PROJECT_DIR/criticality"
+
+DEFAULT_LYS=(16 20 40)
+SCHEME=homo
+DELTA_F=-20.0
+K=0.0
+DELTA_MU=0.0
+
+CMD="${1:-run}"
+if [ "$CMD" = "compare" ]; then
+  shift || true
+  python - <<'PY'
+import csv, os
+from pathlib import Path
+rows = []
+for p in sorted(Path("criticality").glob("eq_ly*/criticality.csv")):
+    with p.open(newline="") as f:
+        for r in csv.DictReader(f):
+            r["_src"] = str(p)
+            rows.append(r)
+if not rows:
+    raise SystemExit("No criticality/eq_ly*/criticality.csv found — run this script without 'compare' first.")
+print("L_short\tL_long\tepsilon_c\tfit_uncertainty\trecommended_uncertainty\tsource")
+for r in sorted(rows, key=lambda x: int(float(x["L_short"]))):
+    print(
+        f"{r['L_short']}\t{r['L_long']}\t{float(r['epsilon_c_estimate']):.6f}\t"
+        f"{r.get('fit_uncertainty','')}\t{r.get('recommended_uncertainty','')}\t{r['_src']}"
+    )
+PY
+  exit 0
+fi
+
+if [ "$CMD" = "run" ]; then
+  shift || true
+fi
+if [ "$#" -gt 0 ]; then
+  LYS=("$@")
+else
+  LYS=("${DEFAULT_LYS[@]}")
+fi
+
+for ly in "${LYS[@]}"; do
+  lx=$((10 * ly))
+  base="coex_eq/ly${ly}"
+  out="criticality/eq_ly${ly}"
+  if [ ! -d "$base/results" ]; then
+    echo "[skip] missing $base/results"
+    continue
+  fi
+  n_dirs=$(find "$base/results" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$n_dirs" -eq 0 ]; then
+    echo "[skip] no combo dirs yet in $base/results"
+    continue
+  fi
+  echo "== criticality Ly=$ly (Lx=$lx) from $base/results -> $out =="
+  mkdir -p "$out"
+  python -u criticality/bimodality.py phase-diagram \
+    --base-dir "$base/results" \
+    --scheme "$SCHEME" --delta-f "$DELTA_F" --k "$K" \
+    --Lx "$lx" --Ly "$ly" --delta-mus "$DELTA_MU" \
+    --out-dir "$out" \
+    --manage-csv "$base/manage.csv"
+done
+
+echo
+echo "Done. Compare with:  ./coex/run_eq_multi_L_criticality.sh compare"

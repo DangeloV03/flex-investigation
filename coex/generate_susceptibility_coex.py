@@ -23,7 +23,7 @@ import numpy as np
 
 from combo_paths import COMBO_KEY_FIELDS, combo_dir, combo_key_from_dict
 from flex_coex_chemical_potential_prediction import coex_chemical_potential
-from generate_samples import append_manage_rows, collect_active_combo_keys, frange, mu_sweep
+from generate_samples import append_manage_rows, collect_active_combo_keys, frange
 from queue_manifest import merge_pending
 from susceptibility_paths import (
     COEX_MANIFEST,
@@ -45,8 +45,15 @@ EPS_MIN = -2.0
 EPS_MAX = -1.4
 EPS_STEP = 0.01
 
+# Default initial μ window around μ_coex_FLEX. Pass --mu-window 0.05 for the
+# half-window used by the multi-L eq campaign (analyzer can still extend).
 MU_WINDOW = 0.1
 N_MU_POINTS = 10
+
+
+def mu_sweep(mu_coex_flex: float, *, window: float = MU_WINDOW, n_points: int = N_MU_POINTS) -> list[float]:
+    values = np.linspace(mu_coex_flex - window, mu_coex_flex + window, n_points)
+    return [round(float(v), 6) for v in values]
 
 RUN_SETTINGS = {
     "beta": 1.0,
@@ -91,6 +98,14 @@ def main() -> None:
     parser.add_argument("--eps-max", type=float, default=EPS_MAX)
     parser.add_argument("--eps-step", type=float, default=EPS_STEP)
     parser.add_argument("--ly", type=int, default=DEFAULT_COEX_LY, help="Slab Ly (Lx = 10*Ly)")
+    parser.add_argument(
+        "--mu-window", type=float, default=MU_WINDOW,
+        help="Half-width of initial μ sweep around μ_coex_FLEX (default 0.1)",
+    )
+    parser.add_argument(
+        "--n-mu-points", type=int, default=N_MU_POINTS,
+        help="Number of μ points in the initial sweep (default 10)",
+    )
     parser.add_argument("--delta-f", type=float, default=ISING_DELTA_F, help="Δf (default: Ising-limit)")
     parser.add_argument("--delta-mu", type=float, default=ISING_DELTA_MU, help="Δμ (default: Ising-limit)")
     parser.add_argument("--k", type=float, default=ISING_K, help="Chemical recycling base rate k")
@@ -108,6 +123,8 @@ def main() -> None:
     ly = args.ly
     lx = LX_MULTIPLIER * ly
     eps_values = frange(args.eps_min, args.eps_max, args.eps_step)
+    mu_window = float(args.mu_window)
+    n_mu_points = int(args.n_mu_points)
 
     os.makedirs(args.samples_dir, exist_ok=True)
 
@@ -134,6 +151,7 @@ def main() -> None:
         f"step {args.eps_step} ({len(eps_values)} pts), Ly={ly}, Lx={lx}\n"
         f"  scheme={args.scheme} (flex={args.flex_scheme}) "
         f"delta_f={args.delta_f} delta_mu={args.delta_mu} k={args.k}\n"
+        f"  mu_window=±{mu_window} ({n_mu_points} pts)\n"
         f"  results={args.results_dir}  manage={args.manage}  "
         f"manifest={args.manifest}  samples={args.samples_dir}"
     )
@@ -171,7 +189,7 @@ def main() -> None:
             continue
 
         print(f"eps={epsilon}: mu_coex_FLEX={mu_coex_flex:.6f}")
-        mu_values = mu_sweep(mu_coex_flex)
+        mu_values = mu_sweep(mu_coex_flex, window=mu_window, n_points=n_mu_points)
 
         if key not in existing_keys:
             new_manage_rows.append({
