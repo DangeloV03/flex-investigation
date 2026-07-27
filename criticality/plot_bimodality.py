@@ -252,14 +252,64 @@ def _panel_regime(d: dict) -> str:
     return "near criticality"
 
 
+def write_pooled_histogram_csvs(
+    data: list[dict], out_stem: str, *, bins: int = 60,
+) -> tuple[str, str]:
+    """Write the samples and binned P(phi_col) used by plot_pooled_histograms.
+
+    Returns (samples_csv, hist_csv). samples_csv has one row per pooled
+    phi_col value; hist_csv has one row per bin (density matches the PNG).
+    """
+    data = sorted(data, key=lambda d: d["epsilon"])
+    sample_rows: list[dict] = []
+    hist_rows: list[dict] = []
+    for d in data:
+        pooled = np.asarray(d["pooled"], dtype=float).reshape(-1)
+        hist_bins = _phi_col_bin_edges(d.get("Ly"), bins=bins)
+        counts, edges = np.histogram(pooled, bins=hist_bins, density=False)
+        density, _ = np.histogram(pooled, bins=hist_bins, density=True)
+        meta = {
+            "epsilon": d["epsilon"],
+            "mu": d.get("mu"),
+            "BC": d["BC"],
+            "n_pooled": int(d.get("n_pooled", pooled.size)),
+            "frac_liq": d.get("frac_liq"),
+            "frac_gas": d.get("frac_gas"),
+            "balance": d.get("balance"),
+            "regime": _panel_regime(d),
+        }
+        for phi in pooled:
+            sample_rows.append({**meta, "phi_col": float(phi)})
+        for i, (c, dens) in enumerate(zip(counts, density)):
+            hist_rows.append({
+                **meta,
+                "bin_left": float(edges[i]),
+                "bin_right": float(edges[i + 1]),
+                "bin_center": float(0.5 * (edges[i] + edges[i + 1])),
+                "count": int(c),
+                "density": float(dens),
+            })
+
+    samples_csv = f"{out_stem}_samples.csv"
+    hist_csv = f"{out_stem}_hist.csv"
+    os.makedirs(os.path.dirname(os.path.abspath(samples_csv)) or ".", exist_ok=True)
+    pd.DataFrame(sample_rows).to_csv(samples_csv, index=False)
+    pd.DataFrame(hist_rows).to_csv(hist_csv, index=False)
+    return samples_csv, hist_csv
+
+
 def plot_pooled_histograms(data: list[dict], out_png: str, *, bins: int = 60,
-                           title: str | None = None) -> str:
+                           title: str | None = None,
+                           write_csv: bool = True) -> str:
     """Figure 1: side-by-side P(phi_col) histograms at several epsilon (one size).
 
     `data` is a list of dicts (from bimodality.histogram_data), each with:
       'epsilon', 'pooled' (1D column-op sample at coexistence), and 'BC'.
     Panels are ordered left-to-right by epsilon so the bimodal (two humps, low
     epsilon) -> unimodal (one hump, high epsilon) change is easy to read.
+
+    When write_csv is True, also writes `<png_stem>_samples.csv` (raw phi_col)
+    and `<png_stem>_hist.csv` (bin counts + density matching the figure).
     """
     data = sorted(data, key=lambda d: d["epsilon"])
     n = len(data)
@@ -292,4 +342,9 @@ def plot_pooled_histograms(data: list[dict], out_png: str, *, bins: int = 60,
     os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
+    if write_csv:
+        stem, _ = os.path.splitext(os.path.abspath(out_png))
+        samples_csv, hist_csv = write_pooled_histogram_csvs(data, stem, bins=bins)
+        print(f"[bimodality] wrote {samples_csv}", flush=True)
+        print(f"[bimodality] wrote {hist_csv}", flush=True)
     return out_png

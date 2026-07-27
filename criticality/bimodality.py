@@ -1259,8 +1259,13 @@ def make_histogram_figure(
     cache_dir: Optional[str] = None,
     manage_csv: Optional[str] = None,
     mu_reduction: str = "balanced",
+    write_csv: bool = True,
 ) -> str:
-    """Figure 1: side-by-side P(phi_col) histograms at several epsilon for one size."""
+    """Figure 1: side-by-side P(phi_col) histograms at several epsilon for one size.
+
+    Also writes `<png_stem>_samples.csv` and `<png_stem>_hist.csv` when
+    write_csv is True (same coexistence samples / bins as the figure).
+    """
     if cache_dir is None:
         cache_dir = os.path.join(os.path.dirname(out_png) or ".", "cache", "column_op")
     data = histogram_data(
@@ -1273,7 +1278,7 @@ def make_histogram_figure(
     size = f"{int(combo_params['Lx'])}x{int(combo_params['Ly'])}"
     title = (f"$P(\\phi_{{col}})$  {size}  $\\Delta\\mu$={combo_params['delta_mu']}"
              "  (bimodal $\\to$ unimodal)")
-    plot_pooled_histograms(data, out_png, title=title)
+    plot_pooled_histograms(data, out_png, title=title, write_csv=write_csv)
     return out_png
 
 

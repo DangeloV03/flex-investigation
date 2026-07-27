@@ -370,6 +370,16 @@ def test_make_histogram_figure_writes_png(tmp_path):
     bm.make_histogram_figure(base, combo, [-2.0, -1.5], out_png,
                              cache_dir=str(tmp_path / "cache"))
     assert os.path.isfile(out_png)
+    stem = os.path.splitext(out_png)[0]
+    samples_csv = stem + "_samples.csv"
+    hist_csv = stem + "_hist.csv"
+    assert os.path.isfile(samples_csv)
+    assert os.path.isfile(hist_csv)
+    samples = pd.read_csv(samples_csv)
+    hist = pd.read_csv(hist_csv)
+    assert "phi_col" in samples.columns
+    assert {"bin_center", "density", "count"}.issubset(hist.columns)
+    assert set(samples["epsilon"].unique()) == {-2.0, -1.5}
 
 
 def test_run_fss_multisize(tmp_path):
