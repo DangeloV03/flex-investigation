@@ -7,7 +7,7 @@
 # Usage (after coex is analyzed):
 #   ./coex/run_eq_multi_L_criticality.sh           # all of 16 20 40
 #   ./coex/run_eq_multi_L_criticality.sh 20 40     # subset
-#   ./coex/run_eq_multi_L_criticality.sh compare   # βε_c / με_c vs L summary table
+#   ./coex/run_eq_multi_L_criticality.sh compare   # table + βε_c / βμ_coex vs L plots
 
 set -euo pipefail
 
@@ -24,8 +24,13 @@ DELTA_MU=0.0
 CMD="${1:-run}"
 if [ "$CMD" = "compare" ]; then
   shift || true
+  if [ "$#" -gt 0 ]; then
+    LYS_COMPARE=("$@")
+  else
+    LYS_COMPARE=("${DEFAULT_LYS[@]}")
+  fi
   python - <<'PY'
-import csv, os
+import csv
 from pathlib import Path
 rows = []
 for p in sorted(Path("criticality").glob("eq_ly*/criticality.csv")):
@@ -42,6 +47,11 @@ for r in sorted(rows, key=lambda x: int(float(x["L_short"]))):
         f"{r.get('fit_uncertainty','')}\t{r.get('recommended_uncertainty','')}\t{r['_src']}"
     )
 PY
+  echo
+  echo "== writing βμ_coex(ε_c) and βε_c vs L plots =="
+  python -u criticality/plot_eq_L_scaling.py \
+    --lys "${LYS_COMPARE[@]}" \
+    --out-dir criticality/eq_multi_L
   exit 0
 fi
 
