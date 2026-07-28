@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Finite-size scaling plots for the multi-L equilibrium coex campaign.
 
-Builds the two mentor plots from coex_eq/ly*/ + criticality/eq_ly*/:
+Builds the two mentor plots from coex/coex_eq/ly*/ + criticality/eq_ly*/:
 
   1. beta * mu_coex(epsilon_c) vs L
   2. beta * epsilon_c vs L
@@ -34,7 +34,7 @@ import pandas as pd  # noqa: E402
 
 DEFAULT_LYS = (16, 20, 40)
 DEFAULT_OUT = "criticality/eq_multi_L"
-DEFAULT_COEX_ROOT = "coex_eq"
+DEFAULT_COEX_ROOT = "coex/coex_eq"
 
 
 def _finite(x) -> bool:
