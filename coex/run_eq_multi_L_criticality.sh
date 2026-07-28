@@ -83,6 +83,7 @@ for ly in "${LYS[@]}"; do
     --base-dir "$base/results" \
     --scheme "$SCHEME" --delta-f "$DELTA_F" --k "$K" \
     --Lx "$lx" --Ly "$ly" --delta-mus "$DELTA_MU" \
+    --mu-reduction zero_mean \
     --out-dir "$out" \
     --manage-csv "$base/manage.csv"
 done

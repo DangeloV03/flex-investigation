@@ -145,7 +145,7 @@ def test_pool_column_op_shapes():
 
 def test_sweep_bc_max_over_mu(tmp_path):
     """At one epsilon with two mu dirs (one phase-separated, one homogeneous),
-    sweep_bc keeps the MAX BC and reports which mu achieved it."""
+    sweep_bc with mu_reduction=max keeps the MAX BC and reports which mu achieved it."""
     combo = {"scheme": "homo", "delta_f": 0.0, "delta_mu": 1.0, "k": 1.0,
              "Lx": 60, "Ly": 10}
     cp = {**combo, "epsilon": -2.0}
@@ -170,7 +170,36 @@ def test_sweep_bc_max_over_mu(tmp_path):
     assert r["beta_epsilon"] == pytest.approx(2.0 * -2.0)  # beta*epsilon
 
 
-def test_bc_bootstrap_error():
+def test_sweep_bc_zero_mean_picks_near_zero_magnetization(tmp_path):
+    """zero_mean selects the mu with ⟨φ⟩ closest to 0 even if another mu has higher BC."""
+    combo = {"scheme": "homo", "delta_f": 0.0, "delta_mu": 0.0, "k": 0.0,
+             "Lx": 60, "Ly": 10}
+    cp = {**combo, "epsilon": -1.76}
+    base = str(tmp_path / "results")
+    combo_dir = os.path.join(base, bm.combo_dir_name(cp))
+    rng = np.random.default_rng(11)
+    # skewed mostly-gas: high |mean|, can still have large BC
+    gas_heavy = _phase_separated(60, 10, rng)
+    gas_heavy[:, :50] = bm.EMPTY
+    # balanced coexistence: ⟨φ⟩ closer to 0
+    balanced = _phase_separated(60, 10, rng)
+    _write_mu_dir(os.path.join(combo_dir, "mu_sweeps", mu_dir_name(-0.5)),
+                  -0.5, [gas_heavy for _ in range(5)], cp, -1.76)
+    _write_mu_dir(os.path.join(combo_dir, "mu_sweeps", mu_dir_name(0.0)),
+                  0.0, [balanced for _ in range(5)], cp, -1.76)
+
+    rows = bm.sweep_bc(base, combo, str(tmp_path / "bc.csv"), str(tmp_path / "cache"),
+                       mu_reduction="zero_mean")
+    assert len(rows) == 1
+    assert rows[0]["mu_at_max"] == pytest.approx(0.0)
+    assert abs(rows[0]["mean"]) < 0.35
+
+
+def test_grid_neighbor_uncertainty_matches_spacing():
+    x = np.round(np.arange(-1.80, -1.595, 0.005), 6)
+    assert bm.grid_neighbor_uncertainty(x, -1.76) == pytest.approx(0.005)
+    # between -1.765 and -1.760: farther neighbor is 0.003 away
+    assert bm.grid_neighbor_uncertainty(x, -1.762) == pytest.approx(0.003)
     rng = np.random.default_rng(0)
     arr = np.concatenate([np.full((4, 50), -1.0), np.full((4, 50), 1.0)]) \
         + rng.normal(0, 0.05, size=(8, 50))
@@ -499,7 +528,14 @@ def test_locate_epsilon_c_includes_transition_fields(tmp_path):
     result = bm.locate_epsilon_c(rows, 60, x_col="beta_epsilon")
     assert "transition_half_width" in result
     assert "recommended_uncertainty" in result
-    assert np.isfinite(result["transition_half_width"])
+    assert np.isfinite(result["recommended_uncertainty"])
+    # ε grid spacing is 0.1: neighbor uncertainty is at most that spacing
+    assert result["recommended_uncertainty"] <= 0.1 + 1e-12
+    assert result["fit_uncertainty"] == pytest.approx(result["recommended_uncertainty"])
+    xs = sorted({float(r["beta_epsilon"]) for r in rows})
+    assert result["recommended_uncertainty"] == pytest.approx(
+        bm.grid_neighbor_uncertainty(np.array(xs), result["criticality_estimate"])
+    )
 
 
 def test_find_criticality_end_to_end(tmp_path):

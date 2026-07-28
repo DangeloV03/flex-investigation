@@ -34,6 +34,7 @@ import pandas as pd  # noqa: E402
 
 DEFAULT_LYS = (16, 20, 40)
 DEFAULT_OUT = "criticality/eq_multi_L"
+DEFAULT_COEX_ROOT = "coex/coex_eq"
 
 
 def _finite(x) -> bool:

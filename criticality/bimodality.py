@@ -24,8 +24,9 @@ Data reality (differs from the generic spec; see json_runner.py / combo_paths.py
     map BONDING->+1, {INERT,EMPTY}->-1 averaged over the short axis (range [-1,1]),
     matching analyzer.py's coexistence order parameter phi = 2*rho_bonding - 1.
   * Each epsilon has a whole mu-sweep; phase separation only exists at
-    coexistence, so per epsilon we pool the snapshots from the mu dir nearest
-    mu_coex.
+    coexistence, so per epsilon we take the mu with ⟨φ_col⟩ closest to 0
+    (zero_mean) and report Sarle BC there (max / balanced / nearest_coex
+    remain available).
 
 Separation of concerns (each function is independently testable):
   extraction   : column_op, extract_column_op, cache_column_op
@@ -576,6 +577,25 @@ def discover_epsilons(base_dir: str, combo_params: dict) -> list[tuple[float, st
     return found
 
 
+def _select_mu_winner(candidates: list[dict], selection: str) -> dict:
+    """Pick one mu-dir stats dict according to selection policy."""
+    if selection == "balanced":
+        strong = [c for c in candidates if c["BC"] >= BC_BIMODAL_CUTOFF]
+        pool = strong if strong else candidates
+        return max(pool, key=lambda c: (c["balance"], c["BC"]))
+    if selection == "zero_mean":
+        # Coexistence: ⟨φ_col⟩ closest to 0; ties -> max BC among those.
+        abs_mean = [abs(float(c["mean"])) for c in candidates]
+        best_abs = min(abs_mean)
+        near_zero = [
+            c for c, a in zip(candidates, abs_mean)
+            if abs(a - best_abs) <= 1e-12
+        ]
+        return max(near_zero, key=lambda c: c["BC"])
+    # default: max BC over the mu-sweep
+    return max(candidates, key=lambda c: c["BC"])
+
+
 def _best_mu_over_sweep(
     combo_dir: str,
     cache_dir: str,
@@ -590,12 +610,12 @@ def _best_mu_over_sweep(
 ) -> Optional[dict]:
     """Scan the mu-sweep and return the stats dict for one selected mu.
 
-    Shared by sweep_bc (BC_max curve) and pooled_at_coexistence (histograms) so
-    both can pick the same mu when selection="max". selection="balanced" prefers
-    the mu with the most even liquid/gas column fractions among bimodal points
-    (for illustration histograms). Returns None if no mu dir yields a finite BC.
-    The winner also carries a bootstrap error 'BC_err' (resampling snapshots);
-    with keep_pooled=True the winning pooled array is included.
+    Shared by sweep_bc and pooled_at_coexistence. selection=
+      * "max"        -> maximum Sarle BC over the mu-sweep
+      * "balanced"   -> most even liquid/gas fractions among bimodal points
+      * "zero_mean"  -> ⟨φ_col⟩ closest to 0 (coexistence), then BC at that mu
+    Returns None if no mu dir yields a finite BC. Winner carries bootstrap
+    'BC_err'; with keep_pooled=True the winning pooled array is included.
     """
     if mu_dirs is None:
         mu_dirs = enumerate_mu_dirs(combo_dir)
@@ -627,12 +647,7 @@ def _best_mu_over_sweep(
 
     if not candidates:
         return None
-    if selection == "balanced":
-        strong = [c for c in candidates if c["BC"] >= BC_BIMODAL_CUTOFF]
-        pool = strong if strong else candidates
-        winner = max(pool, key=lambda c: (c["balance"], c["BC"]))
-    else:
-        winner = max(candidates, key=lambda c: c["BC"])
+    winner = _select_mu_winner(candidates, selection)
     # bootstrap error only for the winning mu (cheap: one point per epsilon)
     winner["BC_err"] = bc_bootstrap_error(winner.pop("arr"), n_boot=n_boot)
     return winner
@@ -645,16 +660,17 @@ def sweep_bc(
     cache_dir: str,
     *,
     manage_csv: Optional[str] = None,
-    mu_reduction: str = "max",
+    mu_reduction: str = "zero_mean",
 ) -> list[dict]:
     """Steps 1-3 across the epsilon sweep for one (scheme, size); append BC rows.
 
     For each epsilon the mu-sweep provides several ensemble points. We reduce the
     sweep to one bimodality number per epsilon:
-      * mu_reduction="max"          -> the MAXIMUM BC over the mu-sweep (default):
-        the most phase-separated ensemble point, analogous to peak-chi. This is
-        the quantity for the BC_max-vs-(beta*epsilon) crossover.
+      * mu_reduction="zero_mean"    -> μ with ⟨φ_col⟩ closest to 0, then BC there
+        (default for coexistence criticality).
+      * mu_reduction="max"          -> MAXIMUM BC over the mu-sweep.
       * mu_reduction="nearest_coex" -> BC at the single mu dir nearest mu_coex.
+      * mu_reduction="balanced"     -> most even liquid/gas column fractions.
 
     x-axis is beta*epsilon (beta read from the winning mu dir's output.csv,
     default 1.0). Returns the per-epsilon rows (also appended to out_csv).
@@ -672,10 +688,13 @@ def sweep_bc(
         if mu_reduction == "nearest_coex":
             mu_dirs = [min(mu_dirs, key=lambda dm: abs(dm[1] - mu_coex))]
 
+        selection = (
+            "max" if mu_reduction == "nearest_coex" else mu_reduction
+        )
         best = _best_mu_over_sweep(
             combo_dir, cache_dir,
             epsilon=eps, mu_coex=mu_coex, combo_name=combo_name, mu_dirs=mu_dirs,
-            selection=mu_reduction if mu_reduction != "nearest_coex" else "max",
+            selection=selection,
         )
         if best is None:
             print(f"[bimodality] skip eps={eps}: no finite BC over mu-sweep", flush=True)
@@ -711,7 +730,8 @@ def sweep_bc(
         print(
             f"[bimodality] eps={eps:+.4f} beta*eps={beta * eps:+.4f} "
             f"L={best['L_long']}x{combo_params['Ly']} n_mu={len(mu_dirs)} "
-            f"BC_max={best['BC']:.4f} @mu={best['mu']:+.4f}",
+            f"BC={best['BC']:.4f} ⟨φ⟩={best['mean']:+.4f} @mu={best['mu']:+.4f} "
+            f"({mu_reduction})",
             flush=True,
         )
     return rows
@@ -810,6 +830,8 @@ def transition_bracket(
         if all(np.isfinite(v) for v in (hi_lo, lo_hi)) and lo_hi > hi_lo:
             half_env = (lo_hi - hi_lo) / 2.0
 
+    # Bracket widths kept for diagnostics; recommended_uncertainty is set by
+    # locate_epsilon_c from the ε-grid neighbor spacing instead.
     recommended = half_env if np.isfinite(half_env) else half
     return {
         "transition_bc_high": bc_high,
@@ -822,15 +844,44 @@ def transition_bracket(
     }
 
 
+def grid_neighbor_uncertainty(x: np.ndarray, x_c: float) -> float:
+    """Uncertainty = distance from x_c to its farthest nearest grid neighbor.
+
+    On a uniform spacing Δ (e.g. 0.005) this is Δ when x_c sits on a grid point,
+    and at most Δ when x_c lies between two neighbors.
+    """
+    grid = np.unique(np.asarray(x, dtype=float))
+    if grid.size < 2 or not np.isfinite(x_c):
+        return float("nan")
+    if x_c <= grid[0]:
+        return float(grid[1] - grid[0])
+    if x_c >= grid[-1]:
+        return float(grid[-1] - grid[-2])
+    right = int(np.searchsorted(grid, x_c, side="right"))
+    left = right - 1
+    if abs(float(grid[left]) - x_c) <= 1e-12:
+        dists: list[float] = []
+        if left > 0:
+            dists.append(abs(float(grid[left] - grid[left - 1])))
+        if left < grid.size - 1:
+            dists.append(abs(float(grid[left + 1] - grid[left])))
+        return float(max(dists)) if dists else float("nan")
+    return float(max(abs(x_c - float(grid[left])), abs(float(grid[right]) - x_c)))
+
+
 def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilon") -> dict:
-    """Estimate the criticality for one size from its BC_max(x) crossover.
+    """Estimate the criticality for one size from its BC(x) crossover.
 
     `x_col` is the sweep axis (default "beta_epsilon"; use "epsilon" for BC vs eps).
-    Prefers a sigmoid fit -> criticality = inflection point (uncertainty from the
-    fit covariance); falls back to the BC=5/9 threshold crossing if the fit fails.
-    Also reports epsilon_c_estimate = criticality / mean(beta) so downstream FSS
-    work has epsilon_c even when the x-axis is beta*epsilon.
-    `rows` is a list of BC rows (from sweep_bc or read from the BC CSV).
+    Prefers a sigmoid fit -> criticality = inflection point; falls back to the
+    BC=5/9 threshold crossing if the fit fails. Also reports epsilon_c_estimate
+    = criticality / mean(beta) so downstream FSS work has epsilon_c even when
+    the x-axis is beta*epsilon.
+
+    Uncertainty (`recommended_uncertainty` / `fit_uncertainty`) is the distance
+    from the estimate to its farthest nearest neighbor on the discrete x-grid
+    (ε spacing, typically 0.005 for the multi-L eq campaign) — not the old
+    transition-bracket half-width.
     """
     sel = [r for r in rows
            if int(float(r["L_long"])) == int(L_long) and np.isfinite(float(r["BC"]))]
@@ -855,7 +906,6 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
 
     method = "sigmoid"
     x_c = float("nan")
-    unc = float("nan")
     try:
         from scipy.optimize import curve_fit
 
@@ -864,22 +914,16 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
         popt, pcov = curve_fit(_sigmoid, x, bc, p0=p0, sigma=sigma,
                                absolute_sigma=sigma is not None, maxfev=20000)
         x_c = float(popt[2])
-        unc = float(np.sqrt(pcov[2, 2])) if np.all(np.isfinite(pcov)) else float("nan")
         if not (x.min() <= x_c <= x.max()):  # fit ran away -> fall back
             raise RuntimeError("sigmoid inflection outside sweep range")
     except Exception as exc:
         method = "threshold_5_9"
         x_c = _threshold_crossing(x, bc)
-        unc = float("nan")
         print(f"[bimodality] sigmoid fit fell back to threshold: {exc}", flush=True)
 
     eps_c = x_c / beta_mean if (x_col == "beta_epsilon" and beta_mean) else x_c
     bracket = transition_bracket(x, bc, bc_err)
-    recommended = bracket["transition_half_width"]
-    if not np.isfinite(recommended):
-        recommended = bracket["transition_half_width_envelope"]
-    if not np.isfinite(recommended):
-        recommended = unc
+    grid_unc = grid_neighbor_uncertainty(x, x_c)
     return {
         "L_short": L_short,
         "L_long": int(L_long),
@@ -888,9 +932,9 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
         "epsilon_c_estimate": eps_c,
         "beta": beta_mean,
         "method": method,
-        "fit_uncertainty": unc,
+        "fit_uncertainty": grid_unc,
         **bracket,
-        "recommended_uncertainty": recommended,
+        "recommended_uncertainty": grid_unc,
     }
 
 
@@ -1043,16 +1087,16 @@ def phase_diagram(
     delta_mus: Optional[list[float]] = None,
     out_dir: str = "criticality",
     manage_csv: Optional[str] = None,
-    mu_reduction: str = "max",
+    mu_reduction: str = "zero_mean",
     make_plots: bool = True,
     show_transition_bracket: bool = True,
 ) -> list[dict]:
-    """BC_max-vs-(beta*epsilon) curve for each delta_mu at a fixed scheme+size.
+    """BC-vs-(beta*epsilon) curve for each delta_mu at a fixed scheme+size.
 
     Reproduces the "thermal phase diagram" family plot: one sigmoid per delta_mu,
-    y = max Sarle BC over the mu-sweep, x = beta*epsilon, and the sigmoid
-    inflection is that delta_mu's criticality. If delta_mus is None, every
-    delta_mu present on disk is used.
+    y = Sarle BC at the selected mu (default: ⟨φ⟩ closest to 0), x = beta*epsilon,
+    and the sigmoid inflection is that delta_mu's criticality. If delta_mus is None,
+    every delta_mu present on disk is used.
 
     Writes <out_dir>/bc_vs_beta_epsilon.csv (all delta_mu, tagged) and
     <out_dir>/criticality.csv (one row per delta_mu), and the family plot.
@@ -1372,10 +1416,12 @@ def _add_common(sp) -> None:
     sp.add_argument("--out-dir", default="criticality")
     sp.add_argument("--manage-csv", default=None,
                     help="Optional coex manage CSV for mu_coex_FITTED (not needed in max mode).")
-    sp.add_argument("--mu-reduction", choices=["max", "nearest_coex", "balanced"],
-                    default="max",
-                    help="How to pick one mu per epsilon: max BC (curves), "
-                         "nearest mu_coex, or balanced liquid/gas fractions (histograms).")
+    sp.add_argument("--mu-reduction",
+                    choices=["zero_mean", "max", "nearest_coex", "balanced"],
+                    default="zero_mean",
+                    help="How to pick one mu per epsilon: ⟨φ⟩ closest to 0 "
+                         "(default), max BC, nearest mu_coex, or balanced "
+                         "liquid/gas fractions (histograms).")
 
 
 def main() -> None:
@@ -1452,8 +1498,9 @@ def main() -> None:
         help="Scheme 1 vs Scheme 3 side-by-side BC_max family plot (with BC_err bars)",
     )
     sc.add_argument("--out-dir", default="criticality/scheme_comparison")
-    sc.add_argument("--mu-reduction", choices=["max", "nearest_coex", "balanced"],
-                    default="max")
+    sc.add_argument("--mu-reduction",
+                    choices=["zero_mean", "max", "nearest_coex", "balanced"],
+                    default="zero_mean")
     sc.add_argument(
         "--plot-only",
         nargs="+",
