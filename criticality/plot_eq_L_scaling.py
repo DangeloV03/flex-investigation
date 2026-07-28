@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Finite-size scaling plots for the multi-L equilibrium coex campaign.
 
-Builds the two mentor plots from coex/coex_eq/ly*/ + criticality/eq_ly*/:
+Builds the two mentor plots from coex_eq/ly*/ + criticality/eq_ly*/:
 
   1. beta * mu_coex(epsilon_c) vs L
   2. beta * epsilon_c vs L
@@ -34,7 +34,7 @@ import pandas as pd  # noqa: E402
 
 DEFAULT_LYS = (16, 20, 40)
 DEFAULT_OUT = "criticality/eq_multi_L"
-DEFAULT_COEX_ROOT = "coex/coex_eq"
+DEFAULT_COEX_ROOT = "coex_eq"
 
 
 def _finite(x) -> bool:
@@ -131,7 +131,7 @@ def _optional_err(curve: pd.DataFrame, i: int) -> float | None:
 def collect_scaling_table(
     lys: list[int],
     *,
-    coex_root: str = "coex/coex_eq",
+    coex_root: str = DEFAULT_COEX_ROOT,
     crit_root: str = "criticality",
 ) -> pd.DataFrame:
     """One row per L: epsilon_c, mu_coex(at eps_c), beta-scaled columns."""
@@ -231,7 +231,7 @@ def plot_vs_L(
 def main() -> None:
     p = argparse.ArgumentParser(description="Plot βμ_coex(ε_c) and βε_c vs L")
     p.add_argument("--lys", type=int, nargs="+", default=list(DEFAULT_LYS))
-    p.add_argument("--coex-root", default="coex/coex_eq")
+    p.add_argument("--coex-root", default=DEFAULT_COEX_ROOT)
     p.add_argument("--crit-root", default="criticality")
     p.add_argument("--out-dir", default=DEFAULT_OUT)
     args = p.parse_args()

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run bimodality criticality for each finished equilibrium coex size.
 #
-# Expects coex/coex_eq/ly<N>/results from ./coex/run_eq_multi_L_campaign.sh.
+# Expects coex_eq/ly<N>/results from ./coex/run_eq_multi_L_campaign.sh.
 # Writes criticality/eq_ly<N>/{bc_vs_beta_epsilon.csv,criticality.csv,*.png}.
 #
 # Usage (after coex is analyzed):
@@ -20,6 +20,7 @@ SCHEME=homo
 DELTA_F=-20.0
 K=0.0
 DELTA_MU=0.0
+COEX_ROOT=coex_eq
 
 CMD="${1:-run}"
 if [ "$CMD" = "compare" ]; then
@@ -51,6 +52,7 @@ PY
   echo "== writing βμ_coex(ε_c) and βε_c vs L plots =="
   python -u criticality/plot_eq_L_scaling.py \
     --lys "${LYS_COMPARE[@]}" \
+    --coex-root "$COEX_ROOT" \
     --out-dir criticality/eq_multi_L
   exit 0
 fi
@@ -66,7 +68,7 @@ fi
 
 for ly in "${LYS[@]}"; do
   lx=$((10 * ly))
-  base="coex/coex_eq/ly${ly}"
+  base="${COEX_ROOT}/ly${ly}"
   out="criticality/eq_ly${ly}"
   if [ ! -d "$base/results" ]; then
     echo "[skip] missing $base/results"
@@ -79,6 +81,8 @@ for ly in "${LYS[@]}"; do
   fi
   echo "== criticality Ly=$ly (Lx=$lx) from $base/results -> $out =="
   mkdir -p "$out"
+  # phase-diagram appends; clear stale CSVs so re-runs don't duplicate rows
+  rm -f "$out/bc_vs_beta_epsilon.csv" "$out/criticality.csv"
   python -u criticality/bimodality.py phase-diagram \
     --base-dir "$base/results" \
     --scheme "$SCHEME" --delta-f "$DELTA_F" --k "$K" \
