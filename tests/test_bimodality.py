@@ -526,17 +526,26 @@ def test_locate_epsilon_c_includes_transition_fields(tmp_path):
 
     rows = bm.sweep_bc(base, combo, str(tmp_path / "bc.csv"), str(tmp_path / "cache"))
     result = bm.locate_epsilon_c(rows, 60, x_col="beta_epsilon")
-    assert result["method"] == "closest_5_9"
+    assert result["method"].startswith("closest_bc_")
+    assert result["BC_target"] == pytest.approx(bm.BC_CRIT_TARGET)
     assert "recommended_uncertainty" in result
     assert np.isfinite(result["recommended_uncertainty"])
     assert result["recommended_uncertainty"] == pytest.approx(0.1)
-    assert abs(result["BC_at_criticality"] - bm.BC_BIMODAL_CUTOFF) <= abs(
-        float(min(rows, key=lambda r: abs(float(r["BC"]) - bm.BC_BIMODAL_CUTOFF))["BC"])
-        - bm.BC_BIMODAL_CUTOFF
+    assert abs(result["BC_at_criticality"] - bm.BC_CRIT_TARGET) <= abs(
+        float(min(rows, key=lambda r: abs(float(r["BC"]) - bm.BC_CRIT_TARGET))["BC"])
+        - bm.BC_CRIT_TARGET
     ) + 1e-12
     # discrete pick: criticality is one of the measured beta*epsilon grid points
     xs = {float(r["beta_epsilon"]) for r in rows}
     assert result["criticality_estimate"] in xs
+
+    # alternate target 5/9 should be selectable and can differ
+    alt = bm.locate_epsilon_c(
+        rows, 60, x_col="beta_epsilon", bc_target=bm.BC_BIMODAL_CUTOFF,
+    )
+    assert alt["BC_target"] == pytest.approx(bm.BC_BIMODAL_CUTOFF)
+    assert alt["method"] == f"closest_bc_{bm.BC_BIMODAL_CUTOFF:.4f}"
+    assert alt["criticality_estimate"] in xs
 
 
 def test_find_criticality_end_to_end(tmp_path):

@@ -66,6 +66,11 @@ EMPTY, INERT, BONDING = 0, 1, 2
 # Sarle heuristic cutoff: BC > 5/9 ~ "likely bimodal" (a convention, not a test).
 BC_BIMODAL_CUTOFF = 5.0 / 9.0
 
+# Criticality locator target: discrete grid point whose BC is closest to this.
+# 0.4570 is the working benchmark; 5/9 is kept for side-by-side comparison.
+BC_CRIT_TARGET = 0.4570
+BC_CRIT_TARGET_COMPARE = BC_BIMODAL_CUTOFF  # 5/9 ≈ 0.5556
+
 # Transition-bracket defaults: where BC has fallen partway down the crossover.
 # Used to quote an honest uncertainty when the sigmoid inflection sits on a
 # flat, noisy plateau (see criticality/UNCERTAINTY.md).
@@ -871,12 +876,19 @@ def grid_neighbor_uncertainty(x: np.ndarray, x_c: float) -> float:
     return float(max(abs(x_c - float(grid[left])), abs(float(grid[right]) - x_c)))
 
 
-def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilon") -> dict:
-    """Estimate criticality as the discrete x where BC is closest to 5/9.
+def locate_epsilon_c(
+    rows: list[dict],
+    L_long: int,
+    *,
+    x_col: str = "beta_epsilon",
+    bc_target: float = BC_CRIT_TARGET,
+) -> dict:
+    """Estimate criticality as the discrete x where BC is closest to bc_target.
 
     `x_col` is the sweep axis (default "beta_epsilon"; use "epsilon" for BC vs eps).
     For each finite-size BC(x) curve (after zero_mean μ selection), pick the grid
-    point minimizing |BC - 5/9|. Reports epsilon_c_estimate = criticality / mean(beta)
+    point minimizing |BC - bc_target|. Default target is 0.4570 (5/9 ≈ 0.5556 is
+    available for comparison). Reports epsilon_c_estimate = criticality / mean(beta)
     when x is beta*epsilon.
 
     Errors:
@@ -904,10 +916,11 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
     L_short = int(float(sel[0]["L_short"]))
     beta_mean = float(np.mean([float(r.get("beta", 1.0)) for r in sel]))
 
-    i = int(np.argmin(np.abs(bc - BC_BIMODAL_CUTOFF)))
+    target = float(bc_target)
+    i = int(np.argmin(np.abs(bc - target)))
     x_c = float(x[i])
     bc_at = float(bc[i])
-    method = "closest_5_9"
+    method = f"closest_bc_{target:.4f}"
 
     eps_c = x_c / beta_mean if (x_col == "beta_epsilon" and beta_mean) else x_c
     bracket = transition_bracket(x, bc, bc_err)
@@ -922,7 +935,7 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
         "method": method,
         "fit_uncertainty": float("nan"),
         "BC_at_criticality": bc_at,
-        "BC_target": BC_BIMODAL_CUTOFF,
+        "BC_target": target,
         **bracket,
         "recommended_uncertainty": grid_unc,
     }
@@ -939,6 +952,7 @@ def find_criticality(
     out_dir: str = "criticality",
     manage_csv: Optional[str] = None,
     make_plots: bool = True,
+    bc_target: float = BC_CRIT_TARGET,
 ) -> dict:
     """Full path: coex run data -> epsilon_c for one (scheme, size).
 
@@ -957,7 +971,7 @@ def find_criticality(
         raise RuntimeError(f"no BC rows produced for {combo_params} under {base_dir}")
 
     L_long = int(combo_params["Lx"])
-    result = locate_epsilon_c(rows, L_long, x_col="beta_epsilon")
+    result = locate_epsilon_c(rows, L_long, x_col="beta_epsilon", bc_target=bc_target)
     _append_row(eps_c_csv, result, EPS_C_FIELDS)
 
     if make_plots:
@@ -979,7 +993,7 @@ def find_criticality(
         f"(beta*eps)_c={result['criticality_estimate']:.4f} "
         f"+/- {rec} (grid neighbor)  "
         f"BC={result.get('BC_at_criticality', float('nan')):.4f} "
-        f"(target 5/9={BC_BIMODAL_CUTOFF:.4f})  "
+        f"(target={float(bc_target):.4f})  "
         f"[epsilon_c={result['epsilon_c_estimate']:.4f}] ({result['method']})",
         flush=True,
     )
@@ -1082,13 +1096,14 @@ def phase_diagram(
     mu_reduction: str = "zero_mean",
     make_plots: bool = True,
     show_transition_bracket: bool = True,
+    bc_target: float = BC_CRIT_TARGET,
 ) -> list[dict]:
     """BC-vs-(beta*epsilon) curve for each delta_mu at a fixed scheme+size.
 
     Reproduces the "thermal phase diagram" family plot: one curve per delta_mu,
-    y = Sarle BC at the selected mu (default: ⟨φ⟩ closest to 0), x = beta*epsilon.
-    Criticality is the discrete βε where BC is closest to 5/9. If delta_mus is None,
-    every delta_mu present on disk is used.
+    y = Sarle BC at the selected mu (default: ⟨φ_col⟩ closest to 0), x = beta*epsilon.
+    Criticality is the discrete βε where BC is closest to bc_target (default 0.4570).
+    If delta_mus is None, every delta_mu present on disk is used.
 
     Writes <out_dir>/bc_vs_beta_epsilon.csv (all delta_mu, tagged) and
     <out_dir>/criticality.csv (one row per delta_mu), and the family plot.
@@ -1117,7 +1132,7 @@ def phase_diagram(
             print(f"[bimodality] dmu={dmu}: only {len(rows)} epsilon points, "
                   "skipping criticality fit", flush=True)
             continue
-        res = locate_epsilon_c(rows, int(Lx), x_col="beta_epsilon")
+        res = locate_epsilon_c(rows, int(Lx), x_col="beta_epsilon", bc_target=bc_target)
         res.update({"scheme": scheme, "delta_f": delta_f, "delta_mu": dmu, "k": k})
         _append_row(crit_csv, res, CRIT_FIELDS)
         results.append(res)
@@ -1126,7 +1141,7 @@ def phase_diagram(
             f"[bimodality] dmu={dmu:+.3f}: (beta*eps)_c="
             f"{res['criticality_estimate']:.4f} +/- {rec} "
             f"(grid neighbor; BC={res.get('BC_at_criticality', float('nan')):.4f} "
-            f"vs 5/9) ({res['method']})",
+            f"vs target={float(bc_target):.4f}) ({res['method']})",
             flush=True,
         )
 
@@ -1365,7 +1380,8 @@ def run_fss(
                 continue
             all_rows.extend(rows)
             if len(rows) >= 3:
-                res = locate_epsilon_c(rows, int(Lx), x_col="beta_epsilon")
+                res = locate_epsilon_c(rows, int(Lx), x_col="beta_epsilon",
+                                       bc_target=BC_CRIT_TARGET)
                 res.update({"scheme": scheme, "delta_f": delta_f,
                             "delta_mu": dmu, "k": k})
                 _append_row(crit_csv, res, CRIT_FIELDS)
@@ -1414,6 +1430,11 @@ def _add_common(sp) -> None:
                     help="How to pick one mu per epsilon: ⟨φ⟩ closest to 0 "
                          "(default), max BC, nearest mu_coex, or balanced "
                          "liquid/gas fractions (histograms).")
+    sp.add_argument(
+        "--bc-target", type=float, default=BC_CRIT_TARGET,
+        help=f"Locate ε_c as discrete BC closest to this value "
+             f"(default {BC_CRIT_TARGET}; compare with 5/9={BC_BIMODAL_CUTOFF:.4f}).",
+    )
 
 
 def main() -> None:
@@ -1421,8 +1442,8 @@ def main() -> None:
 
     p = argparse.ArgumentParser(
         description="Bimodality-based criticality from coex snapshots: Sarle BC "
-                    "at ⟨φ⟩≈0 vs beta*epsilon; criticality = discrete point "
-                    "closest to BC=5/9.",
+                    f"at ⟨φ⟩≈0 vs beta*epsilon; criticality = discrete point "
+                    f"closest to BC={BC_CRIT_TARGET} (default).",
     )
     sub = p.add_subparsers(dest="mode", required=True)
 
@@ -1511,6 +1532,7 @@ def main() -> None:
             manage_csv=args.manage_csv, mu_reduction=args.mu_reduction,
             make_plots=not args.no_plots,
             show_transition_bracket=not args.no_transition_bracket,
+            bc_target=args.bc_target,
         )
         print(f"\n[bimodality] wrote {len(results)} delta_mu curve(s) to {args.out_dir}/")
 

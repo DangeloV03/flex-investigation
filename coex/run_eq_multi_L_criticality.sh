@@ -55,6 +55,13 @@ PY
     --lys "${LYS_COMPARE[@]}" \
     --coex-root "$COEX_ROOT" \
     --out-dir criticality/eq_multi_L
+  echo
+  echo "== BC-target comparison: 0.4570 (green) vs 5/9 (blue) =="
+  python -u criticality/plot_eq_L_scaling.py \
+    --lys "${LYS_COMPARE[@]}" \
+    --coex-root "$COEX_ROOT" \
+    --out-dir criticality/eq_multi_L \
+    --compare-bc-targets
   exit 0
 fi
 
@@ -89,6 +96,7 @@ for ly in "${LYS[@]}"; do
     --scheme "$SCHEME" --delta-f "$DELTA_F" --k "$K" \
     --Lx "$lx" --Ly "$ly" --delta-mus "$DELTA_MU" \
     --mu-reduction zero_mean \
+    --bc-target 0.4570 \
     --out-dir "$out" \
     --manage-csv "$base/manage.csv"
 done

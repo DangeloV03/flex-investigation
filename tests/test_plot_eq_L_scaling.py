@@ -128,3 +128,43 @@ def test_collect_and_plot_eq_scaling(tmp_path):
     # LOO drop-16 intercept matches the 20+40-only row
     row = loo.loc[loo["leave_out_L"] == 16].iloc[0]
     assert abs(row["beta_eps_c_infty"] - fit16["beta_eps_c_infty"]) < 1e-12
+
+    # BC-target comparison from synthetic bc CSVs
+    for ly, (eps_c, pts) in specs.items():
+        bc_path = crit / f"eq_ly{ly}" / "bc_vs_beta_epsilon.csv"
+        fields = [
+            "scheme", "delta_f", "delta_mu", "k", "epsilon", "beta", "beta_epsilon",
+            "L_short", "L_long", "BC", "BC_err",
+        ]
+        with open(bc_path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader()
+            # BC decreases toward ~0.4 as epsilon increases (less negative)
+            for i, (eps, _mu) in enumerate(sorted(pts)):
+                # make 0.4570 and 5/9 pick different grid points
+                bc = 0.70 - 0.08 * i
+                w.writerow({
+                    "scheme": "homo", "delta_f": -20.0, "delta_mu": 0.0, "k": 0.0,
+                    "epsilon": eps, "beta": 1.0, "beta_epsilon": eps,
+                    "L_short": ly, "L_long": 10 * ly, "BC": bc, "BC_err": 0.01,
+                })
+
+    df045 = pls.collect_scaling_for_bc_target(
+        [16, 20, 40], 0.4570, coex_root=str(coex), crit_root=str(crit),
+    )
+    df59 = pls.collect_scaling_for_bc_target(
+        [16, 20, 40], 5.0 / 9.0, coex_root=str(coex), crit_root=str(crit),
+    )
+    fit_a = pls.fit_fss(df045)
+    fit_b = pls.fit_fss(df59)
+    summary = pls.plot_fss_compare_targets(
+        [
+            (0.4570, df045, fit_a, pls.COLOR_BC_04570),
+            (5.0 / 9.0, df59, fit_b, pls.COLOR_BC_5_9),
+        ],
+        str(out / "beta_eps_c_vs_invL_bc_compare.png"),
+        known_epsilon_c=-1.76,
+    )
+    assert os.path.isfile(str(out / "beta_eps_c_vs_invL_bc_compare.png"))
+    assert "abs_err_vs_known" in summary.columns
+    assert len(summary) == 2
