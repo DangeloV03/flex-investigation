@@ -22,19 +22,12 @@
 #   tmux kill-session -t coex-eq-multiL                  # stop everything
 #
 # After coex finishes, criticality per L (example for Ly=20):
-#   python -u criticality/bimodality.py phase-diagram \
-#     --base-dir coex/coex_eq/ly20/results \
-#     --scheme homo --delta-f -20 --k 0 \
-#     --Lx 200 --Ly 20 --delta-mus 0 \
-#     --out-dir criticality/eq_ly20 \
-#     --manage-csv coex/coex_eq/ly20/manage.csv
+#   ./coex/run_eq_multi_L_criticality.sh 20
+#   # -> criticality/equilibrium_multi_L_testing/ly20/
 #
 # Multi-L FSS-style comparison once all three are done:
-#   python -u criticality/bimodality.py fss \
-#     --base-dir coex/coex_eq/ly16/results \   # or a common parent if you symlink
-#     ...
-# Prefer one phase-diagram call per L (results live in separate trees), then
-# compare criticality.csv rows / plot βε_c vs L by hand.
+#   ./coex/run_eq_multi_L_criticality.sh compare
+#   # -> criticality/equilibrium_multi_L_testing/multi_L/
 
 set -euo pipefail
 

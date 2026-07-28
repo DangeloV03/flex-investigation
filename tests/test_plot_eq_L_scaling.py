@@ -79,14 +79,14 @@ def test_collect_and_plot_eq_scaling(tmp_path):
     }
     for ly, (eps_c, pts) in specs.items():
         mdir = coex / f"ly{ly}"
-        cdir = crit / f"eq_ly{ly}"
+        cdir = crit / f"ly{ly}"
         mdir.mkdir(parents=True)
         cdir.mkdir(parents=True)
         _write_manage(str(mdir / "manage.csv"), ly=ly, eps_mu=sorted(pts))
         _write_crit(str(cdir / "criticality.csv"), ly=ly, eps_c=eps_c)
 
     df = pls.collect_scaling_table(
-        [16, 20, 40], coex_root=str(coex), crit_root=str(crit),
+        [16, 20, 40], coex_root=str(coex), crit_root=str(crit), crit_prefix="ly",
     )
     assert list(df["L_short"]) == [16, 20, 40]
     assert np.all(np.diff(df["beta_mu_coex_at_eps_c"]) > 0)

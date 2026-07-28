@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Finite-size scaling plots for the multi-L equilibrium coex campaign.
 
-Builds mentor plots from coex/coex_eq/ly*/ + criticality/eq_ly*/:
+Builds mentor plots from coex/coex_eq/ly*/ + criticality/equilibrium_multi_L_testing/ly*/:
 
   1. beta * mu_coex(epsilon_c) vs L
   2. beta * epsilon_c vs L
@@ -14,9 +14,9 @@ Usage (repo root, after coex is analyzed and criticality CSVs exist):
 
     python -u criticality/plot_eq_L_scaling.py
     python -u criticality/plot_eq_L_scaling.py --lys 16 20 40 \
-        --out-dir criticality/eq_multi_L
+        --out-dir criticality/equilibrium_multi_L_testing/multi_L
 
-If criticality/eq_ly*/criticality.csv is missing, run first:
+If criticality/equilibrium_multi_L_testing/ly*/criticality.csv is missing, run first:
 
     ./coex/run_eq_multi_L_criticality.sh
 """
@@ -37,8 +37,10 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 DEFAULT_LYS = (16, 20, 40)
-DEFAULT_OUT = "criticality/eq_multi_L"
+DEFAULT_OUT = "criticality/equilibrium_multi_L_testing/multi_L"
 DEFAULT_COEX_ROOT = "coex/coex_eq"
+DEFAULT_CRIT_ROOT = "criticality/equilibrium_multi_L_testing"
+DEFAULT_CRIT_PREFIX = "ly"
 
 def _finite(x) -> bool:
     try:
@@ -134,8 +136,8 @@ def collect_scaling_table(
     lys: list[int],
     *,
     coex_root: str = DEFAULT_COEX_ROOT,
-    crit_root: str = "criticality",
-    crit_prefix: str = "eq_ly",
+    crit_root: str = DEFAULT_CRIT_ROOT,
+    crit_prefix: str = DEFAULT_CRIT_PREFIX,
 ) -> pd.DataFrame:
     """One row per L: epsilon_c, mu_coex(at eps_c), beta-scaled columns."""
     out_rows = []
@@ -198,7 +200,7 @@ def collect_scaling_table(
 
     if not out_rows:
         raise SystemExit(
-            "No L rows collected. Need analyzed manage.csv + criticality/eq_ly*/criticality.csv."
+            "No L rows collected. Need analyzed manage.csv + criticality/equilibrium_multi_L_testing/ly*/criticality.csv."
         )
     return pd.DataFrame(out_rows).sort_values("L_short").reset_index(drop=True)
 
@@ -399,11 +401,11 @@ def main() -> None:
     )
     p.add_argument("--lys", type=int, nargs="+", default=list(DEFAULT_LYS))
     p.add_argument("--coex-root", default=DEFAULT_COEX_ROOT)
-    p.add_argument("--crit-root", default="criticality")
+    p.add_argument("--crit-root", default=DEFAULT_CRIT_ROOT)
     p.add_argument(
-        "--crit-prefix", default="eq_ly",
+        "--crit-prefix", default=DEFAULT_CRIT_PREFIX,
         help="criticality subdir prefix: <crit-root>/<prefix><Ly>/criticality.csv "
-             "(default eq_ly; Scheme-3 multi-L uses s3_dmu1_ly).",
+             "(default ly under equilibrium_multi_L_testing).",
     )
     p.add_argument("--out-dir", default=DEFAULT_OUT)
     p.add_argument(
