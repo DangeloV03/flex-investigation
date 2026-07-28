@@ -531,11 +531,13 @@ def test_locate_epsilon_c_includes_transition_fields(tmp_path):
     assert np.isfinite(result["recommended_uncertainty"])
     # ε grid spacing is 0.1: neighbor uncertainty is at most that spacing
     assert result["recommended_uncertainty"] <= 0.1 + 1e-12
-    assert result["fit_uncertainty"] == pytest.approx(result["recommended_uncertainty"])
     xs = sorted({float(r["beta_epsilon"]) for r in rows})
     assert result["recommended_uncertainty"] == pytest.approx(
         bm.grid_neighbor_uncertainty(np.array(xs), result["criticality_estimate"])
     )
+    # fit_uncertainty remains the sigmoid covariance (std error), when available
+    if result["method"] == "sigmoid":
+        assert np.isfinite(result["fit_uncertainty"])
 
 
 def test_find_criticality_end_to_end(tmp_path):

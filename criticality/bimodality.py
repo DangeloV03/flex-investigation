@@ -830,8 +830,8 @@ def transition_bracket(
         if all(np.isfinite(v) for v in (hi_lo, lo_hi)) and lo_hi > hi_lo:
             half_env = (lo_hi - hi_lo) / 2.0
 
-    # Bracket widths kept for diagnostics; recommended_uncertainty is set by
-    # locate_epsilon_c from the ε-grid neighbor spacing instead.
+    # Bracket widths kept for diagnostics only; locate_epsilon_c overwrites
+    # recommended_uncertainty with the ε-grid neighbor spacing.
     recommended = half_env if np.isfinite(half_env) else half
     return {
         "transition_bc_high": bc_high,
@@ -878,10 +878,12 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
     = criticality / mean(beta) so downstream FSS work has epsilon_c even when
     the x-axis is beta*epsilon.
 
-    Uncertainty (`recommended_uncertainty` / `fit_uncertainty`) is the distance
-    from the estimate to its farthest nearest neighbor on the discrete x-grid
-    (ε spacing, typically 0.005 for the multi-L eq campaign) — not the old
-    transition-bracket half-width.
+    Errors:
+      * Max BC vs βε points still use per-point bootstrap `BC_err` (std error).
+      * `fit_uncertainty` is the sigmoid inflection covariance (fit std error).
+      * `recommended_uncertainty` is the distance from βε_c to its farthest
+        nearest neighbor on the discrete x-grid (ε spacing, typically 0.005) —
+        this is what the βε_c vs L plots use.
     """
     sel = [r for r in rows
            if int(float(r["L_long"])) == int(L_long) and np.isfinite(float(r["BC"]))]
@@ -906,6 +908,7 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
 
     method = "sigmoid"
     x_c = float("nan")
+    fit_unc = float("nan")
     try:
         from scipy.optimize import curve_fit
 
@@ -914,11 +917,13 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
         popt, pcov = curve_fit(_sigmoid, x, bc, p0=p0, sigma=sigma,
                                absolute_sigma=sigma is not None, maxfev=20000)
         x_c = float(popt[2])
+        fit_unc = float(np.sqrt(pcov[2, 2])) if np.all(np.isfinite(pcov)) else float("nan")
         if not (x.min() <= x_c <= x.max()):  # fit ran away -> fall back
             raise RuntimeError("sigmoid inflection outside sweep range")
     except Exception as exc:
         method = "threshold_5_9"
         x_c = _threshold_crossing(x, bc)
+        fit_unc = float("nan")
         print(f"[bimodality] sigmoid fit fell back to threshold: {exc}", flush=True)
 
     eps_c = x_c / beta_mean if (x_col == "beta_epsilon" and beta_mean) else x_c
@@ -932,7 +937,7 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
         "epsilon_c_estimate": eps_c,
         "beta": beta_mean,
         "method": method,
-        "fit_uncertainty": grid_unc,
+        "fit_uncertainty": fit_unc,
         **bracket,
         "recommended_uncertainty": grid_unc,
     }
@@ -987,7 +992,7 @@ def find_criticality(
     print(
         f"[bimodality] criticality({L_long}x{combo_params['Ly']}) = "
         f"(beta*eps)_c={result['criticality_estimate']:.4f} "
-        f"+/- {rec} (transition bracket; sigmoid fit +/- {result['fit_uncertainty']})  "
+        f"+/- {rec} (grid neighbor; sigmoid fit +/- {result['fit_uncertainty']})  "
         f"[epsilon_c={result['epsilon_c_estimate']:.4f}] ({result['method']})",
         flush=True,
     )
@@ -1133,7 +1138,7 @@ def phase_diagram(
         print(
             f"[bimodality] dmu={dmu:+.3f}: (beta*eps)_c="
             f"{res['criticality_estimate']:.4f} +/- {rec} "
-            f"(transition; sigmoid +/- {res['fit_uncertainty']}) "
+            f"(grid neighbor; sigmoid fit +/- {res['fit_uncertainty']}) "
             f"({res['method']})",
             flush=True,
         )
