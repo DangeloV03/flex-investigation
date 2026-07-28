@@ -49,7 +49,8 @@ for r in sorted(rows, key=lambda x: int(float(x["L_short"]))):
     )
 PY
   echo
-  echo "== writing βμ_coex(ε_c) and βε_c vs L plots =="
+  echo "== clearing criticality/eq_multi_L and writing FSS plot =="
+  rm -rf criticality/eq_multi_L
   python -u criticality/plot_eq_L_scaling.py \
     --lys "${LYS_COMPARE[@]}" \
     --coex-root "$COEX_ROOT" \

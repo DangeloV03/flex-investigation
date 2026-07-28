@@ -306,7 +306,11 @@ def plot_fss_invL(
     fit: dict,
     out_png: str,
 ) -> str:
-    """βε_c vs 1/L (linear axis) with linear fit; intercept = βε_c(∞)."""
+    """Single FSS plot: βε_c vs 1/L (linear axis).
+
+    Vertical line / square at 1/L = 0 marks βε_c(∞). A log x-axis cannot
+    show 1/L = 0, so this plot intentionally uses a linear scale.
+    """
     L = df["L_short"].to_numpy(float)
     x = 1.0 / L
     y = df["beta_epsilon_c"].to_numpy(float)
@@ -326,15 +330,17 @@ def plot_fss_invL(
     xx = np.linspace(0.0, float(x.max()) * 1.15, 200)
     yy = fit["invL_slope"] * xx + fit["beta_eps_c_infty"]
     ax.plot(xx, yy, "-", color="#C44E52", lw=1.5,
-            label=(rf"$\beta\varepsilon_c(\infty)="
+            label=(rf"fit $\beta\varepsilon_c=a+b/L$"
+                   rf"; $a=\beta\varepsilon_c(\infty)="
                    rf"{fit['beta_eps_c_infty']:.4f}"
                    rf"\pm{fit['beta_eps_c_infty_err']:.4f}$"))
-    ax.axvline(0.0, ls=":", c="grey", lw=1)
+    ax.axvline(0.0, ls=":", c="grey", lw=1, label=r"$1/L=0$ ($L\to\infty$)")
     ax.plot(0.0, fit["beta_eps_c_infty"], "s", color="#C44E52", markersize=7)
 
     ax.set_xlabel(r"$1/L$  (short axis $L$)")
     ax.set_ylabel(r"$\beta\varepsilon_c$")
-    ax.set_title(r"FSS: $\beta\varepsilon_c$ vs $1/L$ $\rightarrow$ $L\to\infty$")
+    ax.set_title(r"FSS: $\beta\varepsilon_c$ vs $1/L$")
+    ax.set_xlim(left=-0.005)
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8)
     fig.tight_layout()
@@ -365,6 +371,7 @@ def main() -> None:
     df.to_csv(csv_path, index=False)
     print(f"[eq-L] wrote {csv_path}", flush=True)
 
+    # Mentor: βμ_coex and βε_c vs L (linear in L)
     plot_vs_L(
         df,
         y_col="beta_mu_coex_at_eps_c",
@@ -382,6 +389,7 @@ def main() -> None:
         out_png=str(out_dir / "beta_eps_c_vs_L.png"),
     )
 
+    # Single FSS plot: βε_c vs 1/L with line at 1/L=0 (no log(1/L) variant)
     fit = fit_fss(df)
     fit_path = out_dir / "eq_fss_fit.csv"
     pd.DataFrame([fit]).to_csv(fit_path, index=False)
@@ -391,7 +399,6 @@ def main() -> None:
         f"{fit['beta_eps_c_infty']:.6f} +/- {fit['beta_eps_c_infty_err']:.6f}",
         flush=True,
     )
-
     plot_fss_invL(df, fit, str(out_dir / "beta_eps_c_vs_invL.png"))
 
 
