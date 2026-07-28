@@ -112,3 +112,19 @@ def test_collect_and_plot_eq_scaling(tmp_path):
     assert os.path.isfile(png_mu)
     assert os.path.isfile(png_eps)
     assert os.path.isfile(str(out / "beta_eps_c_vs_invL.png"))
+
+    loo = pls.leave_one_out_fss(df)
+    assert list(loo["leave_out_L"]) == [16, 20, 40]
+    drop16 = df[df["L_short"] != 16].reset_index(drop=True)
+    held = df[df["L_short"] == 16].reset_index(drop=True)
+    fit16 = pls.fit_fss(drop16)
+    assert fit16["L_fit"] == "20,40"
+    pls.plot_fss_invL(
+        drop16, fit16, str(out / "beta_eps_c_vs_invL_loo_drop16.png"),
+        df_held_out=held,
+        title="LOO drop 16",
+    )
+    assert os.path.isfile(str(out / "beta_eps_c_vs_invL_loo_drop16.png"))
+    # LOO drop-16 intercept matches the 20+40-only row
+    row = loo.loc[loo["leave_out_L"] == 16].iloc[0]
+    assert abs(row["beta_eps_c_infty"] - fit16["beta_eps_c_infty"]) < 1e-12

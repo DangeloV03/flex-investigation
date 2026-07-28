@@ -298,18 +298,43 @@ def fit_fss(df: pd.DataFrame) -> dict:
         "invL_slope_err": se_inv,
         "beta_eps_c_infty_err": ie_inv,
         "n_L": int(len(L)),
+        "L_fit": ",".join(str(int(v)) for v in L),
     }
+
+
+def leave_one_out_fss(df: pd.DataFrame) -> pd.DataFrame:
+    """Fit βε_c = a + b/L once with each L left out. Needs ≥3 sizes."""
+    lys = [int(v) for v in df["L_short"].tolist()]
+    if len(lys) < 3:
+        raise ValueError(f"LOO needs ≥3 L values, got {lys}")
+    rows = []
+    for leave in lys:
+        sub = df[df["L_short"] != leave].reset_index(drop=True)
+        fit = fit_fss(sub)
+        rows.append({
+            "leave_out_L": leave,
+            "L_fit": fit["L_fit"],
+            "n_L": fit["n_L"],
+            "beta_eps_c_infty": fit["beta_eps_c_infty"],
+            "beta_eps_c_infty_err": fit["beta_eps_c_infty_err"],
+            "invL_slope": fit["invL_slope"],
+            "invL_slope_err": fit["invL_slope_err"],
+        })
+    return pd.DataFrame(rows)
 
 
 def plot_fss_invL(
     df: pd.DataFrame,
     fit: dict,
     out_png: str,
+    *,
+    df_held_out: pd.DataFrame | None = None,
+    title: str | None = None,
 ) -> str:
     """Single FSS plot: βε_c vs 1/L (linear axis).
 
-    Vertical line / square at 1/L = 0 marks βε_c(∞). A log x-axis cannot
-    show 1/L = 0, so this plot intentionally uses a linear scale.
+    Vertical line / square at 1/L = 0 marks βε_c(∞). Optional held-out
+    points (e.g. LOO) are drawn as open markers and are not in the fit.
     """
     L = df["L_short"].to_numpy(float)
     x = 1.0 / L
@@ -322,12 +347,29 @@ def plot_fss_invL(
 
     fig, ax = plt.subplots(figsize=(6.2, 4.4))
     ax.errorbar(x, y, yerr=yerr, fmt="o", color="#2F4A7A", markersize=8,
-                capsize=3, label="data")
+                capsize=3, label="fit data")
     for xi, Li, yi in zip(x, L, y):
         ax.annotate(f"L={int(Li)}", (xi, yi), textcoords="offset points",
                     xytext=(6, 4), fontsize=8)
 
-    xx = np.linspace(0.0, float(x.max()) * 1.15, 200)
+    x_max = float(x.max())
+    if df_held_out is not None and len(df_held_out) > 0:
+        Lh = df_held_out["L_short"].to_numpy(float)
+        xh = 1.0 / Lh
+        yh = df_held_out["beta_epsilon_c"].to_numpy(float)
+        yherr = None
+        if "epsilon_c_uncertainty" in df_held_out.columns:
+            errh = pd.to_numeric(df_held_out["epsilon_c_uncertainty"], errors="coerce")
+            if errh.notna().any():
+                yherr = errh.to_numpy(float)
+        ax.errorbar(xh, yh, yerr=yherr, fmt="o", color="#888888", markersize=8,
+                    markerfacecolor="none", capsize=3, label="held out")
+        for xi, Li, yi in zip(xh, Lh, yh):
+            ax.annotate(f"L={int(Li)} (out)", (xi, yi), textcoords="offset points",
+                        xytext=(6, -10), fontsize=8, color="#666666")
+        x_max = max(x_max, float(xh.max()))
+
+    xx = np.linspace(0.0, x_max * 1.15, 200)
     yy = fit["invL_slope"] * xx + fit["beta_eps_c_infty"]
     ax.plot(xx, yy, "-", color="#C44E52", lw=1.5,
             label=(rf"fit $\beta\varepsilon_c=a+b/L$"
@@ -339,7 +381,7 @@ def plot_fss_invL(
 
     ax.set_xlabel(r"$1/L$  (short axis $L$)")
     ax.set_ylabel(r"$\beta\varepsilon_c$")
-    ax.set_title(r"FSS: $\beta\varepsilon_c$ vs $1/L$")
+    ax.set_title(title or r"FSS: $\beta\varepsilon_c$ vs $1/L$")
     ax.set_xlim(left=-0.005)
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8)
@@ -359,6 +401,14 @@ def main() -> None:
     p.add_argument("--coex-root", default=DEFAULT_COEX_ROOT)
     p.add_argument("--crit-root", default="criticality")
     p.add_argument("--out-dir", default=DEFAULT_OUT)
+    p.add_argument(
+        "--leave-out", type=int, nargs="+", default=None,
+        help="Omit these short-axis L from the FSS fit/plot (shown as open markers).",
+    )
+    p.add_argument(
+        "--loo", action="store_true",
+        help="Write leave-one-out FSS table (eq_fss_loo.csv) for every L.",
+    )
     args = p.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -371,7 +421,7 @@ def main() -> None:
     df.to_csv(csv_path, index=False)
     print(f"[eq-L] wrote {csv_path}", flush=True)
 
-    # Mentor: βμ_coex and βε_c vs L (linear in L)
+    # Mentor: βμ_coex and βε_c vs L (linear in L) — all collected sizes
     plot_vs_L(
         df,
         y_col="beta_mu_coex_at_eps_c",
@@ -389,17 +439,47 @@ def main() -> None:
         out_png=str(out_dir / "beta_eps_c_vs_L.png"),
     )
 
-    # Single FSS plot: βε_c vs 1/L with line at 1/L=0 (no log(1/L) variant)
-    fit = fit_fss(df)
+    leave = set(int(v) for v in (args.leave_out or []))
+    df_fit = df[~df["L_short"].isin(leave)].reset_index(drop=True)
+    df_out = df[df["L_short"].isin(leave)].reset_index(drop=True)
+    if len(df_fit) < 2:
+        raise SystemExit(
+            f"Need ≥2 L for FSS fit after leave-out={sorted(leave)}; "
+            f"have {df_fit['L_short'].tolist()}"
+        )
+
+    fit = fit_fss(df_fit)
     fit_path = out_dir / "eq_fss_fit.csv"
     pd.DataFrame([fit]).to_csv(fit_path, index=False)
     print(f"[eq-L] wrote {fit_path}", flush=True)
     print(
-        f"[eq-L] FSS 1/L intercept (L→∞) βε_c(∞) = "
+        f"[eq-L] FSS fit L={fit['L_fit']} → βε_c(∞) = "
         f"{fit['beta_eps_c_infty']:.6f} +/- {fit['beta_eps_c_infty_err']:.6f}",
         flush=True,
     )
-    plot_fss_invL(df, fit, str(out_dir / "beta_eps_c_vs_invL.png"))
+
+    title = r"FSS: $\beta\varepsilon_c$ vs $1/L$"
+    out_png = out_dir / "beta_eps_c_vs_invL.png"
+    if leave:
+        title = (
+            rf"FSS LOO (leave out $L={','.join(str(v) for v in sorted(leave))}$): "
+            rf"$\beta\varepsilon_c$ vs $1/L$"
+        )
+        tag = "_".join(str(v) for v in sorted(leave))
+        out_png = out_dir / f"beta_eps_c_vs_invL_loo_drop{tag}.png"
+
+    plot_fss_invL(
+        df_fit, fit, str(out_png),
+        df_held_out=df_out if len(df_out) else None,
+        title=title,
+    )
+
+    if args.loo:
+        loo_df = leave_one_out_fss(df)
+        loo_path = out_dir / "eq_fss_loo.csv"
+        loo_df.to_csv(loo_path, index=False)
+        print(f"[eq-L] wrote {loo_path}", flush=True)
+        print(loo_df.to_string(index=False), flush=True)
 
 
 if __name__ == "__main__":
