@@ -135,18 +135,19 @@ def collect_scaling_table(
     *,
     coex_root: str = DEFAULT_COEX_ROOT,
     crit_root: str = "criticality",
+    crit_prefix: str = "eq_ly",
 ) -> pd.DataFrame:
     """One row per L: epsilon_c, mu_coex(at eps_c), beta-scaled columns."""
     out_rows = []
     for ly in lys:
         manage = os.path.join(coex_root, f"ly{ly}", "manage.csv")
-        crit_csv = os.path.join(crit_root, f"eq_ly{ly}", "criticality.csv")
+        crit_csv = os.path.join(crit_root, f"{crit_prefix}{ly}", "criticality.csv")
         if not os.path.isfile(manage):
             print(f"[skip] missing {manage}", flush=True)
             continue
         if not os.path.isfile(crit_csv):
             print(
-                f"[skip] missing {crit_csv} — run ./coex/run_eq_multi_L_criticality.sh {ly}",
+                f"[skip] missing {crit_csv} — run the matching multi-L criticality script",
                 flush=True,
             )
             continue
@@ -399,6 +400,11 @@ def main() -> None:
     p.add_argument("--lys", type=int, nargs="+", default=list(DEFAULT_LYS))
     p.add_argument("--coex-root", default=DEFAULT_COEX_ROOT)
     p.add_argument("--crit-root", default="criticality")
+    p.add_argument(
+        "--crit-prefix", default="eq_ly",
+        help="criticality subdir prefix: <crit-root>/<prefix><Ly>/criticality.csv "
+             "(default eq_ly; Scheme-3 multi-L uses s3_dmu1_ly).",
+    )
     p.add_argument("--out-dir", default=DEFAULT_OUT)
     p.add_argument(
         "--leave-out", type=int, nargs="+", default=None,
@@ -414,7 +420,10 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     df = collect_scaling_table(
-        args.lys, coex_root=args.coex_root, crit_root=args.crit_root,
+        args.lys,
+        coex_root=args.coex_root,
+        crit_root=args.crit_root,
+        crit_prefix=args.crit_prefix,
     )
     csv_path = out_dir / "eq_scaling_vs_L.csv"
     df.to_csv(csv_path, index=False)
