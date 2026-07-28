@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Finite-size scaling plots for the multi-L equilibrium coex campaign.
 
-Builds the two mentor plots from coex/coex_eq/ly*/ + criticality/eq_ly*/:
+Builds mentor plots from coex/coex_eq/ly*/ + criticality/eq_ly*/:
 
   1. beta * mu_coex(epsilon_c) vs L
   2. beta * epsilon_c vs L
+  3. FSS: beta * epsilon_c vs log(1/L)  (and vs 1/L for L→∞ intercept)
+
+ε_c per L is the discrete grid point whose BC is closest to 5/9 (see
+bimodality.locate_epsilon_c).
 
 Usage (repo root, after coex is analyzed and criticality CSVs exist):
 
@@ -110,7 +114,6 @@ def interpolate_mu_at_eps(curve: pd.DataFrame, epsilon_c: float) -> tuple[float,
         i = int(np.argmax(eps))
         return float(mu[i]), _optional_err(curve, i)
     mu_c = float(np.interp(epsilon_c, eps, mu))
-    # error: average of neighboring analyzed errors if present
     i_hi = int(np.searchsorted(eps, epsilon_c, side="left"))
     i_lo = max(i_hi - 1, 0)
     i_hi = min(i_hi, len(eps) - 1)
@@ -178,6 +181,11 @@ def collect_scaling_table(
             "mu_coex_at_eps_c": mu_c,
             "beta_mu_coex_at_eps_c": beta * mu_c,
             "mu_coex_uncertainty": mu_err,
+            "method": crit.get("method", ""),
+            "BC_at_criticality": (
+                float(crit["BC_at_criticality"])
+                if _finite(crit.get("BC_at_criticality")) else None
+            ),
             "n_mu_eps_points": int(len(curve)),
             "manage_csv": manage,
             "criticality_csv": crit_csv,
@@ -228,8 +236,171 @@ def plot_vs_L(
     return out_png
 
 
+def _weighted_linear_fit(
+    x: np.ndarray,
+    y: np.ndarray,
+    yerr: np.ndarray | None,
+) -> tuple[float, float, float, float]:
+    """OLS / WLS: y = slope * x + intercept. Returns slope, intercept, slope_err, intercept_err."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if yerr is not None and np.all(np.isfinite(yerr) & (yerr > 0)):
+        w = 1.0 / np.asarray(yerr, dtype=float) ** 2
+        # np.polyfit does not take weights for cov easily; use weighted normal eqns
+        X = np.column_stack([x, np.ones_like(x)])
+        W = np.diag(w)
+        xtw = X.T @ W
+        cov = np.linalg.inv(xtw @ X)
+        beta = cov @ (xtw @ y)
+        slope, intercept = float(beta[0]), float(beta[1])
+        # residual variance scale
+        resid = y - (slope * x + intercept)
+        dof = max(len(x) - 2, 1)
+        chi2 = float(np.sum(w * resid ** 2))
+        scale = chi2 / dof
+        slope_err = float(np.sqrt(cov[0, 0] * scale))
+        intercept_err = float(np.sqrt(cov[1, 1] * scale))
+        return slope, intercept, slope_err, intercept_err
+
+    slope, intercept = [float(v) for v in np.polyfit(x, y, 1)]
+    # unweighted residual SE on intercept
+    yhat = slope * x + intercept
+    dof = max(len(x) - 2, 1)
+    s2 = float(np.sum((y - yhat) ** 2) / dof)
+    x_mean = float(np.mean(x))
+    sxx = float(np.sum((x - x_mean) ** 2))
+    slope_err = float(np.sqrt(s2 / sxx)) if sxx > 0 else float("nan")
+    intercept_err = float(np.sqrt(s2 * (1.0 / len(x) + x_mean ** 2 / sxx))) if sxx > 0 else float("nan")
+    return slope, intercept, slope_err, intercept_err
+
+
+def fit_fss(df: pd.DataFrame) -> dict:
+    """Finite-size scaling fits for βε_c(L).
+
+    Requested visualization: βε_c vs log(1/L). Note that the y-intercept of that
+    plot is the linear-model value at L=1 (log(1/L)=0), not L→∞.
+
+    Thermodynamic-limit estimate: linear fit βε_c = a + b/L; intercept a = βε_c(∞).
+    Points are weighted by epsilon_c_uncertainty (grid spacing) when present.
+    """
+    L = df["L_short"].to_numpy(float)
+    y = df["beta_epsilon_c"].to_numpy(float)
+    yerr = None
+    if "epsilon_c_uncertainty" in df.columns:
+        err = pd.to_numeric(df["epsilon_c_uncertainty"], errors="coerce").to_numpy(float)
+        if np.any(np.isfinite(err) & (err > 0)):
+            yerr = err
+
+    x_log = np.log(1.0 / L)
+    x_inv = 1.0 / L
+
+    s_log, i_log, se_log, ie_log = _weighted_linear_fit(x_log, y, yerr)
+    s_inv, i_inv, se_inv, ie_inv = _weighted_linear_fit(x_inv, y, yerr)
+
+    return {
+        "log_slope": s_log,
+        "log_intercept_L1": i_log,
+        "log_slope_err": se_log,
+        "log_intercept_L1_err": ie_log,
+        "invL_slope": s_inv,
+        "beta_eps_c_infty": i_inv,
+        "invL_slope_err": se_inv,
+        "beta_eps_c_infty_err": ie_inv,
+        "n_L": int(len(L)),
+    }
+
+
+def plot_fss_log(
+    df: pd.DataFrame,
+    fit: dict,
+    out_png: str,
+) -> str:
+    """βε_c vs log(1/L) with linear fit (y-intercept = model at L=1)."""
+    L = df["L_short"].to_numpy(float)
+    x = np.log(1.0 / L)
+    y = df["beta_epsilon_c"].to_numpy(float)
+    yerr = None
+    if "epsilon_c_uncertainty" in df.columns:
+        err = pd.to_numeric(df["epsilon_c_uncertainty"], errors="coerce")
+        if err.notna().any():
+            yerr = err.to_numpy(float)
+
+    fig, ax = plt.subplots(figsize=(6.2, 4.4))
+    ax.errorbar(x, y, yerr=yerr, fmt="o", color="#2F4A7A", markersize=8,
+                capsize=3, label="data")
+    for xi, Li, yi in zip(x, L, y):
+        ax.annotate(f"L={int(Li)}", (xi, yi), textcoords="offset points",
+                    xytext=(6, 4), fontsize=8)
+
+    xx = np.linspace(float(x.min()) - 0.15, 0.05, 200)  # extend toward y-intercept
+    yy = fit["log_slope"] * xx + fit["log_intercept_L1"]
+    ax.plot(xx, yy, "-", color="#C44E52", lw=1.5,
+            label=(rf"fit: intercept$(L{chr(61)}1)$="
+                   rf"${fit['log_intercept_L1']:.4f}$"))
+    ax.axvline(0.0, ls=":", c="grey", lw=1)
+    ax.plot(0.0, fit["log_intercept_L1"], "s", color="#C44E52", markersize=7)
+
+    ax.set_xlabel(r"$\log(1/L)$  (short axis $L$)")
+    ax.set_ylabel(r"$\beta\varepsilon_c$")
+    ax.set_title(r"FSS: $\beta\varepsilon_c$ vs $\log(1/L)$")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[eq-L] wrote {out_png}", flush=True)
+    return out_png
+
+
+def plot_fss_invL(
+    df: pd.DataFrame,
+    fit: dict,
+    out_png: str,
+) -> str:
+    """βε_c vs 1/L with linear fit; y-intercept = βε_c(L→∞)."""
+    L = df["L_short"].to_numpy(float)
+    x = 1.0 / L
+    y = df["beta_epsilon_c"].to_numpy(float)
+    yerr = None
+    if "epsilon_c_uncertainty" in df.columns:
+        err = pd.to_numeric(df["epsilon_c_uncertainty"], errors="coerce")
+        if err.notna().any():
+            yerr = err.to_numpy(float)
+
+    fig, ax = plt.subplots(figsize=(6.2, 4.4))
+    ax.errorbar(x, y, yerr=yerr, fmt="o", color="#2F4A7A", markersize=8,
+                capsize=3, label="data")
+    for xi, Li, yi in zip(x, L, y):
+        ax.annotate(f"L={int(Li)}", (xi, yi), textcoords="offset points",
+                    xytext=(6, 4), fontsize=8)
+
+    xx = np.linspace(0.0, float(x.max()) * 1.15, 200)
+    yy = fit["invL_slope"] * xx + fit["beta_eps_c_infty"]
+    ax.plot(xx, yy, "-", color="#C44E52", lw=1.5,
+            label=(rf"$\beta\varepsilon_c(\infty)="
+                   rf"{fit['beta_eps_c_infty']:.4f}"
+                   rf"\pm{fit['beta_eps_c_infty_err']:.4f}$"))
+    ax.axvline(0.0, ls=":", c="grey", lw=1)
+    ax.plot(0.0, fit["beta_eps_c_infty"], "s", color="#C44E52", markersize=7)
+
+    ax.set_xlabel(r"$1/L$  (short axis $L$)")
+    ax.set_ylabel(r"$\beta\varepsilon_c$")
+    ax.set_title(r"FSS: $\beta\varepsilon_c$ vs $1/L$ $\rightarrow$ $L\to\infty$")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[eq-L] wrote {out_png}", flush=True)
+    return out_png
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description="Plot βμ_coex(ε_c) and βε_c vs L")
+    p = argparse.ArgumentParser(
+        description="Plot βμ_coex(ε_c), βε_c vs L, and FSS extrapolation",
+    )
     p.add_argument("--lys", type=int, nargs="+", default=list(DEFAULT_LYS))
     p.add_argument("--coex-root", default=DEFAULT_COEX_ROOT)
     p.add_argument("--crit-root", default="criticality")
@@ -259,9 +430,27 @@ def main() -> None:
         y_col="beta_epsilon_c",
         yerr_col="epsilon_c_uncertainty",
         ylabel=r"$\beta\varepsilon_c$",
-        title=r"Equilibrium coexistence: $\beta\varepsilon_c$ vs $L$",
+        title=r"Equilibrium coexistence: $\beta\varepsilon_c$ vs $L$ (BC$\approx 5/9$)",
         out_png=str(out_dir / "beta_eps_c_vs_L.png"),
     )
+
+    fit = fit_fss(df)
+    fit_path = out_dir / "eq_fss_fit.csv"
+    pd.DataFrame([fit]).to_csv(fit_path, index=False)
+    print(f"[eq-L] wrote {fit_path}", flush=True)
+    print(
+        f"[eq-L] FSS log(1/L) intercept (L=1 model) = "
+        f"{fit['log_intercept_L1']:.6f} +/- {fit['log_intercept_L1_err']:.6f}",
+        flush=True,
+    )
+    print(
+        f"[eq-L] FSS 1/L intercept (L→∞) βε_c(∞) = "
+        f"{fit['beta_eps_c_infty']:.6f} +/- {fit['beta_eps_c_infty_err']:.6f}",
+        flush=True,
+    )
+
+    plot_fss_log(df, fit, str(out_dir / "beta_eps_c_vs_log_invL.png"))
+    plot_fss_invL(df, fit, str(out_dir / "beta_eps_c_vs_invL.png"))
 
 
 if __name__ == "__main__":

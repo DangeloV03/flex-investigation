@@ -59,7 +59,7 @@ def plot_bc_vs_epsilon(
     ax.axhline(BC_BIMODAL_CUTOFF, ls="--", c="grey", lw=1, label="5/9 (cutoff)")
     if crit is not None and np.isfinite(crit):
         ax.axvline(crit, ls="-", c="crimson", lw=1.2,
-                   label=rf"$\epsilon_c$ sigmoid={crit:.3f}")
+                   label=rf"$\varepsilon_c$ (BC$\approx 5/9$)={crit:.3f}")
     ax.set_xlabel(xlabel)
     ax.set_ylabel("max Sarle's BC")
     ax.set_title(title or r"Max bimodality coefficient of $P(\phi_{col})$")

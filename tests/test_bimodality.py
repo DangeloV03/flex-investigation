@@ -526,18 +526,17 @@ def test_locate_epsilon_c_includes_transition_fields(tmp_path):
 
     rows = bm.sweep_bc(base, combo, str(tmp_path / "bc.csv"), str(tmp_path / "cache"))
     result = bm.locate_epsilon_c(rows, 60, x_col="beta_epsilon")
-    assert "transition_half_width" in result
+    assert result["method"] == "closest_5_9"
     assert "recommended_uncertainty" in result
     assert np.isfinite(result["recommended_uncertainty"])
-    # ε grid spacing is 0.1: neighbor uncertainty is at most that spacing
-    assert result["recommended_uncertainty"] <= 0.1 + 1e-12
-    xs = sorted({float(r["beta_epsilon"]) for r in rows})
-    assert result["recommended_uncertainty"] == pytest.approx(
-        bm.grid_neighbor_uncertainty(np.array(xs), result["criticality_estimate"])
-    )
-    # fit_uncertainty remains the sigmoid covariance (std error), when available
-    if result["method"] == "sigmoid":
-        assert np.isfinite(result["fit_uncertainty"])
+    assert result["recommended_uncertainty"] == pytest.approx(0.1)
+    assert abs(result["BC_at_criticality"] - bm.BC_BIMODAL_CUTOFF) <= abs(
+        float(min(rows, key=lambda r: abs(float(r["BC"]) - bm.BC_BIMODAL_CUTOFF))["BC"])
+        - bm.BC_BIMODAL_CUTOFF
+    ) + 1e-12
+    # discrete pick: criticality is one of the measured beta*epsilon grid points
+    xs = {float(r["beta_epsilon"]) for r in rows}
+    assert result["criticality_estimate"] in xs
 
 
 def test_find_criticality_end_to_end(tmp_path):

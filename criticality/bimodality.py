@@ -515,6 +515,7 @@ def _bc_err_stats(rows: list[dict]) -> tuple[int, float, float]:
 EPS_C_FIELDS = [
     "L_short", "L_long", "x_axis", "criticality_estimate",
     "epsilon_c_estimate", "beta", "method", "fit_uncertainty",
+    "BC_at_criticality", "BC_target",
     "transition_bc_high", "transition_bc_low",
     "transition_x_high", "transition_x_low", "transition_half_width",
     "transition_half_width_envelope", "recommended_uncertainty",
@@ -524,6 +525,7 @@ EPS_C_FIELDS = [
 CRIT_FIELDS = [
     "scheme", "delta_f", "delta_mu", "k", "L_short", "L_long", "x_axis",
     "criticality_estimate", "epsilon_c_estimate", "beta", "method", "fit_uncertainty",
+    "BC_at_criticality", "BC_target",
     "transition_bc_high", "transition_bc_low",
     "transition_x_high", "transition_x_low", "transition_half_width",
     "transition_half_width_envelope", "recommended_uncertainty",
@@ -870,20 +872,18 @@ def grid_neighbor_uncertainty(x: np.ndarray, x_c: float) -> float:
 
 
 def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilon") -> dict:
-    """Estimate the criticality for one size from its BC(x) crossover.
+    """Estimate criticality as the discrete x where BC is closest to 5/9.
 
     `x_col` is the sweep axis (default "beta_epsilon"; use "epsilon" for BC vs eps).
-    Prefers a sigmoid fit -> criticality = inflection point; falls back to the
-    BC=5/9 threshold crossing if the fit fails. Also reports epsilon_c_estimate
-    = criticality / mean(beta) so downstream FSS work has epsilon_c even when
-    the x-axis is beta*epsilon.
+    For each finite-size BC(x) curve (after zero_mean μ selection), pick the grid
+    point minimizing |BC - 5/9|. Reports epsilon_c_estimate = criticality / mean(beta)
+    when x is beta*epsilon.
 
     Errors:
-      * Max BC vs βε points still use per-point bootstrap `BC_err` (std error).
-      * `fit_uncertainty` is the sigmoid inflection covariance (fit std error).
+      * BC vs βε points still use per-point bootstrap `BC_err` (std error).
       * `recommended_uncertainty` is the distance from βε_c to its farthest
-        nearest neighbor on the discrete x-grid (ε spacing, typically 0.005) —
-        this is what the βε_c vs L plots use.
+        nearest neighbor on the discrete x-grid (ε spacing, typically 0.005).
+      * `fit_uncertainty` is left unused (NaN); there is no sigmoid fit.
     """
     sel = [r for r in rows
            if int(float(r["L_long"])) == int(L_long) and np.isfinite(float(r["BC"]))]
@@ -903,28 +903,11 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
     bc_err = np.array([p[2] for p in pts])
     L_short = int(float(sel[0]["L_short"]))
     beta_mean = float(np.mean([float(r.get("beta", 1.0)) for r in sel]))
-    # weight the fit by the bootstrap errors when all are present and positive
-    sigma = bc_err if np.all(np.isfinite(bc_err) & (bc_err > 0)) else None
 
-    method = "sigmoid"
-    x_c = float("nan")
-    fit_unc = float("nan")
-    try:
-        from scipy.optimize import curve_fit
-
-        p0 = [1.0 / 3.0, float(bc.max()), float(np.median(x)),
-              max((x.max() - x.min()) / 10.0, 1e-3)]
-        popt, pcov = curve_fit(_sigmoid, x, bc, p0=p0, sigma=sigma,
-                               absolute_sigma=sigma is not None, maxfev=20000)
-        x_c = float(popt[2])
-        fit_unc = float(np.sqrt(pcov[2, 2])) if np.all(np.isfinite(pcov)) else float("nan")
-        if not (x.min() <= x_c <= x.max()):  # fit ran away -> fall back
-            raise RuntimeError("sigmoid inflection outside sweep range")
-    except Exception as exc:
-        method = "threshold_5_9"
-        x_c = _threshold_crossing(x, bc)
-        fit_unc = float("nan")
-        print(f"[bimodality] sigmoid fit fell back to threshold: {exc}", flush=True)
+    i = int(np.argmin(np.abs(bc - BC_BIMODAL_CUTOFF)))
+    x_c = float(x[i])
+    bc_at = float(bc[i])
+    method = "closest_5_9"
 
     eps_c = x_c / beta_mean if (x_col == "beta_epsilon" and beta_mean) else x_c
     bracket = transition_bracket(x, bc, bc_err)
@@ -937,7 +920,9 @@ def locate_epsilon_c(rows: list[dict], L_long: int, *, x_col: str = "beta_epsilo
         "epsilon_c_estimate": eps_c,
         "beta": beta_mean,
         "method": method,
-        "fit_uncertainty": fit_unc,
+        "fit_uncertainty": float("nan"),
+        "BC_at_criticality": bc_at,
+        "BC_target": BC_BIMODAL_CUTOFF,
         **bracket,
         "recommended_uncertainty": grid_unc,
     }
@@ -992,7 +977,9 @@ def find_criticality(
     print(
         f"[bimodality] criticality({L_long}x{combo_params['Ly']}) = "
         f"(beta*eps)_c={result['criticality_estimate']:.4f} "
-        f"+/- {rec} (grid neighbor; sigmoid fit +/- {result['fit_uncertainty']})  "
+        f"+/- {rec} (grid neighbor)  "
+        f"BC={result.get('BC_at_criticality', float('nan')):.4f} "
+        f"(target 5/9={BC_BIMODAL_CUTOFF:.4f})  "
         f"[epsilon_c={result['epsilon_c_estimate']:.4f}] ({result['method']})",
         flush=True,
     )
@@ -1098,9 +1085,9 @@ def phase_diagram(
 ) -> list[dict]:
     """BC-vs-(beta*epsilon) curve for each delta_mu at a fixed scheme+size.
 
-    Reproduces the "thermal phase diagram" family plot: one sigmoid per delta_mu,
-    y = Sarle BC at the selected mu (default: ⟨φ⟩ closest to 0), x = beta*epsilon,
-    and the sigmoid inflection is that delta_mu's criticality. If delta_mus is None,
+    Reproduces the "thermal phase diagram" family plot: one curve per delta_mu,
+    y = Sarle BC at the selected mu (default: ⟨φ⟩ closest to 0), x = beta*epsilon.
+    Criticality is the discrete βε where BC is closest to 5/9. If delta_mus is None,
     every delta_mu present on disk is used.
 
     Writes <out_dir>/bc_vs_beta_epsilon.csv (all delta_mu, tagged) and
@@ -1138,8 +1125,8 @@ def phase_diagram(
         print(
             f"[bimodality] dmu={dmu:+.3f}: (beta*eps)_c="
             f"{res['criticality_estimate']:.4f} +/- {rec} "
-            f"(grid neighbor; sigmoid fit +/- {res['fit_uncertainty']}) "
-            f"({res['method']})",
+            f"(grid neighbor; BC={res.get('BC_at_criticality', float('nan')):.4f} "
+            f"vs 5/9) ({res['method']})",
             flush=True,
         )
 
@@ -1433,8 +1420,9 @@ def main() -> None:
     import argparse
 
     p = argparse.ArgumentParser(
-        description="Bimodality-based criticality from coex snapshots: max Sarle BC "
-                    "over the mu-sweep vs beta*epsilon; criticality = sigmoid inflection.",
+        description="Bimodality-based criticality from coex snapshots: Sarle BC "
+                    "at ⟨φ⟩≈0 vs beta*epsilon; criticality = discrete point "
+                    "closest to BC=5/9.",
     )
     sub = p.add_subparsers(dest="mode", required=True)
 
