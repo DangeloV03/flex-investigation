@@ -34,7 +34,7 @@ EPS_MAX=-1.4
 EPS_STEP=0.005
 
 SAMPLES=coex_samples/homo_dmu1p0
-RESULTS=susceptibility_results/coex_homo_dmu1p0
+RESULTS=susceptibility/results/coex_homo_dmu1p0
 MANAGE=coex_manage_homo_dmu1p0.csv
 QUEUE=coex_homo_dmu1p0_queue.json
 SESSION=coex-dmu1p0-refine

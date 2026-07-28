@@ -14,7 +14,7 @@ Scaling ansatz (autoScale convention):
                             b  =  β/ν  for |m|  (Fig 13 analog)
 
 Usage examples:
-    python plot_fss.py --results susceptibility_results --xc -1.75
+    python plot_fss.py --results susceptibility/results --xc -1.75
     python plot_fss.py --pooled --xc -1.75 --xr -5 5 --peak_shift
     python plot_fss.py --fix_xc --xc -1.75 --fix_nu --nu 1.0
 
@@ -435,7 +435,7 @@ def main() -> None:
         description='FSS collapse plots (Figs 11 & 13 analog)',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument('--results', default='susceptibility_results',
+    parser.add_argument('--results', default='susceptibility/results',
                         help='Directory containing susceptibility_data.csv files')
     parser.add_argument('--outdir', default='plots/fss')
     parser.add_argument('--pooled', action='store_true',

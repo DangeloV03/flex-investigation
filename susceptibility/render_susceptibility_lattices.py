@@ -9,7 +9,7 @@ Color map:
 
 Usage:
     python susceptibility/render_susceptibility_lattices.py
-    python susceptibility/render_susceptibility_lattices.py --results susceptibility_results
+    python susceptibility/render_susceptibility_lattices.py --results susceptibility/results
     python susceptibility/render_susceptibility_lattices.py --dry-run
 """
 
@@ -83,7 +83,7 @@ def main() -> None:
     parser.add_argument(
         "--results",
         default=PROD_RESULTS_BASE,
-        help="Root directory to search (default: susceptibility_results)",
+        help="Root directory to search (default: susceptibility/results)",
     )
     parser.add_argument("--dpi", type=int, default=150)
     parser.add_argument(

@@ -15,7 +15,7 @@ E_interact is recovered from the stored total energy and densities:
 
 Usage:
     python plot_susceptibility.py
-    python plot_susceptibility.py --results susceptibility_results/exact --outdir plots/exact
+    python plot_susceptibility.py --results susceptibility/results/exact --outdir plots/exact
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def resolve_repo_path(path: str) -> str:
     repo_path = os.path.join(REPO_ROOT, path)
     # Campaign outputs (results, plots) always live at repo root — prefer that even
     # when cwd is susceptibility/ and a similarly named empty dir exists under cwd.
-    if path.startswith(("plots/", "susceptibility_results/")):
+    if path.startswith(("plots/", "susceptibility/results/")):
         return repo_path
     cwd_path = os.path.abspath(path)
     if os.path.exists(cwd_path):
@@ -140,7 +140,7 @@ def aggregate(
         raise FileNotFoundError(
             f"No susceptibility_data.csv under {results_dir!r} "
             f"(resolved: {os.path.abspath(results_dir)}). "
-            f"Pass --results relative to repo root, e.g. susceptibility_results/exact_2026-07-02"
+            f"Pass --results relative to repo root, e.g. susceptibility/results/exact_2026-07-02"
         )
 
     traj_records: list[dict] = []
@@ -272,7 +272,7 @@ def aggregate_pooled(
         raise FileNotFoundError(
             f"No susceptibility_data.csv under {results_dir!r} "
             f"(resolved: {os.path.abspath(results_dir)}). "
-            f"Pass --results relative to repo root, e.g. susceptibility_results/exact_2026-07-02"
+            f"Pass --results relative to repo root, e.g. susceptibility/results/exact_2026-07-02"
         )
 
     groups: dict[tuple[int, float], list[dict]] = defaultdict(list)
@@ -735,7 +735,7 @@ def plot_m_histograms_at_peak(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot susceptibility campaign results")
-    parser.add_argument("--results", default="susceptibility_results")
+    parser.add_argument("--results", default="susceptibility/results")
     parser.add_argument("--outdir", default="plots/susceptibility")
     parser.add_argument(
         "--pooled",

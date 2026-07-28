@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generate_samples import frange
 from sweep_susceptibility import load_mu_map
 
-DEFAULT_RESULTS = "susceptibility_results/homo_dmu1p0_taper_2026-07-19"
+DEFAULT_RESULTS = "susceptibility/results/homo_dmu1p0_taper_2026-07-19"
 DEFAULT_MU_SOURCE = "coex_manage_homo_dmu1p0.csv"
 FULL_SCRIPT = "susceptibility/run_susceptibility_homo_dmu1p0_tapered.sh"
 FINISH_SCRIPT = "susceptibility/run_susceptibility_homo_dmu1p0_tapered_finish.sh"

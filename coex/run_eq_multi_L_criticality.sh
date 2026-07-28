@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run bimodality criticality for each finished equilibrium coex size.
 #
-# Expects coex_eq/ly<N>/results from ./coex/run_eq_multi_L_campaign.sh.
+# Expects coex/coex_eq/ly<N>/results from ./coex/run_eq_multi_L_campaign.sh.
 # Writes criticality/eq_ly<N>/{bc_vs_beta_epsilon.csv,criticality.csv,*.png}.
 #
 # Usage (after coex is analyzed):
@@ -66,7 +66,7 @@ fi
 
 for ly in "${LYS[@]}"; do
   lx=$((10 * ly))
-  base="coex_eq/ly${ly}"
+  base="coex/coex_eq/ly${ly}"
   out="criticality/eq_ly${ly}"
   if [ ! -d "$base/results" ]; then
     echo "[skip] missing $base/results"

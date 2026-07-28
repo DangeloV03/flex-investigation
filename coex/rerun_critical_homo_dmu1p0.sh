@@ -24,5 +24,5 @@ python -u coex/rerun_combos.py \
   --manage coex_manage_homo_dmu1p0.csv \
   --manifest coex_homo_dmu1p0_queue.json \
   --samples coex_samples/homo_dmu1p0 \
-  --results susceptibility_results/coex_homo_dmu1p0 \
+  --results susceptibility/results/coex_homo_dmu1p0 \
   "$@"

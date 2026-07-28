@@ -8,7 +8,7 @@
 #   ./susceptibility/submit_taper_L256_append.sh
 #
 # Override paths if needed:
-#   RESULTS_BASE=susceptibility_results/homo_dmu1p0_taper_2026-07-19 \
+#   RESULTS_BASE=susceptibility/results/homo_dmu1p0_taper_2026-07-19 \
 #   MU_SOURCE=coex_manage_homo_dmu1p0.csv \
 #     ./susceptibility/submit_taper_L256_append.sh
 
@@ -20,7 +20,7 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR/coex:$PROJECT_DIR/susceptibility:$PROJECT_DIR"
 export PYTHONUNBUFFERED=1
 
-RESULTS_BASE="${RESULTS_BASE:-susceptibility_results/homo_dmu1p0_taper_2026-07-19}"
+RESULTS_BASE="${RESULTS_BASE:-susceptibility/results/homo_dmu1p0_taper_2026-07-19}"
 MU_SOURCE="${MU_SOURCE:-coex_manage_homo_dmu1p0.csv}"
 SCRIPT=susceptibility/run_susceptibility_homo_dmu1p0_tapered_L256.sh
 

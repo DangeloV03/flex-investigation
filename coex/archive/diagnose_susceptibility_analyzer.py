@@ -28,7 +28,7 @@ from analyzer import (
 from combo_paths import COMBO_KEY_FIELDS, combo_dir_name, discover_combo_results
 
 
-def print_queue_summary(manifest_path: str = "susceptibility_coex_queue.json") -> None:
+def print_queue_summary(manifest_path: str = "susceptibility/coex_queue.json") -> None:
     import json
     import os
 
@@ -67,11 +67,11 @@ def count_stray_coex_outputs(results_dir: str = "results") -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Diagnose susceptibility analyzer readiness")
-    parser.add_argument("--manage", default="susceptibility_manage.csv")
-    parser.add_argument("--results", default="susceptibility_results/coex")
+    parser.add_argument("--manage", default="susceptibility/manage.csv")
+    parser.add_argument("--results", default="susceptibility/results/coex")
     args = parser.parse_args()
 
-    print_queue_summary("susceptibility_coex_queue.json")
+    print_queue_summary("susceptibility/coex_queue.json")
 
     stray = count_stray_coex_outputs("results")
     if stray:

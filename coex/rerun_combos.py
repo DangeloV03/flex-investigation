@@ -275,7 +275,7 @@ def main() -> int:
     parser.add_argument("--manage", default="coex_manage_homo_dmu1p0.csv")
     parser.add_argument("--manifest", default="coex_homo_dmu1p0_queue.json")
     parser.add_argument("--samples", default="coex_samples/homo_dmu1p0")
-    parser.add_argument("--results", default="susceptibility_results/coex_homo_dmu1p0")
+    parser.add_argument("--results", default="susceptibility/results/coex_homo_dmu1p0")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 

@@ -13,21 +13,21 @@ post_presentation_notes.md).  Pass --epsilon to analyse a single ε instead.
 
 Usage:
     python susceptibility/count_mag_jumps.py \\
-        --results susceptibility_results/eq_12p5x_<date> \\
+        --results susceptibility/results/eq_12p5x_<date> \\
         --outdir plots/eq_timetest/12p5x
 
     python susceptibility/count_mag_jumps.py \\
-        --results susceptibility_results/eq_12p5x_<date> \\
+        --results susceptibility/results/eq_12p5x_<date> \\
         --epsilon -1.85 \\
         --outdir plots/eq_timetest/12p5x
 
     python susceptibility/count_mag_jumps.py \\
-        --results susceptibility_results/eq_12p5x_<date> \\
+        --results susceptibility/results/eq_12p5x_<date> \\
         --L 96 --all-eps \\
         --outdir plots/eq_timetest/12p5x
 
     python susceptibility/count_mag_jumps.py --list \\
-        --results susceptibility_results/eq_12p5x_<date>
+        --results susceptibility/results/eq_12p5x_<date>
 """
 
 from __future__ import annotations
@@ -43,8 +43,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+import csv
+
 from analyze_chi_max_scaling import load_replica_groups
 from plot_susceptibility import L_PLOT_STYLE, resolve_repo_path
+from susceptibility_paths import find_susc_run_csvs, parse_susc_run_dir
 
 L_COLOR = {L: style["color"] for L, style in L_PLOT_STYLE.items()}
 
@@ -246,10 +249,106 @@ def plot_J_vs_eps(summary: pd.DataFrame, out_path: str) -> None:
     print(f"Wrote {out_path}")
 
 
+def load_susc_runs_groups(base: str) -> dict[tuple[int, float], dict]:
+    """Load replica groups from a SUSC_RUNS base directory.
+
+    Parses L and ε from the path structure  base/*/_*/susceptibility_data.csv
+    and loads the m_timeseries_{id}.csv for each replica.
+
+    Returns { (L, eps): {"beta": float, "N": int, "replicas": [m_array, ...]} }
+    Only uses the most up-to-date row per (L, eps) group (highest prod_time).
+    """
+    csv_paths = find_susc_run_csvs(base)
+    if not csv_paths:
+        return {}
+
+    from susceptibility_paths import read_susceptibility_csv
+
+    groups: dict[tuple[int, float], dict] = {}
+
+    for data_csv in csv_paths:
+        run_dir = os.path.dirname(data_csv)
+        L, eps = parse_susc_run_dir(run_dir)
+        if L is None or eps is None:
+            continue
+
+        rows = read_susceptibility_csv(data_csv)
+        if not rows:
+            continue
+
+        # Only keep the most recent generation (max prod_time).
+        max_pt = max(float(r.get("prod_time", 0) or 0) for r in rows)
+        latest_rows = [r for r in rows
+                       if abs(float(r.get("prod_time", 0) or 0) - max_pt) < 1.0]
+
+        beta = float(latest_rows[0].get("beta", 1.0) or 1.0)
+        n_sites = L * L
+
+        m_arrays: list[np.ndarray] = []
+        for row in latest_rows:
+            run_id = row.get("id", "")
+            if not run_id:
+                continue
+            ts_path = os.path.join(run_dir, f"m_timeseries_{run_id}.csv")
+            if not os.path.isfile(ts_path):
+                continue
+            with open(ts_path, newline="") as f:
+                records = list(csv.DictReader(f))
+            if not records:
+                continue
+            m_arr = np.array([float(r["m"]) for r in records if "m" in r], dtype=float)
+            if m_arr.size > 0:
+                m_arrays.append(m_arr)
+
+        if not m_arrays:
+            continue
+
+        key = (L, round(eps, 8))
+        groups[key] = {"beta": beta, "N": n_sites, "replicas": m_arrays}
+
+    return groups
+
+
+def compute_jump_summary(
+    results_base: str,
+    frac: float = 0.75,
+    threshold: float = 10.0,
+) -> pd.DataFrame:
+    """Compute average jump count per (L, ε) from a SUSC_RUNS directory.
+
+    Loads timeseries from the new-layout  SUSC_RUNS/*/_*/ path structure.
+    Returns DataFrame with columns: L, epsilon, J_mean, J_std, J_stderr, n_replicas.
+    Adds a boolean  passes  column (True if J_mean >= threshold).
+    """
+    groups = load_susc_runs_groups(results_base)
+    _empty = pd.DataFrame({"L": pd.Series(dtype=int), "epsilon": pd.Series(dtype=float),
+                           "J_mean": pd.Series(dtype=float), "J_std": pd.Series(dtype=float),
+                           "J_stderr": pd.Series(dtype=float), "n_replicas": pd.Series(dtype=int),
+                           "passes": pd.Series(dtype=bool)})
+    if not groups:
+        return _empty
+
+    summary, _, _, _ = analyze_jumps(
+        groups,
+        eps_crit=0.0,   # unused when all_eps=True
+        eps_window=0.0,
+        epsilon=None,
+        frac=frac,
+        all_eps=True,
+    )
+
+    if summary.empty:
+        return _empty
+
+    summary = summary.rename(columns={"J_stderr": "J_stderr"}).copy()
+    summary["passes"] = summary["J_mean"] >= threshold
+    return summary.sort_values(["L", "epsilon"]).reset_index(drop=True)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--results", default="susceptibility_results",
-                   help="Susceptibility results tree (e.g. susceptibility_results/eq_12p5x_2026-07-20)")
+    p.add_argument("--results", default="susceptibility/results",
+                   help="Susceptibility results tree (e.g. susceptibility/results/eq_12p5x_2026-07-20)")
     p.add_argument("--outdir", default="plots/eq_timetest/12p5x")
     p.add_argument("--eps-crit", type=float, default=-1.75,
                    help="Central ε for the analysis window (default: -1.75; ignored with --epsilon)")

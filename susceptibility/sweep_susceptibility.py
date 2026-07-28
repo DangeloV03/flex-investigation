@@ -31,7 +31,7 @@ EPS_MAX = -1.4
 EPS_STEP = 0.005
 
 DEFAULT_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_susceptibility.sh")
-RESULTS_ROOT = "susceptibility_results"
+RESULTS_ROOT = "susceptibility/results"
 
 
 def _matches(row: dict, field: str, val) -> bool:

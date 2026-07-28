@@ -37,7 +37,7 @@ def _write_manage(path: str, *, ly: int, eps_mu: list[tuple[float, float]]) -> N
                 "mu_coex_FITTED": mu,
                 "mu_coex_FITTED_error": 0.001,
                 "RequestForAdditionalData": "0",
-                "combo_path": f"coex_eq/ly{ly}/results",
+                "combo_path": f"coex/coex_eq/ly{ly}/results",
             })
 
 

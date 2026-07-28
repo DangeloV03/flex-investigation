@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."       # repo root
 
 SKIPS=(0 1 2 3 5 7 10 12 15)
-RESULTS="susceptibility_results/exact"
+RESULTS="susceptibility/results/exact"
 OUTDIR="plots/susceptibility/correlation_test"
 PARTITION="cpu"
 TIME="02:00:00"

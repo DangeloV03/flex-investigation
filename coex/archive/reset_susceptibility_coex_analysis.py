@@ -51,8 +51,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Reset susceptibility coex analysis fields in manage.csv",
     )
-    parser.add_argument("--manage", default="susceptibility_manage.csv")
-    parser.add_argument("--results", default="susceptibility_results/coex")
+    parser.add_argument("--manage", default="susceptibility/manage.csv")
+    parser.add_argument("--results", default="susceptibility/results/coex")
     parser.add_argument(
         "--bad-psi-only",
         action="store_true",

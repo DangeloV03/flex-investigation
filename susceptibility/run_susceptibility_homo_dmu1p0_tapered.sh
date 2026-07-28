@@ -17,7 +17,7 @@
 #
 # Args (passed by sbatch/bash):
 #   $1  epsilon       (required)
-#   $2  results_base  (required; e.g. susceptibility_results/homo_dmu1p0_2026-07-19)
+#   $2  results_base  (required; e.g. susceptibility/results/homo_dmu1p0_2026-07-19)
 #   $3  num_batches   (optional, default 1)
 #   $4  mu            (optional; fitted mu_coex from manage CSV)
 #   $5  delta_f       (optional; empty => runner default)

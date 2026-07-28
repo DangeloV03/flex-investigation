@@ -9,7 +9,7 @@
 # Each Ly gets its OWN samples/results/manage/queue so dispatchers never collide.
 #
 # Layout (repo-root relative):
-#   coex_eq/ly<N>/{samples,results,manage.csv,queue.json}
+#   coex/coex_eq/ly<N>/{samples,results,manage.csv,queue.json}
 #
 # Usage (on Della login node, from repo root after sourcing env.sh):
 #   ./coex/run_eq_multi_L_campaign.sh generate           # seed all default L
@@ -23,15 +23,15 @@
 #
 # After coex finishes, criticality per L (example for Ly=20):
 #   python -u criticality/bimodality.py phase-diagram \
-#     --base-dir coex_eq/ly20/results \
+#     --base-dir coex/coex_eq/ly20/results \
 #     --scheme homo --delta-f -20 --k 0 \
 #     --Lx 200 --Ly 20 --delta-mus 0 \
 #     --out-dir criticality/eq_ly20 \
-#     --manage-csv coex_eq/ly20/manage.csv
+#     --manage-csv coex/coex_eq/ly20/manage.csv
 #
 # Multi-L FSS-style comparison once all three are done:
 #   python -u criticality/bimodality.py fss \
-#     --base-dir coex_eq/ly16/results \   # or a common parent if you symlink
+#     --base-dir coex/coex_eq/ly16/results \   # or a common parent if you symlink
 #     ...
 # Prefer one phase-diagram call per L (results live in separate trees), then
 # compare criticality.csv rows / plot βε_c vs L by hand.
@@ -66,7 +66,7 @@ fi
 
 ly_tag() { echo "ly$1"; }
 
-base_for() { echo "coex_eq/$(ly_tag "$1")"; }
+base_for() { echo "coex/coex_eq/$(ly_tag "$1")"; }
 
 generate() {
   export PYTHONPATH="$PROJECT_DIR/coex:$PROJECT_DIR/susceptibility:$PROJECT_DIR"

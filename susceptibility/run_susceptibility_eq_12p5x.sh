@@ -21,7 +21,7 @@
 #
 # Args (passed by sbatch/bash):
 #   $1  epsilon       (required)
-#   $2  results_base  (required; e.g. susceptibility_results/exact_2026-07-02)
+#   $2  results_base  (required; e.g. susceptibility/results/exact_2026-07-02)
 #   $3  num_batches   (optional, default 1)
 #   $4  mu            (optional; empty => runner default mu = 2*epsilon)
 #   $5  delta_f       (optional; empty => runner default)

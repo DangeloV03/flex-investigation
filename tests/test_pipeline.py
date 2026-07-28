@@ -585,20 +585,20 @@ class TestMakeJobJson:
     def test_make_job_json_sets_results_base(self, tmp_path):
         path = make_job_json(
             self._template(), mu=-3.5, samples_dir=str(tmp_path),
-            results_base="susceptibility_results/coex",
+            results_base="susceptibility/results/coex",
         )
         with open(path) as f:
             job = json.load(f)
-        assert job["results_base"] == "susceptibility_results/coex"
+        assert job["results_base"] == "susceptibility/results/coex"
 
     def test_make_job_json_sets_manage_csv(self, tmp_path):
         path = make_job_json(
             self._template(), mu=-3.5, samples_dir=str(tmp_path),
-            manage_csv="susceptibility_manage.csv",
+            manage_csv="susceptibility/manage.csv",
         )
         with open(path) as f:
             job = json.load(f)
-        assert job["manage_csv"] == "susceptibility_manage.csv"
+        assert job["manage_csv"] == "susceptibility/manage.csv"
 
     def test_make_job_json_mu_value(self, tmp_path):
         path = make_job_json(self._template(), mu=-3.123456, samples_dir=str(tmp_path))
@@ -641,8 +641,8 @@ class TestEnqueueJobsManifestRouting:
                 self._template(),
                 samples,
                 manifest_path=coex,  # <-- must honour this
-                results_dir="susceptibility_results/coex",
-                manage_path="susceptibility_manage.csv",
+                results_dir="susceptibility/results/coex",
+                manage_path="susceptibility/manage.csv",
             )
         finally:
             qm.MANIFEST_PATH = old
@@ -692,8 +692,8 @@ class TestEnqueueJobsManifestRouting:
             self._template(),
             samples,
             manifest_path=coex,
-            results_dir="susceptibility_results/coex",
+            results_dir="susceptibility/results/coex",
         )
         with open(paths[0]) as f:
             job = json.load(f)
-        assert job["results_base"] == "susceptibility_results/coex"
+        assert job["results_base"] == "susceptibility/results/coex"

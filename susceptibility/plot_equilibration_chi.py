@@ -26,9 +26,9 @@ computed over the pooled samples of all replicas. For the rolling plot each L is
 shown at its peak ε (the ε that maximises the full-series χ).
 
 Usage:
-    python plot_equilibration_chi.py --results susceptibility_results/exact --outdir plots/exact
-    python plot_equilibration_chi.py --results susceptibility_results --n-fractions 10
-    python plot_equilibration_chi.py --results susceptibility_results --window 100 --stride 20
+    python plot_equilibration_chi.py --results susceptibility/results/exact --outdir plots/exact
+    python plot_equilibration_chi.py --results susceptibility/results --n-fractions 10
+    python plot_equilibration_chi.py --results susceptibility/results --window 100 --stride 20
 """
 
 from __future__ import annotations
@@ -304,7 +304,7 @@ def plot_equilibration_curves(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="χ^max vs time-series fraction (equilibration test)")
-    parser.add_argument("--results", default="susceptibility_results")
+    parser.add_argument("--results", default="susceptibility/results")
     parser.add_argument("--outdir", default="plots/susceptibility")
     parser.add_argument(
         "--n-fractions", type=int, default=10,

@@ -1,23 +1,33 @@
 """
 Path helpers and constants for the susceptibility campaign.
 
-Coexistence (slab): same geometry/IC as json_runner, under susceptibility_results/coex/.
-Production (square L×L): susceptibility_runner, under susceptibility_results/susceptibility_{L}x{L}_.../
+Coexistence (slab): same geometry/IC as json_runner, under susceptibility/results/coex/.
+
+Production (square L×L): two layouts:
+  Legacy: susceptibility/results/susceptibility_{L}x{L}_.../
+  Smart runner (SUSC_RUNS): SUSC_RUNS/_{Lx}_{Ly}_S{n}_DF{df}_DMU{dmu}_K{k}/_{epsilon}/
 """
 
 from __future__ import annotations
 
 import csv
 import os
+import re
 
 from combo_paths import combo_dir_name
 
-COEX_SAMPLES_DIR = "susceptibility_samples/coex"
-COEX_RESULTS_DIR = "susceptibility_results/coex"
-PROD_RESULTS_BASE = "susceptibility_results"
-MANAGE_CSV = "susceptibility_manage.csv"
-COEX_MANIFEST = "susceptibility_coex_queue.json"
+COEX_SAMPLES_DIR = "susceptibility/samples/coex"
+COEX_RESULTS_DIR = "susceptibility/results/coex"
+MANAGE_CSV = "susceptibility/manage.csv"
+COEX_MANIFEST = "susceptibility/coex_queue.json"
 SUSCEPTIBILITY_DATA_CSV = "susceptibility_data.csv"
+
+# Smart-runner output base (SUSC_RUNS layout).
+SUSC_RUNS_BASE = "SUSC_RUNS"
+PROD_RESULTS_BASE = SUSC_RUNS_BASE
+
+# Scheme name → integer code used in SUSC_RUNS directory names.
+SCHEME_CODES: dict[str, int] = {"homo": 1, "positive": 2, "negative": 3}
 
 # Pre-SEM schema (smoke tests / early prod); current adds *_err columns after each moment/chi.
 SUSCEPTIBILITY_CSV_FIELDS_LEGACY = [
@@ -60,7 +70,7 @@ SUSCEPTIBILITY_CSV_FIELDS_V1 = [
 ]
 
 # v2: adds energy columns (33 total)
-SUSCEPTIBILITY_CSV_FIELDS = [
+SUSCEPTIBILITY_CSV_FIELDS_V2 = [
     *SUSCEPTIBILITY_CSV_FIELDS_V1,
     "e_mean",
     "e_mean_err",
@@ -68,8 +78,15 @@ SUSCEPTIBILITY_CSV_FIELDS = [
     "e2_mean_err",
 ]
 
+# v3: adds resume_id for top-up lineage tracking (34 total)
+SUSCEPTIBILITY_CSV_FIELDS = [
+    *SUSCEPTIBILITY_CSV_FIELDS_V2,
+    "resume_id",  # empty for fresh runs; original replica's id for top-up rows
+]
+
 _FIELDNAMES_BY_WIDTH = {
     len(SUSCEPTIBILITY_CSV_FIELDS): SUSCEPTIBILITY_CSV_FIELDS,
+    len(SUSCEPTIBILITY_CSV_FIELDS_V2): SUSCEPTIBILITY_CSV_FIELDS_V2,
     len(SUSCEPTIBILITY_CSV_FIELDS_V1): SUSCEPTIBILITY_CSV_FIELDS_V1,
     len(SUSCEPTIBILITY_CSV_FIELDS_LEGACY): SUSCEPTIBILITY_CSV_FIELDS_LEGACY,
 }
@@ -118,7 +135,7 @@ def find_susceptibility_csvs(results_dir: str) -> list[str]:
 
     Run dirs are always {base}/susceptibility_{combo}/ for every phase, so glob
     exactly one level deep. This keeps phases isolated: pointing at the prod base
-    (susceptibility_results/) no longer sweeps up coex/, exact/, exact_random/,
+    (susceptibility/results/) no longer sweeps up coex/, exact/, exact_random/,
     exact_split/ nested underneath it.
     """
     import glob
@@ -140,12 +157,82 @@ def dmu_filename_tag(delta_mu: float) -> str:
 
 
 def susceptibility_prod_dir_name(params: dict) -> str:
-    """Directory name for one square-L production run."""
+    """Directory name for legacy square-L production run."""
     return f"susceptibility_{combo_dir_name(params)}"
 
 
+# ---------------------------------------------------------------------------
+# SUSC_RUNS path helpers (smart-runner layout)
+# ---------------------------------------------------------------------------
+
+def _float_tag(v: float) -> str:
+    """Clean float string: removes trailing zeros but always keeps one decimal."""
+    s = f"{v:g}"
+    if "." not in s and "e" not in s.lower():
+        s += ".0"
+    return s
+
+
+def susc_param_dir_name(params: dict) -> str:
+    """_{Lx}_{Ly}_S{n}_DF{df}_DMU{dmu}_K{k} — param-level dir inside SUSC_RUNS."""
+    scheme = str(params.get("scheme", "homo"))
+    n = SCHEME_CODES.get(scheme, scheme)
+    lx = int(params["Lx"])
+    ly = int(params["Ly"])
+    df = _float_tag(float(params["delta_f"]))
+    dmu = _float_tag(float(params["delta_mu"]))
+    k = _float_tag(float(params["k"]))
+    return f"_{lx}_{ly}_S{n}_DF{df}_DMU{dmu}_K{k}"
+
+
+def susc_eps_dir_name(epsilon: float) -> str:
+    """_{epsilon} — epsilon-level dir inside a param dir."""
+    return f"_{_float_tag(epsilon)}"
+
+
+def susc_run_dir(params: dict, base: str = SUSC_RUNS_BASE) -> str:
+    """Full path: base/_{Lx}_{Ly}_S{n}_.../_epsilon/ for a SUSC_RUNS campaign."""
+    return os.path.join(
+        base,
+        susc_param_dir_name(params),
+        susc_eps_dir_name(float(params["epsilon"])),
+    )
+
+
+def parse_susc_run_dir(dirpath: str) -> tuple[int | None, float | None]:
+    """Parse (L, epsilon) from a SUSC_RUNS epsilon-level directory path.
+
+    Expects the last two components to be _{Lx}_{Ly}_S{n}_...  and  _{epsilon}.
+    Returns (None, None) if the path doesn't match.
+    """
+    parts = os.path.normpath(dirpath).split(os.sep)
+    if len(parts) < 2:
+        return None, None
+    eps_dir = parts[-1]   # e.g. "_-1.76"
+    param_dir = parts[-2] # e.g. "_48_48_S1_DF-20.0_DMU0.0_K0.0"
+    try:
+        eps = float(eps_dir.lstrip("_"))
+    except ValueError:
+        return None, None
+    m = re.match(r"_(\d+)_", param_dir)
+    L = int(m.group(1)) if m else None
+    return L, eps
+
+
+def find_susc_run_csvs(base: str) -> list[str]:
+    """Find all susceptibility_data.csv files under a SUSC_RUNS base.
+
+    Globs two levels deep: {base}/*/_*/{SUSCEPTIBILITY_DATA_CSV}.
+    """
+    import glob
+    return sorted(
+        glob.glob(os.path.join(base, "*", "_*", SUSCEPTIBILITY_DATA_CSV))
+    )
+
+
 def susceptibility_prod_dir(params: dict, base: str = PROD_RESULTS_BASE) -> str:
-    return os.path.join(base, susceptibility_prod_dir_name(params))
+    """Output directory for one square-L production run (SUSC_RUNS layout)."""
+    return susc_run_dir(params, base)
 
 
 def coex_combo_dir(params: dict) -> str:
@@ -158,7 +245,7 @@ def coex_job_filename(scheme: str, epsilon: float, delta_mu: float, ly: int, mu_
 
 
 def patch_coex_job_json(json_path: str) -> bool:
-    """Ensure coex job JSON writes under susceptibility_results/coex (not results/).
+    """Ensure coex job JSON writes under susceptibility/results/coex (not results/).
 
     Stale copies restored from samples/coex/done/ often lack these fields.
     Returns True if the file was updated.

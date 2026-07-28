@@ -24,8 +24,8 @@ By default we symlink run dirs (no data duplication); use --copy to copy.
 Usage
 -----
     python combine_runs.py --out 2-5-combined \
-        susceptibility_results/exact_2026-07-02 \
-        susceptibility_results/exact_2026-07-05
+        susceptibility/results/exact_2026-07-02 \
+        susceptibility/results/exact_2026-07-05
 
     # then, pointing every analysis at the combined tree:
     python analyze_chi_max_scaling.py --results 2-5-combined \

@@ -25,7 +25,7 @@ Reference: Kumar & Dasgupta (2020) PRE 102, 052111 — Table I, E_0 = -2:
 
 Usage:
     python analyze_chi_max_scaling.py
-    python analyze_chi_max_scaling.py --results susceptibility_results/exact \\
+    python analyze_chi_max_scaling.py --results susceptibility/results/exact \\
         --outdir plots/chi_max_scaling --n-boot 500
     python analyze_chi_max_scaling.py --loo-only   # skip slow bootstrap
 """
@@ -480,7 +480,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="chi_max FSS: replica subsampling + LOO jackknife"
     )
-    parser.add_argument("--results", default="susceptibility_results/exact",
+    parser.add_argument("--results", default="susceptibility/results/exact",
                         help="Results directory (the exact phase)")
     parser.add_argument("--outdir", default="plots/chi_max_scaling")
     parser.add_argument("--rep-counts", type=int, nargs="+", default=DEFAULT_REP_COUNTS,

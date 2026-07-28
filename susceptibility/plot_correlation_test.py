@@ -13,7 +13,7 @@ Produces in plots/susceptibility/correlation_test/:
   peak_chi_vs_L_all_skips.png — all skip levels overlaid (mega plot)
 
 Usage:
-    python plot_correlation_test.py --results susceptibility_results/exact
+    python plot_correlation_test.py --results susceptibility/results/exact
 """
 
 from __future__ import annotations
@@ -188,7 +188,7 @@ def plot_mega(all_peaks: dict[int, pd.DataFrame], outdir: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Autocorrelation diagnostic via timeseries thinning")
-    parser.add_argument("--results", default="susceptibility_results/exact",
+    parser.add_argument("--results", default="susceptibility/results/exact",
                         help="Directory containing susceptibility results")
     parser.add_argument("--outdir", default="plots/susceptibility/correlation_test")
     parser.add_argument("--skips", type=int, nargs="+", default=SKIP_VALUES,

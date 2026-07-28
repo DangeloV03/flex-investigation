@@ -23,7 +23,7 @@ Re-running the same (ε, L) appends new replicas to susceptibility_data.csv
 
 Usage:
     python susceptibility_runner.py --epsilon -1.76 --L 64 --cpus 16 \\
-        --results-base susceptibility_results/exact_2026-07-02
+        --results-base susceptibility/results/exact_2026-07-02
 """
 
 from __future__ import annotations
@@ -202,6 +202,14 @@ def append_to_csv(csv_path: str, rows: list[dict]) -> None:
         writer.writerows(all_rows)
 
 
+def _load_timeseries_csv(path: str) -> list[dict]:
+    """Read m_timeseries CSV; return list of row dicts."""
+    if not os.path.isfile(path):
+        return []
+    with open(path, newline="") as f:
+        return list(csv.DictReader(f))
+
+
 def run_replica(args: tuple) -> dict:
     (
         replica_id,
@@ -229,6 +237,12 @@ def run_replica(args: tuple) -> dict:
     base_fraction = run_settings.get("initial_fraction", 0.5)
     initial_fraction = replica_fraction(base_fraction, run_id)
 
+    # Resume-mode: per-task resume info injected by main() into run_settings.
+    resume_dir: str | None = run_settings.get("resume_dir")
+    resume_id: int | None = run_settings.get("resume_id")
+    prior_prod_time: float = float(run_settings.get("prior_prod_time", 0.0))
+    prior_wall_time: float = float(run_settings.get("prior_wall_time", 0.0))
+
     inert_fugacity = np.exp(beta * (mu + delta_f))
     bonding_fugacity = np.exp(beta * mu)
 
@@ -243,27 +257,36 @@ def run_replica(args: tuple) -> dict:
     )
 
     boundary = Periodic()
-    state = build_initial_state(Lx, Ly, initial_fraction, seed)
-
     scratch_dir = os.path.join(outdir, f"_scratch_{replica_id}")
 
-    print(
-        f"[susceptibility_runner] replica={replica_id} run_id={run_id} "
-        f"initial_fraction={initial_fraction}",
-        flush=True,
-    )
-    simulate(state, boundary, chain, [], [Time(eq_time)], seed, scratch_dir)
-    state = load.final_state(scratch_dir)
-    print(f"[susceptibility_runner] replica={replica_id} equilibration done", flush=True)
+    if resume_dir is not None and resume_id is not None:
+        # Resume mode: load prior lattice, skip equilibration.
+        lattice_path = os.path.join(resume_dir, f"final_lattice_{resume_id}.npy")
+        prior_ts_path = os.path.join(resume_dir, f"m_timeseries_{resume_id}.csv")
+        state = np.load(lattice_path)
+        prior_chunks = _load_timeseries_csv(prior_ts_path)
+        print(
+            f"[susceptibility_runner] replica={replica_id} run_id={run_id} "
+            f"RESUME from id={resume_id} ({len(prior_chunks)} prior chunks)",
+            flush=True,
+        )
+        eq_time = 0.0
+    else:
+        state = build_initial_state(Lx, Ly, initial_fraction, seed)
+        prior_chunks = []
+        print(
+            f"[susceptibility_runner] replica={replica_id} run_id={run_id} "
+            f"initial_fraction={initial_fraction}",
+            flush=True,
+        )
+        simulate(state, boundary, chain, [], [Time(eq_time)], seed, scratch_dir)
+        state = load.final_state(scratch_dir)
+        print(f"[susceptibility_runner] replica={replica_id} equilibration done", flush=True)
 
     chunk_time = prod_time / n_chunks
-    chunk_records: list[dict] = []
-    rho_B_samples: list[float] = []
-    rho_I_samples: list[float] = []
-    rho_E_samples: list[float] = []
-    m_samples: list[float] = []
-    e_samples: list[float] = []
+    new_chunk_records: list[dict] = []
     cumulative_time = 0.0
+    chunk_offset = len(prior_chunks)  # so new chunk indices continue from prior
 
     for chunk_idx in range(n_chunks):
         chunk_seed = seed + 1 + chunk_idx
@@ -275,13 +298,8 @@ def run_replica(args: tuple) -> dict:
         m_t = rho_B - rho_I - rho_E
         e_t = compute_energy(state, beta, epsilon, mu, delta_f)
 
-        rho_B_samples.append(rho_B)
-        rho_I_samples.append(rho_I)
-        rho_E_samples.append(rho_E)
-        m_samples.append(m_t)
-        e_samples.append(e_t)
-        chunk_records.append({
-            "chunk": chunk_idx,
+        new_chunk_records.append({
+            "chunk": chunk_offset + chunk_idx,
             "rho_bonding": rho_B,
             "rho_inert": rho_I,
             "rho_empty": rho_E,
@@ -294,7 +312,11 @@ def run_replica(args: tuple) -> dict:
             flush=True,
         )
 
-    m_arr = np.asarray(m_samples, dtype=float)
+    # Combine prior + new for statistics and saved timeseries.
+    all_chunks = prior_chunks + new_chunk_records
+    m_arr = np.asarray([float(c["m"]) for c in all_chunks], dtype=float)
+    e_arr = np.asarray([float(c["energy"]) for c in all_chunks], dtype=float)
+
     abs_m_arr = np.abs(m_arr)
     m2_arr = m_arr ** 2
     m4_arr = m_arr ** 4
@@ -309,7 +331,6 @@ def run_replica(args: tuple) -> dict:
     chi = compute_chi(m2_mean, abs_m_mean, n_sites, beta)
     chi_err = compute_chi_err(abs_m_mean, abs_m_mean_err, m2_mean_err, n_sites, beta)
 
-    e_arr = np.asarray(e_samples, dtype=float)
     e2_arr = e_arr ** 2
     e_mean = float(np.mean(e_arr))
     e2_mean = float(np.mean(e2_arr))
@@ -319,11 +340,15 @@ def run_replica(args: tuple) -> dict:
     np.save(os.path.join(outdir, f"final_lattice_{run_id}.npy"), state)
     shutil.rmtree(scratch_dir, ignore_errors=True)
 
+    # Save combined timeseries (full history: prior + new chunks).
     ts_csv = os.path.join(outdir, f"m_timeseries_{run_id}.csv")
-    save_timeseries_csv(ts_csv, chunk_records)
+    save_timeseries_csv(ts_csv, all_chunks)
 
     ts_png = os.path.join(outdir, f"m_timeseries_{run_id}.png")
-    save_timeseries_plot(ts_png, chunk_records, run_id, epsilon, Lx)
+    save_timeseries_plot(ts_png, all_chunks, run_id, epsilon, Lx)
+
+    total_prod_time = prior_prod_time + prod_time
+    total_wall_time = prior_wall_time + cumulative_time
 
     return {
         "id": run_id,
@@ -352,11 +377,12 @@ def run_replica(args: tuple) -> dict:
         "e2_mean_err": e2_mean_err,
         "beta": beta,
         "eq_time": eq_time,
-        "prod_time": prod_time,
-        "prod_chunks": n_chunks,
+        "prod_time": total_prod_time,
+        "prod_chunks": len(all_chunks),
         "initial_fraction": initial_fraction,
         "seed": seed,
-        "time": cumulative_time,
+        "time": total_wall_time,
+        "resume_id": "" if resume_id is None else str(resume_id),
     }
 
 
@@ -413,7 +439,19 @@ def main() -> None:
     parser.add_argument(
         "--outdir",
         default=None,
-        help="Output directory (default: {results_base}/susceptibility_{L}x{L}_.../)",
+        help="Output directory (default: SUSC_RUNS/_{Lx}_{Ly}_S{n}_.../_eps/)",
+    )
+    parser.add_argument(
+        "--resume-dir",
+        default=None,
+        help="Directory with final_lattice_*.npy and m_timeseries_*.csv to resume from",
+    )
+    parser.add_argument(
+        "--resume-ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Replica IDs to resume from (one per CPU slot; auto-detected from CSV if omitted)",
     )
     args = parser.parse_args()
 
@@ -448,6 +486,42 @@ def main() -> None:
     outdir = args.outdir or susceptibility_prod_dir(params, base=args.results_base)
     os.makedirs(outdir, exist_ok=True)
 
+    # Resolve resume IDs: auto-detect the latest-generation replicas from the CSV.
+    resume_ids: list[int] | None = None
+    prior_stats: dict[int, dict] = {}  # resume_id → {prior_prod_time, prior_wall_time}
+    if args.resume_dir is not None:
+        resume_dir_resolved = args.resume_dir
+        prior_csv = os.path.join(resume_dir_resolved, SUSCEPTIBILITY_DATA_CSV)
+        prior_rows = read_susceptibility_csv(prior_csv)
+        if not prior_rows:
+            raise SystemExit(f"No data found in {prior_csv} for resume")
+        if args.resume_ids is not None:
+            resume_ids = args.resume_ids
+        else:
+            # Take the replicas with the highest prod_time (latest generation).
+            max_pt = max(float(r.get("prod_time", 0) or 0) for r in prior_rows)
+            latest = [r for r in prior_rows
+                      if abs(float(r.get("prod_time", 0) or 0) - max_pt) < 1.0]
+            latest.sort(key=lambda r: int(r.get("id", 0) or 0))
+            resume_ids = [int(r["id"]) for r in latest]
+        assert resume_ids is not None  # set by either branch above
+        for r in prior_rows:
+            rid = int(r.get("id", -1) or -1)
+            if rid in resume_ids:
+                prior_stats[rid] = {
+                    "prior_prod_time": float(r.get("prod_time", 0) or 0),
+                    "prior_wall_time": float(r.get("time", 0) or 0),
+                }
+        # When resuming, ignore --cpus and use the count of resume_ids.
+        num_parallel_runs = len(resume_ids)
+        run_settings = dict(run_settings)
+        run_settings["num_parallel_runs"] = num_parallel_runs
+        print(
+            f"[susceptibility_runner] RESUME mode: {num_parallel_runs} replicas from "
+            f"{resume_dir_resolved}, ids={resume_ids}",
+            flush=True,
+        )
+
     print(
         f"[susceptibility_runner] START "
         f"eps={args.epsilon} L={args.L} mu={mu} "
@@ -467,10 +541,19 @@ def main() -> None:
         )
 
         tasks = []
-        for replica_id in range(num_parallel_runs):
-            run_id = next_id + replica_id
+        for slot_idx in range(num_parallel_runs):
+            run_id = next_id + slot_idx
             seed = seed_base + run_id * 2
-            tasks.append((replica_id, run_id, seed, params, run_settings, outdir))
+            task_settings = dict(run_settings)
+            if resume_ids is not None:
+                rid = resume_ids[slot_idx]
+                stats = prior_stats.get(rid, {})
+                task_settings["resume_dir"] = args.resume_dir
+                task_settings["resume_id"] = rid
+                task_settings["prior_prod_time"] = stats.get("prior_prod_time", 0.0)
+                task_settings["prior_wall_time"] = stats.get("prior_wall_time", 0.0)
+                task_settings["eq_time"] = 0.0  # skip equilibration on resume
+            tasks.append((slot_idx, run_id, seed, params, task_settings, outdir))
 
         with mp.Pool(processes=num_parallel_runs) as pool:
             results = pool.map(run_replica, tasks)

@@ -40,8 +40,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Force finalize susceptibility coex combos at argmin(psi)",
     )
-    parser.add_argument("--manage", default="susceptibility_manage.csv")
-    parser.add_argument("--results", default="susceptibility_results/coex")
+    parser.add_argument("--manage", default="susceptibility/manage.csv")
+    parser.add_argument("--results", default="susceptibility/results/coex")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--force",

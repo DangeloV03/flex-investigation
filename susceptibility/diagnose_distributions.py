@@ -18,9 +18,9 @@ Energy recovery matches plot_susceptibility.py exactly:
 
 Usage:
     python diagnose_distributions.py
-    python diagnose_distributions.py --results susceptibility_results --epsilon -1.73
+    python diagnose_distributions.py --results susceptibility/results --epsilon -1.73
     python diagnose_distributions.py --list           # show available ε and L
-    python diagnose_distributions.py --results susceptibility_results/exact_2026-07-02 \\
+    python diagnose_distributions.py --results susceptibility/results/exact_2026-07-02 \\
         --epsilons -1.4 -1.76 -1.9 --outdir plots/diagnostics/exact
 """
 
@@ -454,7 +454,7 @@ def _scaling_plot(smry: pd.DataFrame, eps: float, outdir: str) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Pooled P(m)/P(E_int) diagnostic for first-order vs continuous")
-    p.add_argument("--results", default="susceptibility_results")
+    p.add_argument("--results", default="susceptibility/results")
     p.add_argument("--epsilon", type=float, default=-1.73, help="target ε (snapped to nearest available)")
     p.add_argument(
         "--epsilons", type=float, nargs="+", default=None,
