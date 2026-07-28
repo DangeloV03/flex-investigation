@@ -5,7 +5,7 @@ Builds mentor plots from coex/coex_eq/ly*/ + criticality/eq_ly*/:
 
   1. beta * mu_coex(epsilon_c) vs L
   2. beta * epsilon_c vs L
-  3. FSS: beta * epsilon_c vs 1/L (log-scaled x-axis; linear fit → L→∞)
+  3. FSS: beta * epsilon_c vs 1/L (linear fit → L→∞)
 
 ε_c per L is the discrete grid point whose BC is closest to 5/9 (see
 bimodality.locate_epsilon_c).
@@ -277,8 +277,8 @@ def _weighted_linear_fit(
 def fit_fss(df: pd.DataFrame) -> dict:
     """Finite-size scaling fit: βε_c = a + b/L; a = βε_c(∞).
 
-    Visualization uses x = 1/L with a log-scaled axis (tick spacing), not
-    transformed data values log(1/L). Points are weighted by
+    Plot abscissa is 1/L on a linear axis so the fit appears as a straight
+    line whose y-intercept is the thermodynamic limit. Points are weighted by
     epsilon_c_uncertainty (grid spacing) when present.
     """
     L = df["L_short"].to_numpy(float)
@@ -306,7 +306,7 @@ def plot_fss_invL(
     fit: dict,
     out_png: str,
 ) -> str:
-    """βε_c vs 1/L with log-scaled x-axis; linear fit → βε_c(∞)."""
+    """βε_c vs 1/L (linear axis) with linear fit; intercept = βε_c(∞)."""
     L = df["L_short"].to_numpy(float)
     x = 1.0 / L
     y = df["beta_epsilon_c"].to_numpy(float)
@@ -323,19 +323,19 @@ def plot_fss_invL(
         ax.annotate(f"L={int(Li)}", (xi, yi), textcoords="offset points",
                     xytext=(6, 4), fontsize=8)
 
-    # Fit is linear in 1/L; draw over a positive range (log axis cannot show 0).
-    xx = np.geomspace(float(x.min()) * 0.7, float(x.max()) * 1.2, 200)
+    xx = np.linspace(0.0, float(x.max()) * 1.15, 200)
     yy = fit["invL_slope"] * xx + fit["beta_eps_c_infty"]
     ax.plot(xx, yy, "-", color="#C44E52", lw=1.5,
             label=(rf"$\beta\varepsilon_c(\infty)="
                    rf"{fit['beta_eps_c_infty']:.4f}"
                    rf"\pm{fit['beta_eps_c_infty_err']:.4f}$"))
+    ax.axvline(0.0, ls=":", c="grey", lw=1)
+    ax.plot(0.0, fit["beta_eps_c_infty"], "s", color="#C44E52", markersize=7)
 
-    ax.set_xscale("log")
-    ax.set_xlabel(r"$1/L$  (short axis $L$, log scale)")
+    ax.set_xlabel(r"$1/L$  (short axis $L$)")
     ax.set_ylabel(r"$\beta\varepsilon_c$")
-    ax.set_title(r"FSS: $\beta\varepsilon_c$ vs $1/L$ (log $x$) $\rightarrow$ $L\to\infty$")
-    ax.grid(True, which="both", alpha=0.3)
+    ax.set_title(r"FSS: $\beta\varepsilon_c$ vs $1/L$ $\rightarrow$ $L\to\infty$")
+    ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8)
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
