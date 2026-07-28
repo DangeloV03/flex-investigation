@@ -29,7 +29,7 @@ shift 2
 if [[ $# -gt 0 ]]; then
     SIZES=("$@")
 else
-    SIZES=(16 32 48 64 96 128 256)
+    SIZES=(16 32 48 64 96 128)
 fi
 
 N=${SLURM_CPUS_PER_TASK:-2}

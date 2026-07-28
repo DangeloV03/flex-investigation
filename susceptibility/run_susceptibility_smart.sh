@@ -68,7 +68,7 @@ else
     LAUNCH=(python -u)
 fi
 
-SIZES=(16 32 48 64 96 128 256)
+SIZES=(16 32 48 64 96 128)
 
 for SIZE in "${SIZES[@]}"; do
     echo "=== epsilon=${EPS} L=${SIZE} (cpus=${N}, batches=${NUM_BATCHES}) ==="
