@@ -94,7 +94,6 @@ def test_collect_and_plot_eq_scaling(tmp_path):
 
     fit = pls.fit_fss(df)
     assert np.isfinite(fit["beta_eps_c_infty"])
-    assert np.isfinite(fit["log_intercept_L1"])
     # with increasing eps_c (less negative) as L grows, 1/L intercept should be finite
     assert fit["beta_eps_c_infty"] > df["beta_epsilon_c"].max() - 0.5
 
@@ -109,9 +108,7 @@ def test_collect_and_plot_eq_scaling(tmp_path):
         df, y_col="beta_epsilon_c", yerr_col="epsilon_c_uncertainty",
         ylabel="y", title="t", out_png=png_eps,
     )
-    pls.plot_fss_log(df, fit, str(out / "beta_eps_c_vs_log_invL.png"))
     pls.plot_fss_invL(df, fit, str(out / "beta_eps_c_vs_invL.png"))
     assert os.path.isfile(png_mu)
     assert os.path.isfile(png_eps)
-    assert os.path.isfile(str(out / "beta_eps_c_vs_log_invL.png"))
     assert os.path.isfile(str(out / "beta_eps_c_vs_invL.png"))

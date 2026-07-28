@@ -5,7 +5,7 @@ Builds mentor plots from coex/coex_eq/ly*/ + criticality/eq_ly*/:
 
   1. beta * mu_coex(epsilon_c) vs L
   2. beta * epsilon_c vs L
-  3. FSS: beta * epsilon_c vs log(1/L)  (and vs 1/L for L→∞ intercept)
+  3. FSS: beta * epsilon_c vs 1/L (log-scaled x-axis; linear fit → L→∞)
 
 ε_c per L is the discrete grid point whose BC is closest to 5/9 (see
 bimodality.locate_epsilon_c).
@@ -275,13 +275,11 @@ def _weighted_linear_fit(
 
 
 def fit_fss(df: pd.DataFrame) -> dict:
-    """Finite-size scaling fits for βε_c(L).
+    """Finite-size scaling fit: βε_c = a + b/L; a = βε_c(∞).
 
-    Requested visualization: βε_c vs log(1/L). Note that the y-intercept of that
-    plot is the linear-model value at L=1 (log(1/L)=0), not L→∞.
-
-    Thermodynamic-limit estimate: linear fit βε_c = a + b/L; intercept a = βε_c(∞).
-    Points are weighted by epsilon_c_uncertainty (grid spacing) when present.
+    Visualization uses x = 1/L with a log-scaled axis (tick spacing), not
+    transformed data values log(1/L). Points are weighted by
+    epsilon_c_uncertainty (grid spacing) when present.
     """
     L = df["L_short"].to_numpy(float)
     y = df["beta_epsilon_c"].to_numpy(float)
@@ -291,17 +289,10 @@ def fit_fss(df: pd.DataFrame) -> dict:
         if np.any(np.isfinite(err) & (err > 0)):
             yerr = err
 
-    x_log = np.log(1.0 / L)
     x_inv = 1.0 / L
-
-    s_log, i_log, se_log, ie_log = _weighted_linear_fit(x_log, y, yerr)
     s_inv, i_inv, se_inv, ie_inv = _weighted_linear_fit(x_inv, y, yerr)
 
     return {
-        "log_slope": s_log,
-        "log_intercept_L1": i_log,
-        "log_slope_err": se_log,
-        "log_intercept_L1_err": ie_log,
         "invL_slope": s_inv,
         "beta_eps_c_infty": i_inv,
         "invL_slope_err": se_inv,
@@ -310,55 +301,12 @@ def fit_fss(df: pd.DataFrame) -> dict:
     }
 
 
-def plot_fss_log(
-    df: pd.DataFrame,
-    fit: dict,
-    out_png: str,
-) -> str:
-    """βε_c vs log(1/L) with linear fit (y-intercept = model at L=1)."""
-    L = df["L_short"].to_numpy(float)
-    x = np.log(1.0 / L)
-    y = df["beta_epsilon_c"].to_numpy(float)
-    yerr = None
-    if "epsilon_c_uncertainty" in df.columns:
-        err = pd.to_numeric(df["epsilon_c_uncertainty"], errors="coerce")
-        if err.notna().any():
-            yerr = err.to_numpy(float)
-
-    fig, ax = plt.subplots(figsize=(6.2, 4.4))
-    ax.errorbar(x, y, yerr=yerr, fmt="o", color="#2F4A7A", markersize=8,
-                capsize=3, label="data")
-    for xi, Li, yi in zip(x, L, y):
-        ax.annotate(f"L={int(Li)}", (xi, yi), textcoords="offset points",
-                    xytext=(6, 4), fontsize=8)
-
-    xx = np.linspace(float(x.min()) - 0.15, 0.05, 200)  # extend toward y-intercept
-    yy = fit["log_slope"] * xx + fit["log_intercept_L1"]
-    ax.plot(xx, yy, "-", color="#C44E52", lw=1.5,
-            label=(rf"fit: intercept$(L{chr(61)}1)$="
-                   rf"${fit['log_intercept_L1']:.4f}$"))
-    ax.axvline(0.0, ls=":", c="grey", lw=1)
-    ax.plot(0.0, fit["log_intercept_L1"], "s", color="#C44E52", markersize=7)
-
-    ax.set_xlabel(r"$\log(1/L)$  (short axis $L$)")
-    ax.set_ylabel(r"$\beta\varepsilon_c$")
-    ax.set_title(r"FSS: $\beta\varepsilon_c$ vs $\log(1/L)$")
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
-    fig.tight_layout()
-    os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
-    fig.savefig(out_png, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"[eq-L] wrote {out_png}", flush=True)
-    return out_png
-
-
 def plot_fss_invL(
     df: pd.DataFrame,
     fit: dict,
     out_png: str,
 ) -> str:
-    """βε_c vs 1/L with linear fit; y-intercept = βε_c(L→∞)."""
+    """βε_c vs 1/L with log-scaled x-axis; linear fit → βε_c(∞)."""
     L = df["L_short"].to_numpy(float)
     x = 1.0 / L
     y = df["beta_epsilon_c"].to_numpy(float)
@@ -375,19 +323,19 @@ def plot_fss_invL(
         ax.annotate(f"L={int(Li)}", (xi, yi), textcoords="offset points",
                     xytext=(6, 4), fontsize=8)
 
-    xx = np.linspace(0.0, float(x.max()) * 1.15, 200)
+    # Fit is linear in 1/L; draw over a positive range (log axis cannot show 0).
+    xx = np.geomspace(float(x.min()) * 0.7, float(x.max()) * 1.2, 200)
     yy = fit["invL_slope"] * xx + fit["beta_eps_c_infty"]
     ax.plot(xx, yy, "-", color="#C44E52", lw=1.5,
             label=(rf"$\beta\varepsilon_c(\infty)="
                    rf"{fit['beta_eps_c_infty']:.4f}"
                    rf"\pm{fit['beta_eps_c_infty_err']:.4f}$"))
-    ax.axvline(0.0, ls=":", c="grey", lw=1)
-    ax.plot(0.0, fit["beta_eps_c_infty"], "s", color="#C44E52", markersize=7)
 
-    ax.set_xlabel(r"$1/L$  (short axis $L$)")
+    ax.set_xscale("log")
+    ax.set_xlabel(r"$1/L$  (short axis $L$, log scale)")
     ax.set_ylabel(r"$\beta\varepsilon_c$")
-    ax.set_title(r"FSS: $\beta\varepsilon_c$ vs $1/L$ $\rightarrow$ $L\to\infty$")
-    ax.grid(True, alpha=0.3)
+    ax.set_title(r"FSS: $\beta\varepsilon_c$ vs $1/L$ (log $x$) $\rightarrow$ $L\to\infty$")
+    ax.grid(True, which="both", alpha=0.3)
     ax.legend(fontsize=8)
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
@@ -439,17 +387,11 @@ def main() -> None:
     pd.DataFrame([fit]).to_csv(fit_path, index=False)
     print(f"[eq-L] wrote {fit_path}", flush=True)
     print(
-        f"[eq-L] FSS log(1/L) intercept (L=1 model) = "
-        f"{fit['log_intercept_L1']:.6f} +/- {fit['log_intercept_L1_err']:.6f}",
-        flush=True,
-    )
-    print(
         f"[eq-L] FSS 1/L intercept (L→∞) βε_c(∞) = "
         f"{fit['beta_eps_c_infty']:.6f} +/- {fit['beta_eps_c_infty_err']:.6f}",
         flush=True,
     )
 
-    plot_fss_log(df, fit, str(out_dir / "beta_eps_c_vs_log_invL.png"))
     plot_fss_invL(df, fit, str(out_dir / "beta_eps_c_vs_invL.png"))
 
 
