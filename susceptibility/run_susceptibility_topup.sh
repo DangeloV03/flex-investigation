@@ -3,7 +3,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem-per-cpu=512M
-#SBATCH --time=04:00:00
+#SBATCH --time=23:59:59
 #SBATCH --output=slurm_reports/%x_%j.out
 #SBATCH --error=slurm_reports/%x_%j.err
 #
@@ -34,8 +34,8 @@ fi
 
 N=${SLURM_CPUS_PER_TASK:-2}
 
-TOPUP_PROD_TIME=100000.0
-TOPUP_PROD_CHUNKS=1000
+TOPUP_PROD_TIME=1000000.0
+TOPUP_PROD_CHUNKS=10000
 SEED_BASE=7000
 
 if command -v module >/dev/null 2>&1; then
