@@ -21,7 +21,6 @@ import pandas as pd  # noqa: E402
 
 BC_UNIMODAL = 1.0 / 3.0
 BC_BIMODAL_CUTOFF = 5.0 / 9.0
-BC_CRIT_TARGET = 0.4570
 
 
 def plot_bc_vs_epsilon(
@@ -35,8 +34,7 @@ def plot_bc_vs_epsilon(
     title: str | None = None,
 ) -> str:
     """Max BC vs the sweep axis (beta*epsilon by default), one line per system
-    size, with the 1/3, 0.4570, and 5/9 reference lines and an optional
-    criticality marker.
+    size, with the 1/3 and 5/9 reference lines and an optional criticality marker.
 
     Pass delta_mu to restrict to a single Delta mu (Figure 2: sizes at fixed dmu).
     Pass crit_row (from locate_epsilon_c) to shade the transition bracket.
@@ -58,19 +56,10 @@ def plot_bc_vs_epsilon(
                     label=f"{int(L_long)}x{L_short}")
     _draw_transition_bracket(ax, crit_row, x_col=x_col)
     ax.axhline(BC_UNIMODAL, ls=":", c="grey", lw=1, label="1/3 (Gaussian)")
-    ax.axhline(BC_CRIT_TARGET, ls="--", c="#2CA02C", lw=1.2,
-               label=f"BC={BC_CRIT_TARGET:.4f}")
-    ax.axhline(BC_BIMODAL_CUTOFF, ls="--", c="#1F77B4", lw=1.2,
-               label=f"5/9≈{BC_BIMODAL_CUTOFF:.4f}")
+    ax.axhline(BC_BIMODAL_CUTOFF, ls="--", c="grey", lw=1, label="5/9 (cutoff)")
     if crit is not None and np.isfinite(crit):
-        tgt = BC_CRIT_TARGET
-        if crit_row and crit_row.get("BC_target") is not None:
-            try:
-                tgt = float(crit_row["BC_target"])
-            except (TypeError, ValueError):
-                pass
         ax.axvline(crit, ls="-", c="crimson", lw=1.2,
-                   label=rf"$\varepsilon_c$ (BC$\approx {tgt:.4f}$)={crit:.3f}")
+                   label=rf"$\varepsilon_c$ (BC fit$\cap 5/9$)={crit:.3f}")
     ax.set_xlabel(xlabel)
     ax.set_ylabel("max Sarle's BC")
     ax.set_title(title or r"Max bimodality coefficient of $P(\phi_{col})$")
@@ -145,9 +134,7 @@ def _plot_bc_curves_on_ax(
         ax.errorbar(sub[x_col], sub["BC"], yerr=yerr, fmt="o-", ms=4, capsize=3,
                     capthick=1.2, elinewidth=1.2, label=label, zorder=3)
     ax.axhline(BC_UNIMODAL, ls=":", c="grey", lw=1)
-    ax.axhline(BC_CRIT_TARGET, ls="--", c="#2CA02C", lw=1.2, label=f"BC={BC_CRIT_TARGET:.4f}")
-    ax.axhline(BC_BIMODAL_CUTOFF, ls="--", c="#1F77B4", lw=1.2,
-               label=f"5/9≈{BC_BIMODAL_CUTOFF:.4f}")
+    ax.axhline(BC_BIMODAL_CUTOFF, ls="--", c="grey", lw=1)
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Max Bimodality Coefficient")
     if legend:

@@ -7,15 +7,14 @@ Builds mentor plots from coex/coex_eq/ly*/ + criticality/eq_ly*/:
   2. beta * epsilon_c vs L
   3. FSS: beta * epsilon_c vs 1/L (linear fit → L→∞)
 
-ε_c per L is the discrete grid point whose BC is closest to 0.4570 by default
-(see bimodality.locate_epsilon_c). Use --compare-bc-targets to overlay FSS for
-0.4570 and 5/9 in different colors vs the known ε_c≈−1.76 benchmark.
+ε_c per L is from a linear fit of BC vs βε intersecting BC=5/9
+(see bimodality.locate_epsilon_c).
 
 Usage (repo root, after coex is analyzed and criticality CSVs exist):
 
     python -u criticality/plot_eq_L_scaling.py
-    python -u criticality/plot_eq_L_scaling.py --lys 16 20 40 \\
-        --out-dir criticality/eq_multi_L --compare-bc-targets
+    python -u criticality/plot_eq_L_scaling.py --lys 16 20 40 \
+        --out-dir criticality/eq_multi_L
 
 If criticality/eq_ly*/criticality.csv is missing, run first:
 
@@ -40,12 +39,6 @@ import pandas as pd  # noqa: E402
 DEFAULT_LYS = (16, 20, 40)
 DEFAULT_OUT = "criticality/eq_multi_L"
 DEFAULT_COEX_ROOT = "coex/coex_eq"
-# Literature / project working value for the Ising-limit critical drive.
-KNOWN_EPSILON_C = -1.76
-# Colors for BC-target comparison overlays.
-COLOR_BC_04570 = "#2CA02C"   # green: new benchmark 0.4570
-COLOR_BC_5_9 = "#1F77B4"     # blue: classic 5/9
-
 
 def _finite(x) -> bool:
     try:
@@ -206,71 +199,6 @@ def collect_scaling_table(
         raise SystemExit(
             "No L rows collected. Need analyzed manage.csv + criticality/eq_ly*/criticality.csv."
         )
-    return pd.DataFrame(out_rows).sort_values("L_short").reset_index(drop=True)
-
-
-def load_bc_csv_rows(bc_csv: str) -> list[dict]:
-    with open(bc_csv, newline="") as f:
-        return list(csv.DictReader(f))
-
-
-def collect_scaling_for_bc_target(
-    lys: list[int],
-    bc_target: float,
-    *,
-    coex_root: str = DEFAULT_COEX_ROOT,
-    crit_root: str = "criticality",
-) -> pd.DataFrame:
-    """Rebuild ε_c(L) from bc_vs_beta_epsilon.csv using a BC target (no resweep)."""
-    import bimodality as bm
-
-    out_rows = []
-    for ly in lys:
-        manage = os.path.join(coex_root, f"ly{ly}", "manage.csv")
-        bc_csv = os.path.join(crit_root, f"eq_ly{ly}", "bc_vs_beta_epsilon.csv")
-        if not os.path.isfile(bc_csv):
-            print(f"[skip] missing {bc_csv}", flush=True)
-            continue
-        rows = load_bc_csv_rows(bc_csv)
-        if len(rows) < 3:
-            print(f"[skip] Ly={ly}: <3 BC rows in {bc_csv}", flush=True)
-            continue
-        L_long = int(float(rows[0]["L_long"]))
-        crit = bm.locate_epsilon_c(
-            rows, L_long, x_col="beta_epsilon", bc_target=bc_target,
-        )
-        eps_c = float(crit["epsilon_c_estimate"])
-        beta = float(crit["beta"]) if _finite(crit.get("beta")) else 1.0
-        L_short = int(float(crit["L_short"]))
-
-        mu_c, mu_err = None, None
-        if os.path.isfile(manage):
-            curve = load_manage_mu_curve(manage)
-            if not curve.empty:
-                mu_c, mu_err = interpolate_mu_at_eps(curve, eps_c)
-
-        out_rows.append({
-            "L_short": L_short,
-            "L_long": L_long,
-            "beta": beta,
-            "epsilon_c": eps_c,
-            "beta_epsilon_c": beta * eps_c,
-            "epsilon_c_uncertainty": crit.get("recommended_uncertainty"),
-            "mu_coex_at_eps_c": mu_c,
-            "beta_mu_coex_at_eps_c": (beta * mu_c) if mu_c is not None else None,
-            "mu_coex_uncertainty": mu_err,
-            "method": crit.get("method", ""),
-            "BC_target": float(bc_target),
-            "BC_at_criticality": crit.get("BC_at_criticality"),
-            "bc_csv": bc_csv,
-        })
-        print(
-            f"[eq-L] Ly={L_short} BC_target={bc_target:.4f}: eps_c={eps_c:.5f}  "
-            f"BC_at={crit.get('BC_at_criticality')}",
-            flush=True,
-        )
-    if not out_rows:
-        raise RuntimeError(f"no L rows for BC_target={bc_target}")
     return pd.DataFrame(out_rows).sort_values("L_short").reset_index(drop=True)
 
 
@@ -464,89 +392,6 @@ def plot_fss_invL(
     return out_png
 
 
-def plot_fss_compare_targets(
-    series: list[tuple[float, pd.DataFrame, dict, str]],
-    out_png: str,
-    *,
-    known_epsilon_c: float = KNOWN_EPSILON_C,
-) -> pd.DataFrame:
-    """Overlay FSS fits for several BC targets in different colors.
-
-    series entries: (bc_target, df, fit, color).
-    Returns a summary DataFrame ranking closeness of ε_c(∞) to known_epsilon_c.
-    """
-    fig, ax = plt.subplots(figsize=(6.8, 4.8))
-    x_max = 0.0
-    summary_rows = []
-
-    for bc_target, df, fit, color in series:
-        L = df["L_short"].to_numpy(float)
-        x = 1.0 / L
-        y = df["beta_epsilon_c"].to_numpy(float)
-        yerr = None
-        if "epsilon_c_uncertainty" in df.columns:
-            err = pd.to_numeric(df["epsilon_c_uncertainty"], errors="coerce")
-            if err.notna().any():
-                yerr = err.to_numpy(float)
-        x_max = max(x_max, float(x.max()))
-
-        label_pts = f"BC={bc_target:.4f} data"
-        ax.errorbar(x, y, yerr=yerr, fmt="o", color=color, markersize=8,
-                    capsize=3, label=label_pts)
-        for xi, Li, yi in zip(x, L, y):
-            ax.annotate(f"L={int(Li)}", (xi, yi), textcoords="offset points",
-                        xytext=(5, 3), fontsize=7, color=color)
-
-        xx = np.linspace(0.0, float(x.max()) * 1.15, 200)
-        yy = fit["invL_slope"] * xx + fit["beta_eps_c_infty"]
-        eps_inf = fit["beta_eps_c_infty"]  # beta≈1 → same as epsilon_c(∞)
-        abs_err = abs(eps_inf - known_epsilon_c)
-        ax.plot(
-            xx, yy, "-", color=color, lw=1.6,
-            label=(
-                rf"BC={bc_target:.4f}: $\varepsilon_c(\infty)="
-                rf"{eps_inf:.4f}\pm{fit['beta_eps_c_infty_err']:.4f}$"
-                rf" ($|\Delta|={abs_err:.4f}$)"
-            ),
-        )
-        ax.plot(0.0, eps_inf, "s", color=color, markersize=7)
-        summary_rows.append({
-            "BC_target": bc_target,
-            "beta_eps_c_infty": eps_inf,
-            "beta_eps_c_infty_err": fit["beta_eps_c_infty_err"],
-            "known_epsilon_c": known_epsilon_c,
-            "abs_err_vs_known": abs_err,
-            "L_fit": fit.get("L_fit", ""),
-            "n_L": fit.get("n_L", len(L)),
-            "color": color,
-        })
-
-    ax.axhline(known_epsilon_c, ls="--", c="black", lw=1.0,
-               label=rf"known $\varepsilon_c={known_epsilon_c}$")
-    ax.axvline(0.0, ls=":", c="grey", lw=1, label=r"$1/L=0$")
-    ax.set_xlabel(r"$1/L$  (short axis $L$)")
-    ax.set_ylabel(r"$\beta\varepsilon_c$")
-    ax.set_title(r"FSS BC-target comparison: $\beta\varepsilon_c$ vs $1/L$")
-    ax.set_xlim(left=-0.005, right=x_max * 1.2)
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=7, loc="best")
-    fig.tight_layout()
-    os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
-    fig.savefig(out_png, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"[eq-L] wrote {out_png}", flush=True)
-
-    summary = pd.DataFrame(summary_rows).sort_values("abs_err_vs_known")
-    best = summary.iloc[0]
-    print(
-        f"[eq-L] closer to {known_epsilon_c}: BC_target={best['BC_target']:.4f} "
-        f"(ε_c(∞)={best['beta_eps_c_infty']:.6f}, "
-        f"|Δ|={best['abs_err_vs_known']:.6f})",
-        flush=True,
-    )
-    return summary
-
-
 def main() -> None:
     p = argparse.ArgumentParser(
         description="Plot βμ_coex(ε_c), βε_c vs L, and FSS extrapolation",
@@ -563,56 +408,10 @@ def main() -> None:
         "--loo", action="store_true",
         help="Write leave-one-out FSS table (eq_fss_loo.csv) for every L.",
     )
-    p.add_argument(
-        "--compare-bc-targets", action="store_true",
-        help="Overlay FSS for BC targets 0.4570 (green) and 5/9 (blue); "
-             "rank which ε_c(∞) is closer to known −1.76.",
-    )
-    p.add_argument(
-        "--known-epsilon-c", type=float, default=KNOWN_EPSILON_C,
-        help="Benchmark ε_c used to score BC targets (default −1.76).",
-    )
     args = p.parse_args()
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    if args.compare_bc_targets:
-        import bimodality as bm
-
-        targets = [
-            (bm.BC_CRIT_TARGET, COLOR_BC_04570),
-            (bm.BC_CRIT_TARGET_COMPARE, COLOR_BC_5_9),
-        ]
-        series = []
-        all_rows = []
-        for tgt, color in targets:
-            df_t = collect_scaling_for_bc_target(
-                args.lys, tgt,
-                coex_root=args.coex_root, crit_root=args.crit_root,
-            )
-            leave = set(int(v) for v in (args.leave_out or []))
-            df_fit_t = df_t[~df_t["L_short"].isin(leave)].reset_index(drop=True)
-            fit_t = fit_fss(df_fit_t)
-            series.append((tgt, df_fit_t, fit_t, color))
-            for _, row in df_fit_t.iterrows():
-                all_rows.append({**row.to_dict(), "BC_target": tgt, "color": color})
-            abs_err = abs(fit_t["beta_eps_c_infty"] - args.known_epsilon_c)
-            print(
-                f"[eq-L] BC={tgt:.4f} → ε_c(∞)={fit_t['beta_eps_c_infty']:.6f} "
-                f"|Δ known|={abs_err:.6f}",
-                flush=True,
-            )
-
-        pd.DataFrame(all_rows).to_csv(out_dir / "eq_scaling_bc_targets.csv", index=False)
-        summary = plot_fss_compare_targets(
-            series,
-            str(out_dir / "beta_eps_c_vs_invL_bc_compare.png"),
-            known_epsilon_c=args.known_epsilon_c,
-        )
-        summary.to_csv(out_dir / "eq_fss_bc_target_compare.csv", index=False)
-        print(f"[eq-L] wrote {out_dir / 'eq_fss_bc_target_compare.csv'}", flush=True)
-        return
 
     df = collect_scaling_table(
         args.lys, coex_root=args.coex_root, crit_root=args.crit_root,
@@ -635,7 +434,7 @@ def main() -> None:
         y_col="beta_epsilon_c",
         yerr_col="epsilon_c_uncertainty",
         ylabel=r"$\beta\varepsilon_c$",
-        title=r"Equilibrium coexistence: $\beta\varepsilon_c$ vs $L$ (BC$\approx 0.4570$)",
+        title=r"Equilibrium coexistence: $\beta\varepsilon_c$ vs $L$ (linear BC$\cap 5/9$)",
         out_png=str(out_dir / "beta_eps_c_vs_L.png"),
     )
 

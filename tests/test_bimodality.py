@@ -506,6 +506,29 @@ def test_transition_bracket_gradual_crossover():
     assert bracket["transition_half_width"] > 0.03
 
 
+def test_locate_epsilon_c_linear_intersect_5_9():
+    """Synthetic BC = a + b x; locator must recover the 5/9 intersection."""
+    # BC = -0.5 * x  with x in [-2,-1] => BC in [1.0, 0.5]; 5/9≈0.5556 => x= -2*(5/9)
+    level = bm.BC_BIMODAL_CUTOFF
+    xs = [-2.0, -1.8, -1.6, -1.4, -1.2, -1.0]
+    rows = []
+    for x in xs:
+        bc = -0.5 * x  # perfect line through origin-ish
+        rows.append({
+            "L_long": 60, "L_short": 10, "beta": 1.0,
+            "beta_epsilon": x, "BC": bc, "BC_err": 0.01,
+        })
+    result = bm.locate_epsilon_c(rows, 60, x_col="beta_epsilon")
+    assert result["method"] == "linear_bc_vs_x_5_9"
+    assert result["BC_target"] == pytest.approx(level)
+    assert result["BC_at_criticality"] == pytest.approx(level)
+    # polyfit of BC = -0.5 x => x_c = -2*(5/9)
+    assert result["criticality_estimate"] == pytest.approx(-2.0 * level, abs=1e-6)
+    assert np.isfinite(result["fit_uncertainty"])
+    assert result["fit_uncertainty"] == pytest.approx(0.0, abs=1e-9)
+    assert "recommended_uncertainty" in result
+
+
 def test_locate_epsilon_c_includes_transition_fields(tmp_path):
     base = str(tmp_path / "results")
     combo = {"scheme": "homo", "delta_f": 0.0, "delta_mu": 1.0, "k": 1.0,
@@ -526,26 +549,16 @@ def test_locate_epsilon_c_includes_transition_fields(tmp_path):
 
     rows = bm.sweep_bc(base, combo, str(tmp_path / "bc.csv"), str(tmp_path / "cache"))
     result = bm.locate_epsilon_c(rows, 60, x_col="beta_epsilon")
-    assert result["method"].startswith("closest_bc_")
-    assert result["BC_target"] == pytest.approx(bm.BC_CRIT_TARGET)
+    assert result["method"] == "linear_bc_vs_x_5_9"
+    assert result["BC_target"] == pytest.approx(bm.BC_BIMODAL_CUTOFF)
     assert "recommended_uncertainty" in result
     assert np.isfinite(result["recommended_uncertainty"])
-    assert result["recommended_uncertainty"] == pytest.approx(0.1)
-    assert abs(result["BC_at_criticality"] - bm.BC_CRIT_TARGET) <= abs(
-        float(min(rows, key=lambda r: abs(float(r["BC"]) - bm.BC_CRIT_TARGET))["BC"])
-        - bm.BC_CRIT_TARGET
-    ) + 1e-12
-    # discrete pick: criticality is one of the measured beta*epsilon grid points
-    xs = {float(r["beta_epsilon"]) for r in rows}
-    assert result["criticality_estimate"] in xs
-
-    # alternate target 5/9 should be selectable and can differ
-    alt = bm.locate_epsilon_c(
-        rows, 60, x_col="beta_epsilon", bc_target=bm.BC_BIMODAL_CUTOFF,
-    )
-    assert alt["BC_target"] == pytest.approx(bm.BC_BIMODAL_CUTOFF)
-    assert alt["method"] == f"closest_bc_{bm.BC_BIMODAL_CUTOFF:.4f}"
-    assert alt["criticality_estimate"] in xs
+    assert np.isfinite(result["fit_uncertainty"])
+    assert result["BC_at_criticality"] == pytest.approx(bm.BC_BIMODAL_CUTOFF)
+    # linear intersection need not land on a grid point
+    assert np.isfinite(result["criticality_estimate"])
+    xs = sorted(float(r["beta_epsilon"]) for r in rows)
+    assert min(xs) - 0.5 <= result["criticality_estimate"] <= max(xs) + 0.5
 
 
 def test_find_criticality_end_to_end(tmp_path):
