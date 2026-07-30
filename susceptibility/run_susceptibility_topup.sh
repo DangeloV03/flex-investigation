@@ -83,6 +83,7 @@ print(susc_run_dir(params, '$RESULTS_BASE'))
     SECONDS=0
     "${LAUNCH[@]}" susceptibility/susceptibility_runner.py \
         --epsilon "$EPS" --L "$SIZE" \
+        --cpus "$N" \
         --outdir "$OUTDIR" \
         --resume-dir "$OUTDIR" \
         --eq-time 0 \
