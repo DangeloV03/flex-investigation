@@ -203,11 +203,16 @@ def append_to_csv(csv_path: str, rows: list[dict]) -> None:
 
 
 def _load_timeseries_csv(path: str) -> list[dict]:
-    """Read m_timeseries CSV; return list of row dicts."""
+    """Read m_timeseries CSV; return list of row dicts with numeric types."""
     if not os.path.isfile(path):
         return []
     with open(path, newline="") as f:
-        return list(csv.DictReader(f))
+        rows = list(csv.DictReader(f))
+    for r in rows:
+        r["chunk"] = int(r["chunk"])
+        for k in ("rho_bonding", "rho_inert", "rho_empty", "m", "energy"):
+            r[k] = float(r[k])
+    return rows
 
 
 def run_replica(args: tuple) -> dict:
