@@ -148,10 +148,14 @@ def load_l_timings(results_base: str) -> pd.DataFrame:
     return df
 
 
-def _run(cmd: list[str], timeout: int = 30) -> str:
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout, check=False
-    )
+def _run(cmd: list[str], timeout: int = 8) -> str:
+    """Run a Slurm helper. Never raise: a hung sacct/seff must not kill the campaign."""
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return ""
     if result.returncode != 0:
         return ""
     return result.stdout
@@ -172,42 +176,34 @@ def _pick_sacct_row(rows: list[dict]) -> dict:
     return rows[0]
 
 
-def query_sacct(job_id: str) -> dict:
-    """Job-level elapsed / CPU / memory from sacct. Empty dict if unavailable."""
-    out = _run(
-        [
-            "sacct",
-            "-j",
-            str(job_id),
-            "--parsable2",
-            "--noheader",
-            "--noconvert",
-            "--format=JobID,JobName,State,ElapsedRaw,TotalCPU,AllocCPUS,TimelimitRaw,MaxRSS,ReqMem,ExitCode",
-        ]
-    )
-    if not out.strip():
-        return {}
-    fields = [
-        "JobID",
-        "JobName",
-        "State",
-        "ElapsedRaw",
-        "TotalCPU",
-        "AllocCPUS",
-        "TimelimitRaw",
-        "MaxRSS",
-        "ReqMem",
-        "ExitCode",
-    ]
+_SACCT_FIELDS = [
+    "JobID",
+    "JobName",
+    "State",
+    "ElapsedRaw",
+    "TotalCPU",
+    "AllocCPUS",
+    "TimelimitRaw",
+    "MaxRSS",
+    "ReqMem",
+    "ExitCode",
+]
+_SACCT_FORMAT = ",".join(_SACCT_FIELDS)
+
+
+def _parse_sacct_output(out: str) -> list[dict]:
     rows: list[dict] = []
-    for line in out.strip().splitlines():
+    for line in (out or "").strip().splitlines():
         parts = line.split("|")
         if len(parts) < 4:
             continue
-        rows.append(dict(zip(fields, parts)))
-    row = _pick_sacct_row(rows)
+        rows.append(dict(zip(_SACCT_FIELDS, parts)))
+    return rows
+
+
+def _stats_from_sacct_row(job_id: str, row: dict) -> dict:
     if not row:
-        return {}
+        return {"job_id": str(job_id)}
 
     elapsed = parse_hms(row.get("ElapsedRaw", ""))
     total_cpu = parse_hms(row.get("TotalCPU", ""))
@@ -249,6 +245,49 @@ def query_sacct(job_id: str) -> dict:
     }
 
 
+def query_sacct(job_id: str) -> dict:
+    """Job-level elapsed / CPU / memory from sacct. Empty dict if unavailable."""
+    out = _run(
+        [
+            "sacct",
+            "-j",
+            str(job_id),
+            "--parsable2",
+            "--noheader",
+            "--noconvert",
+            f"--format={_SACCT_FORMAT}",
+        ]
+    )
+    if not out.strip():
+        return {}
+    return _stats_from_sacct_row(str(job_id), _pick_sacct_row(_parse_sacct_output(out)))
+
+
+def query_sacct_batch(job_ids: list[str]) -> dict[str, dict]:
+    """One sacct call for many jobs. Keys are root job IDs (no .batch suffix)."""
+    ids = [str(j) for j in job_ids if j and not str(j).startswith("DRY")]
+    if not ids:
+        return {}
+    out = _run(
+        [
+            "sacct",
+            "-j",
+            ",".join(ids),
+            "--parsable2",
+            "--noheader",
+            "--noconvert",
+            f"--format={_SACCT_FORMAT}",
+        ],
+        timeout=20,
+    )
+    rows_by_root: dict[str, list[dict]] = {j: [] for j in ids}
+    for row in _parse_sacct_output(out):
+        root = str(row.get("JobID", "")).split(".")[0]
+        if root in rows_by_root:
+            rows_by_root[root].append(row)
+    return {jid: _stats_from_sacct_row(jid, _pick_sacct_row(rows)) for jid, rows in rows_by_root.items()}
+
+
 def parse_seff(text: str) -> dict:
     """Extract CPU / memory efficiency from `seff` stdout."""
     stats: dict = {}
@@ -284,12 +323,10 @@ def query_seff(job_id: str) -> dict:
 
 
 def query_job_stats(job_id: str) -> dict:
-    """Merge sacct + seff. seff wins on CPU/mem efficiency when present."""
+    """Sacct only. Do not call seff here — it can hang on Della compute nodes."""
     stats = {"job_id": str(job_id)}
     sacct = query_sacct(job_id)
-    seff = query_seff(job_id)
     stats.update({k: v for k, v in sacct.items() if v not in (None, "")})
-    stats.update({k: v for k, v in seff.items() if v not in (None, "")})
     return stats
 
 
@@ -349,11 +386,15 @@ def write_round_timing_report(results_base: str, round_num: int) -> str:
         job_ids = set(jobs["job_id"].astype(str))
         timing = timing[timing["job_id"].astype(str).isin(job_ids)].copy()
 
+    raw_ids = (
+        [j for j in jobs["job_id"].astype(str).tolist() if not j.startswith("DRY")]
+        if not jobs.empty
+        else []
+    )
+    batch_stats = query_sacct_batch(raw_ids)
     job_stats: list[dict] = []
-    for job_id in jobs["job_id"].astype(str).tolist() if not jobs.empty else []:
-        if job_id.startswith("DRY"):
-            continue
-        stats = query_job_stats(job_id)
+    for job_id in raw_ids:
+        stats = batch_stats.get(job_id) or {"job_id": job_id}
         match = jobs.loc[jobs["job_id"].astype(str) == job_id]
         if not match.empty:
             stats["epsilon"] = match.iloc[0].get("epsilon", "")

@@ -291,14 +291,15 @@ def do_check(args: argparse.Namespace) -> None:
 
     round_num = _round_num(results_base)
     _write_report(summary, results_base, round_num=round_num, threshold=threshold)
-    write_round_timing_report(results_base, round_num)
 
     if summary.empty:
+        _safe_timing_report(results_base, round_num)
         print("[check] No data found — nothing to evaluate.", flush=True)
         return
 
     failing = summary[~summary["passes"]]
     if failing.empty:
+        _safe_timing_report(results_base, round_num)
         print("[check] All (ε, L) pairs meet the threshold. Campaign complete!", flush=True)
         return
 
@@ -350,6 +351,7 @@ def do_check(args: argparse.Namespace) -> None:
 
     if args.dry_run:
         print(f"[check] DRY-RUN: would submit next check after {len(topup_job_ids)} top-up jobs")
+        _safe_timing_report(results_base, round_num)
         return
 
     # Self-schedule next check after all top-up jobs complete.
@@ -368,6 +370,15 @@ def do_check(args: argparse.Namespace) -> None:
         f"(dependency: afterok:{':'.join(topup_job_ids)})",
         flush=True,
     )
+    _safe_timing_report(results_base, round_num)
+
+
+def _safe_timing_report(results_base: str, round_num: int) -> None:
+    """Timing is optional. Never let sacct/seff abort top-up submission."""
+    try:
+        write_round_timing_report(results_base, round_num)
+    except Exception as exc:
+        print(f"[check] WARNING: timing report failed ({exc!r}); campaign continues", flush=True)
 
 
 # ---------------------------------------------------------------------------

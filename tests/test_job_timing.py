@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 
 from job_timing import (
     append_slurm_job,
@@ -41,20 +42,29 @@ Memory Efficiency: 15.38% of 8.00 GB
     assert stats["state"] == "COMPLETED"
 
 
+def test_run_swallows_timeout(monkeypatch):
+    import job_timing
+
+    def boom(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd="seff", timeout=8)
+
+    monkeypatch.setattr(job_timing.subprocess, "run", boom)
+    assert job_timing._run(["seff", "1"]) == ""
+
+
 def test_write_round_timing_report(tmp_path, monkeypatch):
     import job_timing
 
-    def fake_query(job_id: str) -> dict:
-        return {
-            "job_id": job_id,
+    monkeypatch.setattr(job_timing, "query_sacct_batch", lambda _ids: {
+        "999": {
+            "job_id": "999",
             "state": "COMPLETED",
             "elapsed_seconds": 3600.0,
             "cpu_efficiency_pct": 91.0,
             "time_efficiency_pct": 4.2,
             "mem_efficiency_pct": 12.0,
         }
-
-    monkeypatch.setattr(job_timing, "query_job_stats", fake_query)
+    })
 
     base = str(tmp_path / "SUSC_RUNS_S1A")
     append_slurm_job(
