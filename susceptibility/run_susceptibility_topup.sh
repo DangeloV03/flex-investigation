@@ -8,7 +8,7 @@
 #SBATCH --error=slurm_reports/%x_%j.err
 #
 # Top-up run: continue an existing SUSC_RUNS campaign for one epsilon by
-# loading the final lattice of each prior replica and running 10^5 extra
+# loading the final lattice of each prior replica and running 10^6 extra
 # production steps.  Submitted with --dependency=afterok:... by smart_sweep.py
 # check when any (eps, L) pair has mean J < threshold.
 #
@@ -59,6 +59,14 @@ else
     LAUNCH=(python -u)
 fi
 
+JOB_ID="${SLURM_JOB_ID:-local}"
+TIMING_DIR="$RESULTS_BASE/timing"
+mkdir -p "$TIMING_DIR"
+TIMING_CSV="$TIMING_DIR/${JOB_ID}.csv"
+if [[ ! -f "$TIMING_CSV" ]]; then
+    echo "phase,job_id,epsilon,L,wall_seconds,ncpus,finished_at" > "$TIMING_CSV"
+fi
+
 for SIZE in "${SIZES[@]}"; do
     echo "=== TOP-UP epsilon=${EPS} L=${SIZE} ==="
 
@@ -92,4 +100,5 @@ print(susc_run_dir(params, '$RESULTS_BASE'))
         --seed-base "$SEED_BASE" \
         --results-base "$RESULTS_BASE"
     echo ">>> TOP-UP epsilon=${EPS} L=${SIZE} took ${SECONDS}s ($((SECONDS/60))m$((SECONDS%60))s)"
+    echo "topup,${JOB_ID},${EPS},${SIZE},${SECONDS},${N},$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$TIMING_CSV"
 done

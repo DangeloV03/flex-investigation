@@ -246,3 +246,66 @@ def test_latest_gen_detection_multi_round(tmp_path):
 
     # Should pick IDs 2 and 3 (the top-up rows with higher prod_time)
     assert latest_ids == {2, 3}
+
+
+def _touch_csv(path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write("id\n")
+
+
+def test_s1a_ising_folder_names():
+    """Experiment S1A: Δf=-20, k=0, Δμ=0, homo → _{L}_{L}_S1_DF-20.0_DMU0.0_K0.0/_{eps}."""
+    from susceptibility_paths import (
+        ISING_DELTA_F,
+        ISING_DELTA_MU,
+        ISING_K,
+        ISING_SCHEME,
+        parse_susc_run_dir,
+        susc_eps_dir_name,
+        susc_param_dir_name,
+        susc_run_dir,
+    )
+
+    params = dict(
+        Lx=16, Ly=16, epsilon=-1.76,
+        delta_f=ISING_DELTA_F, delta_mu=ISING_DELTA_MU, k=ISING_K, scheme=ISING_SCHEME,
+    )
+    assert ISING_DELTA_F == -20.0
+    assert ISING_K == 0.0
+    assert ISING_DELTA_MU == 0.0
+    assert susc_param_dir_name(params) == "_16_16_S1_DF-20.0_DMU0.0_K0.0"
+    assert susc_eps_dir_name(-1.76) == "_-1.76"
+    run_dir = susc_run_dir(params, "SUSC_RUNS_S1A")
+    assert run_dir == "SUSC_RUNS_S1A/_16_16_S1_DF-20.0_DMU0.0_K0.0/_-1.76"
+    assert parse_susc_run_dir(run_dir) == (16, -1.76)
+
+
+def test_find_susceptibility_csvs_legacy_and_smart(tmp_path):
+    """Analysis loaders must find both legacy susceptibility_* dirs and SUSC_RUNS."""
+    from susceptibility_paths import (
+        SUSCEPTIBILITY_DATA_CSV,
+        find_susceptibility_csvs,
+        susc_run_dir,
+    )
+
+    legacy_root = tmp_path / "legacy"
+    legacy_csv = legacy_root / "susceptibility_16x16_homo_deltaFm20p0_dmu0p0_epsilonm1p76" / SUSCEPTIBILITY_DATA_CSV
+    _touch_csv(str(legacy_csv))
+    found_legacy = find_susceptibility_csvs(str(legacy_root))
+    assert found_legacy == [str(legacy_csv)]
+
+    smart_root = tmp_path / "SUSC_RUNS_S1A"
+    params = dict(
+        Lx=32, Ly=32, epsilon=-1.80,
+        delta_f=-20.0, delta_mu=0.0, k=0.0, scheme="homo",
+    )
+    smart_csv = os.path.join(susc_run_dir(params, str(smart_root)), SUSCEPTIBILITY_DATA_CSV)
+    _touch_csv(smart_csv)
+    found_smart = find_susceptibility_csvs(str(smart_root))
+    assert found_smart == [smart_csv]
+
+    # Pointing at a single param dir still works.
+    param_dir = os.path.dirname(os.path.dirname(smart_csv))
+    found_param = find_susceptibility_csvs(param_dir)
+    assert found_param == [smart_csv]

@@ -131,17 +131,27 @@ def read_susceptibility_csv(path: str) -> list[dict]:
 
 
 def find_susceptibility_csvs(results_dir: str) -> list[str]:
-    """All susceptibility_data.csv files for the phase rooted at results_dir.
+    """All susceptibility_data.csv files for the campaign rooted at results_dir.
 
-    Run dirs are always {base}/susceptibility_{combo}/ for every phase, so glob
-    exactly one level deep. This keeps phases isolated: pointing at the prod base
-    (susceptibility/results/) no longer sweeps up coex/, exact/, exact_random/,
-    exact_split/ nested underneath it.
+    Tries layouts in order and returns the first that matches:
+
+    1. Legacy: ``{base}/susceptibility_{combo}/susceptibility_data.csv``
+    2. Smart runner: ``{base}/_{Lx}_{Ly}_S{n}_…/_{eps}/susceptibility_data.csv``
+    3. Smart param dir: ``{base}/_{eps}/susceptibility_data.csv`` (if you pass a
+       single ``_{Lx}_{Ly}_S{n}_…`` folder instead of the campaign root)
     """
     import glob
 
-    return sorted(
+    legacy = sorted(
         glob.glob(os.path.join(results_dir, "susceptibility_*", SUSCEPTIBILITY_DATA_CSV))
+    )
+    if legacy:
+        return legacy
+    smart = find_susc_run_csvs(results_dir)
+    if smart:
+        return smart
+    return sorted(
+        glob.glob(os.path.join(results_dir, "_*", SUSCEPTIBILITY_DATA_CSV))
     )
 
 

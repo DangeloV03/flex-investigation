@@ -40,7 +40,7 @@ def resolve_repo_path(path: str) -> str:
     repo_path = os.path.join(REPO_ROOT, path)
     # Campaign outputs (results, plots) always live at repo root — prefer that even
     # when cwd is susceptibility/ and a similarly named empty dir exists under cwd.
-    if path.startswith(("plots/", "susceptibility/results/")):
+    if path.startswith(("plots/", "susceptibility/results/", "SUSC_RUNS")):
         return repo_path
     cwd_path = os.path.abspath(path)
     if os.path.exists(cwd_path):

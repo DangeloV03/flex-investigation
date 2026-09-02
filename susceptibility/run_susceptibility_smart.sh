@@ -70,6 +70,14 @@ fi
 
 SIZES=(16 32 48 64 96 128)
 
+JOB_ID="${SLURM_JOB_ID:-local}"
+TIMING_DIR="$RESULTS_BASE/timing"
+mkdir -p "$TIMING_DIR"
+TIMING_CSV="$TIMING_DIR/${JOB_ID}.csv"
+if [[ ! -f "$TIMING_CSV" ]]; then
+    echo "phase,job_id,epsilon,L,wall_seconds,ncpus,finished_at" > "$TIMING_CSV"
+fi
+
 for SIZE in "${SIZES[@]}"; do
     echo "=== epsilon=${EPS} L=${SIZE} (cpus=${N}, batches=${NUM_BATCHES}) ==="
     SECONDS=0
@@ -81,4 +89,5 @@ for SIZE in "${SIZES[@]}"; do
         --results-base "$RESULTS_BASE" \
         ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
     echo ">>> epsilon=${EPS} L=${SIZE} took ${SECONDS}s ($((SECONDS/60))m$((SECONDS%60))s)"
+    echo "sweep,${JOB_ID},${EPS},${SIZE},${SECONDS},${N},$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$TIMING_CSV"
 done
