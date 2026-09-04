@@ -265,8 +265,12 @@ def load_susc_runs_groups(base: str) -> dict[tuple[int, float], dict]:
     from susceptibility_paths import read_susceptibility_csv
 
     groups: dict[tuple[int, float], dict] = {}
+    n_paths = len(csv_paths)
+    print(f"[check] found {n_paths} run dirs; reading timeseries …", flush=True)
 
-    for data_csv in csv_paths:
+    for i, data_csv in enumerate(csv_paths, start=1):
+        if i == 1 or i % 25 == 0 or i == n_paths:
+            print(f"[check] loading {i}/{n_paths} …", flush=True)
         run_dir = os.path.dirname(data_csv)
         L, eps = parse_susc_run_dir(run_dir)
         if L is None or eps is None:
@@ -292,11 +296,10 @@ def load_susc_runs_groups(base: str) -> dict[tuple[int, float], dict]:
             ts_path = os.path.join(run_dir, f"m_timeseries_{run_id}.csv")
             if not os.path.isfile(ts_path):
                 continue
-            with open(ts_path, newline="") as f:
-                records = list(csv.DictReader(f))
-            if not records:
+            try:
+                m_arr = pd.read_csv(ts_path, usecols=["m"])["m"].to_numpy(dtype=float)
+            except (ValueError, KeyError, OSError):
                 continue
-            m_arr = np.array([float(r["m"]) for r in records if "m" in r], dtype=float)
             if m_arr.size > 0:
                 m_arrays.append(m_arr)
 
@@ -306,6 +309,7 @@ def load_susc_runs_groups(base: str) -> dict[tuple[int, float], dict]:
         key = (L, round(eps, 8))
         groups[key] = {"beta": beta, "N": n_sites, "replicas": m_arrays}
 
+    print(f"[check] loaded {len(groups)} (L, ε) pairs; counting jumps …", flush=True)
     return groups
 
 
