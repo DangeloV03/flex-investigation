@@ -20,6 +20,7 @@
 #   $6  delta_mu      (optional; empty => runner default)
 #   $7  k             (optional; empty => runner default)
 #   $8  scheme        (optional; empty => runner default)
+#   $9+ L sizes       (optional; default 16 32 48 64 96 128)
 
 set -euo pipefail
 
@@ -68,7 +69,11 @@ else
     LAUNCH=(python -u)
 fi
 
-SIZES=(16 32 48 64 96 128)
+if [[ $# -ge 9 ]]; then
+    SIZES=("${@:9}")
+else
+    SIZES=(16 32 48 64 96 128)
+fi
 
 JOB_ID="${SLURM_JOB_ID:-local}"
 TIMING_DIR="$RESULTS_BASE/timing"

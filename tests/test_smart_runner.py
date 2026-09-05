@@ -281,6 +281,35 @@ def test_s1a_ising_folder_names():
     assert parse_susc_run_dir(run_dir) == (16, -1.76)
 
 
+def test_s1b_three_state_folder_names():
+    """S1B: Δf=0, k=1, Δμ=0, homo → _{L}_{L}_S1_DF0.0_DMU0.0_K1.0/_{eps}."""
+    from susceptibility_paths import susc_param_dir_name, susc_run_dir
+
+    params = dict(
+        Lx=64, Ly=64, epsilon=-1.76,
+        delta_f=0.0, delta_mu=0.0, k=1.0, scheme="homo",
+    )
+    assert susc_param_dir_name(params) == "_64_64_S1_DF0.0_DMU0.0_K1.0"
+    assert susc_run_dir(params, "SUSC_RUNS_S1B") == (
+        "SUSC_RUNS_S1B/_64_64_S1_DF0.0_DMU0.0_K1.0/_-1.76"
+    )
+
+
+def test_split_size_groups_separates_128():
+    from smart_sweep import _split_size_groups
+
+    assert _split_size_groups([16, 32, 48, 64, 96, 128]) == [
+        ("sml", [16, 32, 48, 64, 96]),
+        ("L128", [128]),
+    ]
+    assert _split_size_groups([48, 64, 96, 128]) == [
+        ("sml", [48, 64, 96]),
+        ("L128", [128]),
+    ]
+    assert _split_size_groups([128]) == [("L128", [128])]
+    assert _split_size_groups([16, 32]) == [("sml", [16, 32])]
+
+
 def test_find_susceptibility_csvs_legacy_and_smart(tmp_path):
     """Analysis loaders must find both legacy susceptibility_* dirs and SUSC_RUNS."""
     from susceptibility_paths import (

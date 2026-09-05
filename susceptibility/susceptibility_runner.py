@@ -15,7 +15,7 @@ For each replica:
 Outputs (per job directory):
   - susceptibility_data.csv       — one row per replica with aggregate statistics
   - m_timeseries_{id}.csv         — per-chunk (chunk, rho_bonding, rho_inert, rho_empty, m)
-  - m_timeseries_{id}.png         — m vs chunk plot per replica
+  - m_timeseries_{id}.png         — not written (CSV only, to save disk)
   - final_lattice_{id}.npy        — final lattice snapshot
 
 Re-running the same (ε, L) appends new replicas to susceptibility_data.csv
@@ -348,9 +348,6 @@ def run_replica(args: tuple) -> dict:
     # Save combined timeseries (full history: prior + new chunks).
     ts_csv = os.path.join(outdir, f"m_timeseries_{run_id}.csv")
     save_timeseries_csv(ts_csv, all_chunks)
-
-    ts_png = os.path.join(outdir, f"m_timeseries_{run_id}.png")
-    save_timeseries_plot(ts_png, all_chunks, run_id, epsilon, Lx)
 
     total_prod_time = prior_prod_time + prod_time
     total_wall_time = prior_wall_time + cumulative_time

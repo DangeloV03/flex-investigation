@@ -41,6 +41,22 @@ import pandas as pd
 from job_timing import append_slurm_job, write_round_timing_report
 
 SMART_L_VALUES = [16, 32, 48, 64, 96, 128]
+SMALL_L_VALUES = [16, 32, 48, 64, 96]
+LARGE_L_VALUES = [128]
+
+
+def _split_size_groups(sizes: list[int]) -> list[tuple[str, list[int]]]:
+    """Run 16–96 and L=128 as separate Slurm jobs so L=128 is not stuck behind the rest."""
+    small = [s for s in sizes if s < 128]
+    large = [s for s in sizes if s >= 128]
+    groups: list[tuple[str, list[int]]] = []
+    if small:
+        groups.append(("sml", small))
+    if large:
+        groups.append(("L128", large))
+    if not groups:
+        groups.append(("sml", list(sizes)))
+    return groups
 
 # ---------------------------------------------------------------------------
 # Epsilon range helper (mirrors sweep_susceptibility.py)
@@ -191,8 +207,10 @@ def do_sweep(args: argparse.Namespace) -> None:
     sweep_script = args.sweep_script
     check_script = args.check_script
 
+    n_groups = len(_split_size_groups(SMART_L_VALUES))
     print(
-        f"[sweep] Submitting {len(eps_values)} epsilon jobs → {results_base}",
+        f"[sweep] Submitting {len(eps_values)} ε × {n_groups} size-groups "
+        f"({len(eps_values) * n_groups} jobs) → {results_base}",
         flush=True,
     )
 
@@ -226,31 +244,37 @@ def do_sweep(args: argparse.Namespace) -> None:
     sweep_job_ids: list[str] = []
     for eps in eps_values:
         mu_arg = str(mu_map.get(eps, "")) if mu_map else ""
-        cmd = [
-            "sbatch", "--parsable",
-            sweep_script,
-            f"{eps:.6g}",       # $1 epsilon
-            results_base,       # $2 results_base
-            "1",                # $3 num_batches
-            mu_arg,             # $4 mu (empty = runner default)
-            *extra,             # $5 delta_f, $6 delta_mu, $7 k, $8 scheme
-        ]
-        if args.dry_run:
-            print(f"  [DRY-RUN] {' '.join(cmd)}", flush=True)
-            sweep_job_ids.append(f"DRY{eps}")
-            continue
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        job_id = result.stdout.strip().split(";")[0]  # --parsable may add cluster name
-        sweep_job_ids.append(job_id)
-        append_slurm_job(
-            results_base,
-            round_num=1,
-            phase="sweep",
-            job_id=job_id,
-            epsilon=eps,
-            sizes=SMART_L_VALUES,
-        )
-        print(f"  Submitted job {job_id} for ε={eps:.4f}", flush=True)
+        for tag, sizes in _split_size_groups(SMART_L_VALUES):
+            cmd = [
+                "sbatch", "--parsable",
+                f"--job-name=susc_{tag}",
+                sweep_script,
+                f"{eps:.6g}",       # $1 epsilon
+                results_base,       # $2 results_base
+                "1",                # $3 num_batches
+                mu_arg,             # $4 mu (empty = runner default)
+                *extra,             # $5 delta_f, $6 delta_mu, $7 k, $8 scheme
+                *[str(s) for s in sizes],
+            ]
+            if args.dry_run:
+                print(f"  [DRY-RUN] {' '.join(cmd)}", flush=True)
+                sweep_job_ids.append(f"DRY{eps}{tag}")
+                continue
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            job_id = result.stdout.strip().split(";")[0]
+            sweep_job_ids.append(job_id)
+            append_slurm_job(
+                results_base,
+                round_num=1,
+                phase="sweep",
+                job_id=job_id,
+                epsilon=eps,
+                sizes=sizes,
+            )
+            print(
+                f"  Submitted job {job_id} for ε={eps:.4f} L={sizes} ({tag})",
+                flush=True,
+            )
 
     if args.dry_run:
         print(f"[sweep] DRY-RUN: would submit check job after {len(sweep_job_ids)} sweep jobs")
@@ -259,7 +283,7 @@ def do_sweep(args: argparse.Namespace) -> None:
     # Chain check job as a dependency on all sweep jobs.
     dep = "--dependency=afterok:" + ":".join(sweep_job_ids)
     check_cmd = [
-        "sbatch", dep,
+        "sbatch", "--parsable", dep,
         check_script,
         results_base,
         str(args.threshold),
@@ -319,35 +343,36 @@ def do_check(args: argparse.Namespace) -> None:
 
     topup_job_ids: list[str] = []
     for eps in sorted(failing_by_eps):
-        sizes = sorted(failing_by_eps[eps])
-        size_strs = [str(s) for s in sizes]
-        cmd = [
-            "sbatch", "--parsable",
-            topup_script,
-            f"{eps:.6g}",
-            results_base,
-            *size_strs,
-        ]
-        if args.dry_run:
-            print(f"  [DRY-RUN] {' '.join(cmd)}", flush=True)
-            topup_job_ids.append(f"DRY{eps}")
-            continue
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        job_id = result.stdout.strip().split(";")[0]
-        topup_job_ids.append(job_id)
-        append_slurm_job(
-            results_base,
-            round_num=round_num + 1,
-            phase="topup",
-            job_id=job_id,
-            epsilon=eps,
-            sizes=sizes,
-        )
-        print(
-            f"  Submitted top-up job {job_id} for ε={eps:.4f} "
-            f"L={sizes}",
-            flush=True,
-        )
+        for tag, sizes in _split_size_groups(sorted(failing_by_eps[eps])):
+            size_strs = [str(s) for s in sizes]
+            cmd = [
+                "sbatch", "--parsable",
+                f"--job-name=susc_top_{tag}",
+                topup_script,
+                f"{eps:.6g}",
+                results_base,
+                *size_strs,
+            ]
+            if args.dry_run:
+                print(f"  [DRY-RUN] {' '.join(cmd)}", flush=True)
+                topup_job_ids.append(f"DRY{eps}{tag}")
+                continue
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            job_id = result.stdout.strip().split(";")[0]
+            topup_job_ids.append(job_id)
+            append_slurm_job(
+                results_base,
+                round_num=round_num + 1,
+                phase="topup",
+                job_id=job_id,
+                epsilon=eps,
+                sizes=sizes,
+            )
+            print(
+                f"  Submitted top-up job {job_id} for ε={eps:.4f} "
+                f"L={sizes} ({tag})",
+                flush=True,
+            )
 
     if args.dry_run:
         print(f"[check] DRY-RUN: would submit next check after {len(topup_job_ids)} top-up jobs")
@@ -357,7 +382,7 @@ def do_check(args: argparse.Namespace) -> None:
     # Self-schedule next check after all top-up jobs complete.
     dep = "--dependency=afterok:" + ":".join(topup_job_ids)
     next_check_cmd = [
-        "sbatch", dep,
+        "sbatch", "--parsable", dep,
         check_script,
         results_base,
         str(threshold),
