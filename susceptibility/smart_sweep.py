@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
+import json
 import math
 import os
 import subprocess
@@ -191,6 +193,32 @@ def _write_report(
     return md_path
 
 
+def _progress_fingerprint(summary: pd.DataFrame) -> str:
+    """Hash of the data the check just saw — identical means no new samples."""
+    if summary.empty:
+        return "empty"
+    cols = ["L", "epsilon", "n_replicas", "J_mean"]
+    payload = summary.sort_values(["L", "epsilon"])[cols].round(6).to_csv(index=False)
+    return hashlib.sha1(payload.encode()).hexdigest()
+
+
+def _check_stalled(results_base: str, fingerprint: str) -> int:
+    """Record this round's fingerprint; return how many rounds in a row matched."""
+    path = os.path.join(results_base, ".jump_progress.json")
+    try:
+        with open(path) as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        state = {}
+    if state.get("fingerprint") == fingerprint:
+        stalled = int(state.get("stalled_rounds", 0)) + 1
+    else:
+        stalled = 0
+    with open(path, "w") as f:
+        json.dump({"fingerprint": fingerprint, "stalled_rounds": stalled}, f)
+    return stalled
+
+
 # ---------------------------------------------------------------------------
 # sweep subcommand
 # ---------------------------------------------------------------------------
@@ -321,6 +349,8 @@ def do_check(args: argparse.Namespace) -> None:
         print("[check] No data found — nothing to evaluate.", flush=True)
         return
 
+    stalled_rounds = _check_stalled(results_base, _progress_fingerprint(summary))
+
     failing = summary[~summary["passes"]]
     if failing.empty:
         _safe_timing_report(results_base, round_num)
@@ -333,6 +363,16 @@ def do_check(args: argparse.Namespace) -> None:
         eps = float(row["epsilon"])
         L = int(row["L"])
         failing_by_eps.setdefault(eps, []).append(L)
+
+    if stalled_rounds >= args.max_stalled_rounds:
+        _safe_timing_report(results_base, round_num)
+        raise SystemExit(
+            f"[check] STALLED: jump data unchanged for {stalled_rounds} consecutive "
+            f"rounds ({len(failing)} pairs still failing). Top-up jobs are producing "
+            f"no new samples — check the top-up Slurm logs in slurm_reports/ for "
+            f"'no run found' warnings (campaign physics mismatch) or resume failures. "
+            f"Not chaining another round."
+        )
 
     print(
         f"[check] {len(failing)} pairs failing; submitting top-up for "
@@ -442,6 +482,9 @@ def main() -> None:
     cp.add_argument("--results-base", required=True,
                     help="SUSC_RUNS directory to analyse")
     cp.add_argument("--threshold", type=float, default=10.0)
+    cp.add_argument("--max-stalled-rounds", type=int, default=3,
+                    help="Abort the chain after this many rounds with no new data "
+                         "(default: 3)")
     cp.add_argument("--check-script", default="susceptibility/run_smart_check.sh")
     cp.add_argument("--topup-script", default="susceptibility/run_susceptibility_topup.sh")
     cp.add_argument("--dry-run", action="store_true",

@@ -284,3 +284,49 @@ def patch_coex_job_json(json_path: str) -> bool:
 def prod_job_filename(scheme: str, epsilon: float, delta_mu: float, l: int) -> str:
     outer_tag = f"{eps_filename_tag(epsilon)}_{dmu_filename_tag(delta_mu)}"
     return f"susceptibility_{scheme}_{outer_tag}_L{l}.json"
+
+
+def find_susc_run_dir(base: str, L: int, epsilon: float, tol: float = 1e-9) -> str | None:
+    """Locate the epsilon-level run directory for (L, ε) under a SUSC_RUNS base.
+
+    Discovers the directory instead of rebuilding it from assumed physics
+    parameters, so top-ups work for any campaign (S1A, S1B, S2A, …) without
+    knowing Δf/Δμ/k/scheme up front.  Returns None when no run exists.
+    """
+    import glob as _glob
+
+    for csv_path in find_susc_run_csvs(base):
+        run_dir = os.path.dirname(csv_path)
+        L_found, eps_found = parse_susc_run_dir(run_dir)
+        if L_found == int(L) and eps_found is not None and abs(eps_found - float(epsilon)) <= tol:
+            return run_dir
+    # Fall back to directories that exist but have no CSV yet.
+    for run_dir in _glob.glob(os.path.join(base, "*", "_*")):
+        if not os.path.isdir(run_dir):
+            continue
+        L_found, eps_found = parse_susc_run_dir(run_dir)
+        if L_found == int(L) and eps_found is not None and abs(eps_found - float(epsilon)) <= tol:
+            return run_dir
+    return None
+
+
+def read_run_physics(run_dir: str) -> dict:
+    """Read the physics parameters an existing run was produced with.
+
+    Returns {} when the run has no readable CSV rows; otherwise a dict with
+    delta_f, delta_mu, k, scheme and mu taken from the most recent row.
+    """
+    rows = read_susceptibility_csv(os.path.join(run_dir, SUSCEPTIBILITY_DATA_CSV))
+    if not rows:
+        return {}
+    row = rows[-1]
+    physics: dict = {}
+    for key in ("delta_f", "delta_mu", "k", "mu"):
+        try:
+            physics[key] = float(row[key])
+        except (KeyError, TypeError, ValueError):
+            pass
+    scheme = str(row.get("scheme", "")).strip()
+    if scheme:
+        physics["scheme"] = scheme
+    return physics

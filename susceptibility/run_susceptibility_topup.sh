@@ -70,23 +70,40 @@ fi
 for SIZE in "${SIZES[@]}"; do
     echo "=== TOP-UP epsilon=${EPS} L=${SIZE} ==="
 
-    # Compute the run directory for this (eps, L) combo using the path helpers.
-    OUTDIR=$(python -c "
+    # Discover the existing run directory and the physics it was produced with.
+    # Do NOT rebuild the path from assumed parameters: campaigns differ
+    # (S1A: Δf=-20, k=0; S1B: Δf=0, k=1; …) and a wrong guess silently skips
+    # every top-up, leaving the check/top-up loop spinning forever.
+    RESOLVED=$(python -c "
 import sys
-sys.path.insert(0, 'susceptibility')
-from susceptibility_paths import susc_run_dir
-params = dict(
-    epsilon=float('$EPS'),
-    Lx=$SIZE, Ly=$SIZE,
-    delta_f=-20.0, delta_mu=0.0, k=0.0, scheme='homo'
-)
-print(susc_run_dir(params, '$RESULTS_BASE'))
-")
+sys.path[:0] = ['susceptibility', 'coex']
+from susceptibility_paths import find_susc_run_dir, read_run_physics
+
+run_dir = find_susc_run_dir('$RESULTS_BASE', $SIZE, float('$EPS'))
+if run_dir is None:
+    sys.exit(3)
+physics = read_run_physics(run_dir)
+flags = []
+for flag, key in (('--delta-f', 'delta_f'), ('--delta-mu', 'delta_mu'),
+                  ('--k', 'k'), ('--scheme', 'scheme'), ('--mu', 'mu')):
+    if key in physics:
+        flags += [flag, str(physics[key])]
+print(run_dir)
+print(' '.join(flags))
+") || {
+        echo "WARNING: no run found for epsilon=${EPS} L=${SIZE} under ${RESULTS_BASE}, skipping"
+        continue
+    }
+
+    OUTDIR=$(echo "$RESOLVED" | sed -n 1p)
+    read -r -a PHYSICS_ARGS <<< "$(echo "$RESOLVED" | sed -n 2p)"
 
     if [[ ! -d "$OUTDIR" ]]; then
         echo "WARNING: $OUTDIR does not exist, skipping L=${SIZE}"
         continue
     fi
+    echo "    run dir: $OUTDIR"
+    echo "    physics: ${PHYSICS_ARGS[*]:-<runner defaults>}"
 
     SECONDS=0
     "${LAUNCH[@]}" susceptibility/susceptibility_runner.py \
@@ -98,7 +115,8 @@ print(susc_run_dir(params, '$RESULTS_BASE'))
         --prod-time "$TOPUP_PROD_TIME" \
         --prod-chunks "$TOPUP_PROD_CHUNKS" \
         --seed-base "$SEED_BASE" \
-        --results-base "$RESULTS_BASE"
+        --results-base "$RESULTS_BASE" \
+        ${PHYSICS_ARGS[@]+"${PHYSICS_ARGS[@]}"}
     echo ">>> TOP-UP epsilon=${EPS} L=${SIZE} took ${SECONDS}s ($((SECONDS/60))m$((SECONDS%60))s)"
     echo "topup,${JOB_ID},${EPS},${SIZE},${SECONDS},${N},$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$TIMING_CSV"
 done

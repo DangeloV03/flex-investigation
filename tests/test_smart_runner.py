@@ -338,3 +338,57 @@ def test_find_susceptibility_csvs_legacy_and_smart(tmp_path):
     param_dir = os.path.dirname(os.path.dirname(smart_csv))
     found_param = find_susceptibility_csvs(param_dir)
     assert found_param == [smart_csv]
+
+
+def _write_run_csv(run_dir, *, L, eps, delta_f, delta_mu, k, scheme, mu):
+    import csv as _csv
+    import os as _os
+
+    from susceptibility_paths import SUSCEPTIBILITY_CSV_FIELDS, SUSCEPTIBILITY_DATA_CSV
+
+    _os.makedirs(run_dir, exist_ok=True)
+    row = {f: "" for f in SUSCEPTIBILITY_CSV_FIELDS}
+    row.update(id=1, replica_id=1, epsilon=eps, delta_f=delta_f, delta_mu=delta_mu,
+               k=k, scheme=scheme, L=L, Lx=L, Ly=L, mu=mu, mu_coex_FITTED=mu)
+    path = _os.path.join(run_dir, SUSCEPTIBILITY_DATA_CSV)
+    with open(path, "w", newline="") as f:
+        w = _csv.DictWriter(f, fieldnames=SUSCEPTIBILITY_CSV_FIELDS)
+        w.writeheader()
+        w.writerow(row)
+
+
+def test_topup_resolves_s1b_run_dir_and_physics(tmp_path):
+    """Top-up must find S1B runs (Δf=0, k=1), not assume the S1A parameters."""
+    from susceptibility_paths import find_susc_run_dir, read_run_physics, susc_run_dir
+
+    base = str(tmp_path / "SUSC_RUNS_S1B")
+    params = dict(Lx=64, Ly=64, epsilon=-1.76,
+                  delta_f=0.0, delta_mu=0.0, k=1.0, scheme="homo")
+    run_dir = susc_run_dir(params, base)
+    _write_run_csv(run_dir, L=64, eps=-1.76, delta_f=0.0, delta_mu=0.0,
+                   k=1.0, scheme="homo", mu=-3.52)
+
+    assert find_susc_run_dir(base, 64, -1.76) == run_dir
+    assert find_susc_run_dir(base, 96, -1.76) is None
+
+    physics = read_run_physics(run_dir)
+    assert physics["delta_f"] == 0.0
+    assert physics["k"] == 1.0
+    assert physics["scheme"] == "homo"
+    assert physics["mu"] == -3.52
+
+
+def test_check_aborts_when_jump_data_stops_changing(tmp_path):
+    """A top-up that adds no samples must not chain rounds forever."""
+    import pandas as pd
+
+    from smart_sweep import _check_stalled, _progress_fingerprint
+
+    base = str(tmp_path)
+    summary = pd.DataFrame({"L": [32], "epsilon": [-1.7], "n_replicas": [4],
+                            "J_mean": [0.0], "passes": [False]})
+    fp = _progress_fingerprint(summary)
+    assert [_check_stalled(base, fp) for _ in range(4)] == [0, 1, 2, 3]
+
+    moved = summary.assign(J_mean=[1.0])
+    assert _check_stalled(base, _progress_fingerprint(moved)) == 0
