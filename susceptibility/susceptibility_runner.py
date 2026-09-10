@@ -557,11 +557,22 @@ def main() -> None:
                 task_settings["eq_time"] = 0.0  # skip equilibration on resume
             tasks.append((slot_idx, run_id, seed, params, task_settings, outdir))
 
+        # Append each replica's row as it lands, not once the whole batch is
+        # done: a job killed at the wall used to discard every finished replica
+        # with it (up to a full day of compute per job).
+        results = []
         with mp.Pool(processes=num_parallel_runs) as pool:
-            results = pool.map(run_replica, tasks)
+            for result in pool.imap_unordered(run_replica, tasks):
+                append_to_csv(csv_path, [result])
+                results.append(result)
+                print(
+                    f"[susceptibility_runner] replica {result['replica_id']} "
+                    f"(id={result['id']}) written to {csv_path} "
+                    f"[{len(results)}/{num_parallel_runs}]",
+                    flush=True,
+                )
 
         results.sort(key=lambda r: r["id"])
-        append_to_csv(csv_path, results)
         summarize_replicas(results)
 
         print(

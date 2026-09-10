@@ -48,17 +48,15 @@ LARGE_L_VALUES = [128]
 
 
 def _split_size_groups(sizes: list[int]) -> list[tuple[str, list[int]]]:
-    """Run 16–96 and L=128 as separate Slurm jobs so L=128 is not stuck behind the rest."""
-    small = [s for s in sizes if s < 128]
-    large = [s for s in sizes if s >= 128]
-    groups: list[tuple[str, list[int]]] = []
-    if small:
-        groups.append(("sml", small))
-    if large:
-        groups.append(("L128", large))
-    if not groups:
-        groups.append(("sml", list(sizes)))
-    return groups
+    """One Slurm job per L.
+
+    The top-up script loops over its sizes sequentially, so grouping 16–96 into
+    one job made that job cost the *sum* of its sizes.  Once the replicas
+    ordered into the dense phase (~29x more events per unit simulated time) the
+    summed cost blew past the 24 h wall and the largest L in each group was lost
+    every round.  Per-L jobs keep a slow L from dragging the others down.
+    """
+    return [(f"L{s}", [s]) for s in sorted(sizes)]
 
 # ---------------------------------------------------------------------------
 # Epsilon range helper (mirrors sweep_susceptibility.py)
@@ -308,8 +306,10 @@ def do_sweep(args: argparse.Namespace) -> None:
         print(f"[sweep] DRY-RUN: would submit check job after {len(sweep_job_ids)} sweep jobs")
         return
 
-    # Chain check job as a dependency on all sweep jobs.
-    dep = "--dependency=afterok:" + ":".join(sweep_job_ids)
+    # Chain check job as a dependency on all sweep jobs.  afterany, not
+    # afterok: a job that hits the wall exits TIMEOUT, which would leave the
+    # check permanently unsatisfiable and silently kill the campaign.
+    dep = "--dependency=afterany:" + ":".join(sweep_job_ids)
     check_cmd = [
         "sbatch", "--parsable", dep,
         check_script,
@@ -321,7 +321,7 @@ def do_sweep(args: argparse.Namespace) -> None:
     check_job_id = result.stdout.strip().split(";")[0]
     print(
         f"[sweep] Submitted check job {check_job_id} "
-        f"(dependency: afterok:{':'.join(sweep_job_ids)})",
+        f"(dependency: afterany:{':'.join(sweep_job_ids)})",
         flush=True,
     )
 
@@ -419,8 +419,9 @@ def do_check(args: argparse.Namespace) -> None:
         _safe_timing_report(results_base, round_num)
         return
 
-    # Self-schedule next check after all top-up jobs complete.
-    dep = "--dependency=afterok:" + ":".join(topup_job_ids)
+    # Self-schedule next check after all top-up jobs finish (afterany: a
+    # TIMEOUT must not strand the chain — see the sweep comment above).
+    dep = "--dependency=afterany:" + ":".join(topup_job_ids)
     next_check_cmd = [
         "sbatch", "--parsable", dep,
         check_script,
@@ -432,7 +433,7 @@ def do_check(args: argparse.Namespace) -> None:
     next_id = result.stdout.strip().split(";")[0]
     print(
         f"[check] Submitted next check job {next_id} "
-        f"(dependency: afterok:{':'.join(topup_job_ids)})",
+        f"(dependency: afterany:{':'.join(topup_job_ids)})",
         flush=True,
     )
     _safe_timing_report(results_base, round_num)

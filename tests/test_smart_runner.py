@@ -295,19 +295,20 @@ def test_s1b_three_state_folder_names():
     )
 
 
-def test_split_size_groups_separates_128():
+def test_split_size_groups_one_job_per_size():
+    """Each L gets its own job: a slow L must not drag the others past the wall."""
     from smart_sweep import _split_size_groups
 
     assert _split_size_groups([16, 32, 48, 64, 96, 128]) == [
-        ("sml", [16, 32, 48, 64, 96]),
-        ("L128", [128]),
-    ]
-    assert _split_size_groups([48, 64, 96, 128]) == [
-        ("sml", [48, 64, 96]),
+        ("L16", [16]),
+        ("L32", [32]),
+        ("L48", [48]),
+        ("L64", [64]),
+        ("L96", [96]),
         ("L128", [128]),
     ]
     assert _split_size_groups([128]) == [("L128", [128])]
-    assert _split_size_groups([16, 32]) == [("sml", [16, 32])]
+    assert _split_size_groups([96, 16]) == [("L16", [16]), ("L96", [96])]
 
 
 def test_find_susceptibility_csvs_legacy_and_smart(tmp_path):

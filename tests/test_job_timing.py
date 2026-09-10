@@ -6,6 +6,8 @@ import os
 import subprocess
 
 from job_timing import (
+    _parse_sacct_output,
+    _stats_from_sacct_rows,
     append_slurm_job,
     fmt_hms,
     load_l_timings,
@@ -40,6 +42,30 @@ Memory Efficiency: 15.38% of 8.00 GB
     assert stats["mem_efficiency_pct"] == 15.38
     assert stats["elapsed_seconds"] == 23 * 60 + 5
     assert stats["state"] == "COMPLETED"
+
+
+def test_sacct_stats_sum_srun_steps():
+    """CPU time lives in the srun step rows; .batch alone reports ~0%."""
+    out = "\n".join([
+        "13632772|susc_top_L96|TIMEOUT|86400||16|1440||8192M|0:0",
+        "13632772.batch|batch|CANCELLED|86400|00:05.200|16||12000K||0:15",
+        "13632772.0|python|CANCELLED|86400|10-00:00:00|16||5263200K||0:15",
+    ])
+    stats = _stats_from_sacct_rows("13632772", _parse_sacct_output(out))
+
+    assert stats["state"] == "TIMEOUT"
+    assert stats["elapsed_seconds"] == 86400.0
+    # 10 CPU-days (plus the batch shell's few seconds) over 16 cores x 24 h.
+    assert abs(stats["cpu_efficiency_pct"] - 62.5) < 0.01
+    assert stats["time_efficiency_pct"] == 100.0
+    assert stats["mem_efficiency_pct"] is not None
+    assert 60.0 < stats["mem_efficiency_pct"] < 65.0
+
+
+def test_sacct_stats_without_steps_fall_back_to_alloc_row():
+    out = "13632772|susc_top_L96|COMPLETED|3600|08:00:00|16|1440||8192M|0:0"
+    stats = _stats_from_sacct_rows("13632772", _parse_sacct_output(out))
+    assert stats["cpu_efficiency_pct"] == 50.0
 
 
 def test_run_swallows_timeout(monkeypatch):
