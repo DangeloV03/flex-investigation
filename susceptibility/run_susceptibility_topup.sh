@@ -34,13 +34,13 @@ fi
 
 N=${SLURM_CPUS_PER_TASK:-2}
 
-# 10^5, not 10^6: wall-clock cost per unit *simulated* time is not constant.
-# Once the replicas order into the dense phase the event rate rises ~29x, so a
-# 10^6 top-up that took ~37 min at L=96 in an early round takes ~18 h later and
-# dies at the 24 h wall having written nothing.  Smaller increments per round
-# accumulate the same statistics and always complete.
-TOPUP_PROD_TIME=100000.0
-TOPUP_PROD_CHUNKS=1000
+# 10^6 per round (L=128 ~2 h on a healthy node, well inside the 24 h wall).
+# Each round writes a new full-history m_timeseries file per replica, so disk
+# grows with (rounds x history): small increments multiply rounds, check
+# overhead, and storage for the same statistics.  A 2026-09-08 round that ran
+# ~29x slow was confined to two nodes (della-h17n16/h17n19), not the physics.
+TOPUP_PROD_TIME=1000000.0
+TOPUP_PROD_CHUNKS=10000
 SEED_BASE=7000
 
 if command -v module >/dev/null 2>&1; then

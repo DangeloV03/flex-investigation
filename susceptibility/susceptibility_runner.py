@@ -202,6 +202,33 @@ def append_to_csv(csv_path: str, rows: list[dict]) -> None:
         writer.writerows(all_rows)
 
 
+def _drop_superseded_timeseries(old_path: str, new_path: str) -> bool:
+    """Delete a resumed-from timeseries once its successor is safely recorded.
+
+    A top-up writes the full history (prior + new chunks) to a new file, so the
+    prior file is a byte-for-byte prefix of it.  Keeping every generation grew
+    disk quadratically (S1B: 726 of 748 GiB were superseded copies).  Called
+    only after the successor's CSV row is written, and deletes only when the
+    prefix really matches, so no history can be lost.
+    """
+    if os.path.abspath(old_path) == os.path.abspath(new_path):
+        return False
+    try:
+        if os.path.getsize(new_path) <= os.path.getsize(old_path):
+            return False
+        with open(old_path, "rb") as f_old, open(new_path, "rb") as f_new:
+            while True:
+                block = f_old.read(1 << 20)
+                if not block:
+                    break
+                if f_new.read(len(block)) != block:
+                    return False
+        os.remove(old_path)
+    except OSError:
+        return False
+    return True
+
+
 def _load_timeseries_csv(path: str) -> list[dict]:
     """Read m_timeseries CSV; return list of row dicts with numeric types."""
     if not os.path.isfile(path):
@@ -457,7 +484,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    mu = args.mu if args.mu is not None else 2.0 * args.epsilon
+    if args.mu is not None:
+        mu = args.mu
+    elif args.delta_mu == 0.0 and args.delta_f <= -15.0:
+        # Ising limit: exact coexistence -ln(e^{2|ε|} - e^{βΔf}) is 2ε to <1e-6.
+        mu = 2.0 * args.epsilon
+    else:
+        # μ = 2ε is NOT coexistence here (S1B ran 53 rounds at βΔf=0 this way,
+        # pinned in one phase at every L ≥ 32).  Make the caller choose.
+        raise SystemExit(
+            f"--mu is required for delta_f={args.delta_f}, delta_mu={args.delta_mu}: "
+            f"μ=2ε is coexistence only in the Ising limit (βΔf << 0, Δμ=0). "
+            f"Launch with smart_sweep.py sweep --mu-exact or --mu-source."
+        )
 
     params = {
         "epsilon": args.epsilon,
@@ -571,6 +610,13 @@ def main() -> None:
                     f"[{len(results)}/{num_parallel_runs}]",
                     flush=True,
                 )
+                # The new row now points at the full history; the file it
+                # resumed from is a redundant prefix of it.
+                if args.resume_dir and str(result.get("resume_id", "")).strip():
+                    _drop_superseded_timeseries(
+                        os.path.join(args.resume_dir, f"m_timeseries_{result['resume_id']}.csv"),
+                        os.path.join(outdir, f"m_timeseries_{result['id']}.csv"),
+                    )
 
         results.sort(key=lambda r: r["id"])
         summarize_replicas(results)

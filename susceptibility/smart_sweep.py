@@ -58,6 +58,27 @@ def _split_size_groups(sizes: list[int]) -> list[tuple[str, list[int]]]:
     """
     return [(f"L{s}", [s]) for s in sorted(sizes)]
 
+def _exact_mu_map(eps_values: list[float], delta_f: float, delta_mu: float) -> dict[float, float]:
+    """Exact equilibrium coexistence μ per ε: μ = -ln(e^{2|ε|} - e^{βΔf}).
+
+    Same closed form as coex_chemical_potential(..., DRIVEN=False).  It reduces
+    to μ = 2ε only in the Ising limit (βΔf ≪ 0); at βΔf = 0 it sits 0.03-0.04
+    above 2ε for ε in [-1.8, -1.6] — enough to pin L ≥ 32 in one phase.
+    """
+    if delta_mu != 0.0:
+        raise SystemExit(
+            f"--mu-exact is the equilibrium result and needs delta_mu=0 "
+            f"(got {delta_mu}); use --mu-source with measured μ_coex instead."
+        )
+    mu_map: dict[float, float] = {}
+    for eps in eps_values:
+        arg = math.exp(2.0 * abs(eps)) - math.exp(delta_f)
+        if arg <= 0.0:
+            raise SystemExit(f"No coexistence for ε={eps}, βΔf={delta_f}: e^(2|ε|) <= e^(βΔf).")
+        mu_map[eps] = -math.log(arg)
+    return mu_map
+
+
 # ---------------------------------------------------------------------------
 # Epsilon range helper (mirrors sweep_susceptibility.py)
 # ---------------------------------------------------------------------------
@@ -240,20 +261,44 @@ def do_sweep(args: argparse.Namespace) -> None:
         flush=True,
     )
 
-    if args.mu_source:
-        # Pre-fetch mu map and pass mu values per epsilon if available.
-        # (Falls through to runner default mu=2ε if manage CSV absent.)
-        try:
-            import csv as _csv
-            mu_map: dict[float, float] = {}
-            with open(args.mu_source, newline="") as f:
-                for row in _csv.DictReader(f):
-                    try:
-                        mu_map[float(row["epsilon"])] = float(row["mu_coex_FITTED"])
-                    except (KeyError, ValueError):
-                        pass
-        except FileNotFoundError:
-            mu_map = {}
+    if args.mu_exact and args.mu_source:
+        raise SystemExit("Pass either --mu-exact or --mu-source, not both.")
+    if args.mu_exact:
+        mu_map = _exact_mu_map(
+            eps_values,
+            # Runner default when --delta-f is omitted (Ising limit, βΔf = -20).
+            delta_f=float(args.delta_f) if args.delta_f != "" else -20.0,
+            delta_mu=float(args.delta_mu) if args.delta_mu != "" else 0.0,
+        )
+        for eps in eps_values:
+            print(f"[sweep] ε={eps:+.4f}  μ_coex(exact)={mu_map[eps]:+.6f}  "
+                  f"(2ε={2 * eps:+.4f})", flush=True)
+    elif args.mu_source:
+        # Only rows matching this campaign's physics, and every ε must be
+        # covered: silently falling back to the runner's μ = 2ε is how S1B ran
+        # 53 rounds off coexistence.
+        # sweep_susceptibility imports generate_samples from coex/, which is
+        # not on sys.path when `sweep` is run by hand from the repo root.
+        _coex = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "coex")
+        if _coex not in sys.path:
+            sys.path.insert(0, _coex)
+        from sweep_susceptibility import load_mu_map
+
+        by_eps = load_mu_map(
+            args.mu_source,
+            delta_f=args.delta_f or None,
+            delta_mu=args.delta_mu or None,
+            k=args.k or None,
+            scheme=args.scheme or None,
+        )
+        missing = [eps for eps in eps_values if round(eps, 6) not in by_eps]
+        if missing:
+            raise SystemExit(
+                f"{args.mu_source} has no mu_coex_FITTED matching this physics for "
+                f"{len(missing)} of {len(eps_values)} ε (first: {missing[:5]}). "
+                f"Refusing to fall back to μ = 2ε."
+            )
+        mu_map = {eps: by_eps[round(eps, 6)] for eps in eps_values}
     else:
         mu_map = {}
 
@@ -269,7 +314,7 @@ def do_sweep(args: argparse.Namespace) -> None:
 
     sweep_job_ids: list[str] = []
     for eps in eps_values:
-        mu_arg = str(mu_map.get(eps, "")) if mu_map else ""
+        mu_arg = f"{mu_map[eps]:.10g}" if eps in mu_map else ""
         for tag, sizes in _split_size_groups(SMART_L_VALUES):
             cmd = [
                 "sbatch", "--parsable",
@@ -471,6 +516,11 @@ def main() -> None:
                     help="Minimum avg jumps per (ε, L) pair (default: 10)")
     sp.add_argument("--mu-source", default=None,
                     help="manage.csv path for fitted μ values (optional)")
+    sp.add_argument("--mu-exact", action="store_true",
+                    help="Run each ε at the exact equilibrium coexistence "
+                         "μ = -ln(e^{2|ε|} - e^{βΔf}) (requires delta_mu=0). "
+                         "Without this or --mu-source the runner uses μ = 2ε, "
+                         "which is coexistence only in the Ising limit.")
     sp.add_argument("--delta-f", default="", help="δf override (empty = runner default)")
     sp.add_argument("--delta-mu", default="", help="δμ override (empty = runner default)")
     sp.add_argument("--k", default="", help="k override (empty = runner default)")

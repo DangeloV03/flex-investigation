@@ -393,3 +393,80 @@ def test_check_aborts_when_jump_data_stops_changing(tmp_path):
 
     moved = summary.assign(J_mean=[1.0])
     assert _check_stalled(base, _progress_fingerprint(moved)) == 0
+
+
+def test_exact_mu_map_matches_coex_formula():
+    """βΔf=0 coexistence sits above 2ε; Ising limit reduces to 2ε."""
+    import pytest
+    from smart_sweep import _exact_mu_map
+
+    m = _exact_mu_map([-1.8, -1.7, -1.6], delta_f=0.0, delta_mu=0.0)
+    # Values from coex_chemical_potential(..., DRIVEN=False) and manage.csv FLEX.
+    assert m[-1.8] == pytest.approx(-3.5723, abs=1e-4)
+    assert m[-1.7] == pytest.approx(-3.3661, abs=1e-4)
+    assert m[-1.6] == pytest.approx(-3.1584, abs=1e-4)
+    assert _exact_mu_map([-1.7], delta_f=-20.0, delta_mu=0.0)[-1.7] == pytest.approx(-3.4, abs=1e-6)
+
+
+def test_exact_mu_map_rejects_driven():
+    import pytest
+    from smart_sweep import _exact_mu_map
+
+    with pytest.raises(SystemExit):
+        _exact_mu_map([-1.7], delta_f=0.0, delta_mu=1.0)
+
+
+def test_mu_source_refuses_to_fall_back_to_2eps(tmp_path, monkeypatch):
+    """A manage CSV with no rows for this physics must abort, not use μ=2ε."""
+    import argparse
+    import csv
+    import pytest
+    from smart_sweep import do_sweep
+
+    src = tmp_path / "manage.csv"
+    with open(src, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["epsilon", "delta_f", "delta_mu", "k", "scheme", "mu_coex_FITTED"])
+        w.writeheader()
+        # Only an S1A (Ising) row: must not be used for βΔf=0, k=1.
+        w.writerow({"epsilon": "-1.7", "delta_f": "-20.0", "delta_mu": "0.0",
+                    "k": "0.0", "scheme": "homo", "mu_coex_FITTED": "-3.4"})
+    monkeypatch.chdir(tmp_path)
+    args = argparse.Namespace(
+        eps_min=-1.7, eps_max=-1.7, eps_step=0.005, results_base=str(tmp_path / "RUNS"),
+        sweep_script="sweep.sh", check_script="check.sh", threshold=10.0,
+        mu_source=str(src), mu_exact=False,
+        delta_f="0.0", delta_mu="0.0", k="1.0", scheme="homo", dry_run=True,
+    )
+    with pytest.raises(SystemExit, match="Refusing to fall back"):
+        do_sweep(args)
+
+
+def test_runner_requires_mu_outside_ising_limit(monkeypatch, tmp_path):
+    import pytest
+    import susceptibility_runner
+
+    monkeypatch.setattr(sys, "argv", [
+        "susceptibility_runner.py", "--epsilon", "-1.7", "--L", "16",
+        "--delta-f", "0.0", "--k", "1.0", "--outdir", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit, match="--mu is required"):
+        susceptibility_runner.main()
+
+
+def test_drop_superseded_timeseries_only_on_exact_prefix(tmp_path):
+    from susceptibility_runner import _drop_superseded_timeseries
+
+    old = tmp_path / "m_timeseries_0.csv"
+    new = tmp_path / "m_timeseries_16.csv"
+    new.write_text("chunk,m\n0,0.1\n1,0.2\n2,0.3\n")
+
+    old.write_text("chunk,m\n0,0.1\n1,0.9\n")          # diverges: keep
+    assert not _drop_superseded_timeseries(str(old), str(new))
+    assert old.exists()
+
+    old.write_text("chunk,m\n0,0.1\n1,0.2\n")          # true prefix: drop
+    assert _drop_superseded_timeseries(str(old), str(new))
+    assert not old.exists() and new.exists()
+
+    assert not _drop_superseded_timeseries(str(new), str(new))  # never self
+    assert new.exists()

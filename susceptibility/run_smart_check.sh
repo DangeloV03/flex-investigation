@@ -2,7 +2,7 @@
 #SBATCH --job-name=susc_check
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=2G
+#SBATCH --mem-per-cpu=16G
 #SBATCH --time=02:00:00
 #SBATCH --output=slurm_reports/%x_%j.out
 #SBATCH --error=slurm_reports/%x_%j.err
