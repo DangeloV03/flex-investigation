@@ -38,7 +38,7 @@ susceptibility_samples/
 results/
 susceptibility_results/
 coex_eq/
-homo/
+COEX_RUNS_*/
 plots/
 test_run_out/
 
