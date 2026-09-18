@@ -28,6 +28,9 @@ after the last check).
 
 Usage (from repo root):
     python susceptibility/plot_jump_report.py --results-base SUSC_RUNS_S1B_IMPROVED_MU
+
+    # only round 27 (each file is read only up to the chunks that round needs)
+    python susceptibility/plot_jump_report.py --results-base SUSC_RUNS_S1B_IMPROVED_MU --rounds 27
 """
 
 from __future__ import annotations
@@ -95,15 +98,15 @@ def _latest(rows: list[dict]) -> list[dict]:
 
 
 def load_groups_by_round(
-    results_base: str, cutoffs: dict[int, float]
+    results_base: str, cutoffs: dict[int, float], include_current: bool = True
 ) -> tuple[dict, int]:
     """{round or CURRENT: {(L, ε): {"replicas": [m arrays]}}} and #rows skipped.
 
-    Arrays for earlier rounds are views into the one loaded file per chain.
+    Each chain's file is read once, only up to the most chunks any requested
+    round needs; earlier rounds get views into it.
     """
-    labels = [*cutoffs, CURRENT]
+    labels: list = [*cutoffs, CURRENT] if include_current else [*cutoffs]
     groups: dict = {lab: {} for lab in labels}
-    cache: dict[str, np.ndarray] = {}
     n_skipped = 0
 
     csv_paths = find_susc_run_csvs(results_base)
@@ -128,30 +131,36 @@ def load_groups_by_round(
         finished = {str(r["id"]): _finished_at(run_dir, str(r["id"])) or float("inf")
                     for r in rows}
 
+        # (label, source file, chunks) per replica; 0 chunks = whole file
+        wanted: list[tuple] = []
         for lab in labels:
             if lab == CURRENT:
                 avail = rows
             else:
                 cut = cutoffs[lab]
                 avail = [r for r in rows if finished[str(r["id"])] <= cut]
-            reps: list[np.ndarray] = []
             for r in _latest(avail):
-                rid = str(r["id"])
-                src = _timeseries_source(run_dir, rid, children)
+                src = _timeseries_source(run_dir, str(r["id"]), children)
                 if src is None:
                     n_skipped += 1
                     continue
-                if src not in cache:
-                    try:
-                        cache[src] = pd.read_csv(src, usecols=["m"])["m"].to_numpy(dtype=float)
-                    except (ValueError, KeyError, OSError):
-                        cache[src] = np.empty(0)
-                n_chunks = int(float(r.get("prod_chunks", 0) or 0))
-                m_arr = cache[src][:n_chunks] if n_chunks > 0 else cache[src]
-                if m_arr.size > 0:
-                    reps.append(m_arr)
-            if reps:
-                groups[lab][(L, round(eps, 8))] = {"replicas": reps}
+                wanted.append((lab, src, int(float(r.get("prod_chunks", 0) or 0))))
+
+        need: dict[str, int | None] = {}
+        for _, src, n in wanted:
+            prev = need.get(src, 0)
+            need[src] = None if (n <= 0 or prev is None) else max(prev, n)
+        cache: dict[str, np.ndarray] = {}
+        for src, nrows in need.items():
+            try:
+                cache[src] = pd.read_csv(src, usecols=["m"], nrows=nrows)["m"].to_numpy(dtype=float)
+            except (ValueError, KeyError, OSError):
+                cache[src] = np.empty(0)
+
+        for lab, src, n in wanted:
+            m_arr = cache[src][:n] if n > 0 else cache[src]
+            if m_arr.size > 0:
+                groups[lab].setdefault((L, round(eps, 8)), {"replicas": []})["replicas"].append(m_arr)
     return groups, n_skipped
 
 
@@ -172,11 +181,23 @@ def main() -> int:
                    help="Pass threshold on ⟨J⟩ (default: 10)")
     p.add_argument("--outdir", default=None,
                    help="Output directory (default: <results-base>/jump_panels)")
+    p.add_argument("--rounds", nargs="+", default=None, metavar="N",
+                   help="Only these check rounds; add 'current' for the all-data figure "
+                        "(default: every round plus current)")
     args = p.parse_args()
 
     cutoffs = round_cutoffs(args.results_base)
     print(f"check rounds found: {list(cutoffs) or 'none'}")
-    groups, n_skipped = load_groups_by_round(args.results_base, cutoffs)
+    include_current = True
+    if args.rounds is not None:
+        include_current = CURRENT in args.rounds
+        req = {int(r) for r in args.rounds if r != CURRENT}
+        missing = sorted(req - set(cutoffs))
+        if missing:
+            print(f"no jump_check_round_N.png for rounds {missing}", file=sys.stderr)
+            return 1
+        cutoffs = {n: t for n, t in cutoffs.items() if n in req}
+    groups, n_skipped = load_groups_by_round(args.results_base, cutoffs, include_current)
     if n_skipped:
         print(f"warning: {n_skipped} (row, round) entries had no timeseries on disk; skipped",
               file=sys.stderr)
@@ -203,7 +224,8 @@ def main() -> int:
     if not tables:
         print(f"No jump data under {args.results_base}", file=sys.stderr)
         return 1
-    csv_path = os.path.join(outdir, "jump_summary_by_round.csv")
+    suffix = "" if args.rounds is None else "_" + "_".join(args.rounds)
+    csv_path = os.path.join(outdir, f"jump_summary_by_round{suffix}.csv")
     pd.concat(tables, ignore_index=True).to_csv(csv_path, index=False)
     print(f"wrote {csv_path}")
     return 0
