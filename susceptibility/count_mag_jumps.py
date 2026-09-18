@@ -149,7 +149,8 @@ def analyze_jumps(
 
     summary = (
         detail.groupby(["L", "epsilon"], as_index=False)
-        .agg(J_mean=("J", "mean"), J_std=("J", "std"), n_replicas=("J", "size"))
+        .agg(J_mean=("J", "mean"), J_std=("J", "std"), J_max=("J", "max"),
+             n_over_10=("J", lambda j: int((j > 10).sum())), n_replicas=("J", "size"))
     )
     summary["J_stderr"] = summary.apply(
         lambda r: r["J_std"] / np.sqrt(r["n_replicas"]) if r["n_replicas"] > 1 else float("nan"),
@@ -321,12 +322,14 @@ def compute_jump_summary(
     """Compute average jump count per (L, ε) from a SUSC_RUNS directory.
 
     Loads timeseries from the new-layout  SUSC_RUNS/*/_*/ path structure.
-    Returns DataFrame with columns: L, epsilon, J_mean, J_std, J_stderr, n_replicas.
+    Returns DataFrame with columns: L, epsilon, J_mean, J_std, J_max, n_over_10,
+    J_stderr, n_replicas  (n_over_10 = replicas with J > 10).
     Adds a boolean  passes  column (True if J_mean >= threshold).
     """
     groups = load_susc_runs_groups(results_base)
     _empty = pd.DataFrame({"L": pd.Series(dtype=int), "epsilon": pd.Series(dtype=float),
                            "J_mean": pd.Series(dtype=float), "J_std": pd.Series(dtype=float),
+                           "J_max": pd.Series(dtype=float), "n_over_10": pd.Series(dtype=int),
                            "J_stderr": pd.Series(dtype=float), "n_replicas": pd.Series(dtype=int),
                            "passes": pd.Series(dtype=bool)})
     if not groups:
