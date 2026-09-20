@@ -14,8 +14,9 @@
 #
 # Physics: scheme=negative_drive, flex-scheme=3, βΔf=0, k=1, Lx=10*Ly.
 #   C3A Δμ=+1   C3B Δμ=-1   C3C Δμ=+2   C3D Δμ=+3   C3E Δμ=+4
-# Sizes come from the host: Ly 16+20 without Slurm (workstation), Ly 40 with it
-# (Della). The scout runs at the smallest of those.
+# Refine sizes come from the host: Ly 16+20 without Slurm (workstation), Ly 40
+# with it (Della). The scout always runs at Ly=16 — it only has to centre a
+# 0.6-wide window, so there is no reason to pay for it at Ly=40.
 #
 # Why it can run unattended. coex/run_all.py exits by itself once the queue is
 # drained AND nothing is in flight; coex/analyzer.py has --once. The analyzer can
@@ -30,7 +31,8 @@
 #
 # Usage (repo root, after `source env.sh`):
 #   ./coex/run_c3_auto.sh reset --yes     # archive previous C3 runs, kill sessions
-#   ./coex/run_c3_auto.sh start           # all five, in a detached tmux session
+#   ./coex/run_c3_auto.sh scouts          # scouts only -> eps_c for all five
+#   ./coex/run_c3_auto.sh start           # full pipeline (scout + refine)
 #   ./coex/run_c3_auto.sh start C3A C3B   # just these
 #   ./coex/run_c3_auto.sh status          # progress + last log lines
 #   ./coex/run_c3_auto.sh stop            # halt the campaign
@@ -38,7 +40,7 @@
 #
 # reset ARCHIVES rather than deletes: COEX_RUNS_C3* move to .trash/<timestamp>/.
 #
-# Overrides: RESERVED_CORES= MAX_CONCURRENT= LYS= SCOUT_STEP= REFINE_HALF_WIDTH=
+# Overrides: RESERVED_CORES= MAX_CONCURRENT= LYS= SCOUT_LY= SCOUT_STEP= REFINE_HALF_WIDTH=
 
 set -euo pipefail
 
@@ -258,6 +260,12 @@ pipeline() {
     fi
     log "ε_c = $eps_c"
 
+    if [ "${SCOUTS_ONLY:-0}" = "1" ]; then
+      log "$exp scout done (scouts-only mode — no refine)"
+      echo
+      continue
+    fi
+
     # ---- refine on the production grid, clamped below the FLEX cutoff ----
     local emin emax
     emin="$(python -c "print(round($eps_c - $REFINE_HALF_WIDTH, 6))")"
@@ -297,7 +305,16 @@ pipeline() {
     echo
   done
 
-  log "CAMPAIGN COMPLETE: ${exps[*]}"
+  if [ "${SCOUTS_ONLY:-0}" = "1" ]; then
+    log "SCOUTS COMPLETE — ε_c per experiment:"
+    for exp in "${exps[@]}"; do
+      local c="COEX_RUNS_$exp/criticality/ly$scout_ly/criticality.csv"
+      printf '    %-4s %s\n' "$exp" "$(read_eps_c "$c" 2>/dev/null || true)"
+    done
+    log "Refine with: $0 start   (or per experiment: $0 start C3A)"
+  else
+    log "CAMPAIGN COMPLETE: ${exps[*]}"
+  fi
 }
 
 # ------------------------------------------------------------------- commands
@@ -344,8 +361,12 @@ cmd_start() {
   local setup="module load anaconda3/2024.10 2>/dev/null; source \"\$(conda info --base)/etc/profile.d/conda.sh\"; conda activate lattice; export LD_LIBRARY_PATH=\"\${CONDA_PREFIX}/lib:\${LD_LIBRARY_PATH:-}\"; export PYTHONPATH=\"$PROJECT_DIR/coex:$PROJECT_DIR/susceptibility:$PROJECT_DIR\"; export PYTHONUNBUFFERED=1"
   tmux new-session -d -s "$SESSION" -c "$PROJECT_DIR"
   tmux send-keys -t "$SESSION" \
-    "${setup}; ./coex/run_c3_auto.sh _pipeline ${exps[*]} 2>&1 | tee -a '$logf'" C-m
-  echo "Started '$SESSION' on $(hostname -s): ${exps[*]}"
+    "${setup}; SCOUTS_ONLY=${SCOUTS_ONLY:-0} ./coex/run_c3_auto.sh _pipeline ${exps[*]} 2>&1 | tee -a '$logf'" C-m
+  if [ "${SCOUTS_ONLY:-0}" = "1" ]; then
+    echo "Started '$SESSION' on $(hostname -s): SCOUTS ONLY for ${exps[*]}"
+  else
+    echo "Started '$SESSION' on $(hostname -s): ${exps[*]}"
+  fi
   echo "  log:    tail -f $logf"
   echo "  attach: tmux attach -t $SESSION   (Ctrl-b d to detach)"
   echo "  stop:   $0 stop"
@@ -403,11 +424,12 @@ shift || true
 case "$CMD" in
   reset)     cmd_reset "$@" ;;
   start)     cmd_start "$@" ;;
+  scouts)    SCOUTS_ONLY=1 cmd_start "$@" ;;
   status)    cmd_status ;;
   stop)      cmd_stop ;;
   _pipeline) pipeline "$@" ;;   # internal: runs inside tmux
   *)
-    echo "usage: $0 <reset [--yes]|start [EXP ...]|status|stop>"
+    echo "usage: $0 <reset [--yes]|scouts [EXP ...]|start [EXP ...]|status|stop>"
     exit 1
     ;;
 esac
