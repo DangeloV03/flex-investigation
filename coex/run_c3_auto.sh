@@ -212,7 +212,12 @@ pipeline() {
   local lys budget scout_ly
   # shellcheck disable=SC2206
   lys=($(target_lys))
-  scout_ly="${lys[0]}"
+  # The scout only locates ε_c well enough to CENTRE a 0.6-wide refine window,
+  # so it always runs at the cheap size — even on Della, where the refine is
+  # Ly=40 and scouting there would cost ~6x the sites for the same number.
+  # Finite-size drift in ε_c between L=16 and L=40 is far inside ±0.3, and C2A
+  # set its window for Ly 16/20/40 from the Ly=16 measurement the same way.
+  scout_ly="${SCOUT_LY:-16}"
   budget="$(total_budget)"
 
   log "host=$(hostname -s)  slurm=$(has_slurm && echo yes || echo no)  cores=$(core_count)"
@@ -347,16 +352,28 @@ cmd_start() {
 }
 
 cmd_status() {
-  local lys; lys=($(target_lys))
+  local lys scout_ly shown
+  # shellcheck disable=SC2206
+  lys=($(target_lys))
+  scout_ly="${SCOUT_LY:-16}"
+  # The scout size is not always one of the refine sizes (on Della it is not),
+  # so show it alongside them.
+  shown=("$scout_ly")
+  for ly in "${lys[@]}"; do
+    [ "$ly" = "$scout_ly" ] || shown+=("$ly")
+  done
   for e in "${ALL_EXPS[@]}"; do
     [ -d "COEX_RUNS_$e" ] || continue
     echo "== $e =="
-    for ly in "${lys[@]}"; do
+    for ly in "${shown[@]}"; do
       [ -d "COEX_RUNS_$e/ly$ly" ] || continue
       read -r p i a t <<<"$(phase_state "COEX_RUNS_$e/ly$ly")"
-      printf "  Ly=%-3s pending=%-6s in_flight=%-4s analyzed=%s/%s\n" "$ly" "$p" "$i" "$a" "$t"
+      local tag="refine"
+      [ "$ly" = "$scout_ly" ] && tag="scout/refine"
+      printf "  Ly=%-3s %-13s pending=%-6s in_flight=%-4s analyzed=%s/%s\n" \
+        "$ly" "$tag" "$p" "$i" "$a" "$t"
     done
-    local c="COEX_RUNS_$e/criticality/ly${lys[0]}/criticality.csv"
+    local c="COEX_RUNS_$e/criticality/ly$scout_ly/criticality.csv"
     if [ -f "$c" ]; then
       echo "  ε_c(scout) = $(read_eps_c "$c")"
     fi
