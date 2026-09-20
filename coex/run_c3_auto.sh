@@ -40,7 +40,8 @@
 #
 # reset ARCHIVES rather than deletes: COEX_RUNS_C3* move to .trash/<timestamp>/.
 #
-# Overrides: RESERVED_CORES= MAX_CONCURRENT= LYS= SCOUT_LY= SCOUT_STEP= REFINE_HALF_WIDTH=
+# Overrides: RESERVED_CORES= MAX_CONCURRENT= DISPATCH_INTERVAL= LYS= SCOUT_LY=
+#            SCOUT_STEP= REFINE_HALF_WIDTH=
 
 set -euo pipefail
 
@@ -63,6 +64,11 @@ REFINE_HALF_WIDTH="${REFINE_HALF_WIDTH:-0.3}"
 REFINE_STEP=0.005          # production susceptibility grid (sweep_susceptibility.py)
 REPLICAS_PER_JOB=8         # json_runner.py forks this many per job
 RESERVED_CORES="${RESERVED_CORES:-4}"
+# run_all.py polls every POLL_INTERVAL=30s by default. A coex job here is only
+# ~8s of compute, so with the stock interval the box sat ~93% idle: measured
+# 1.6 of 24 cores busy, bursts of r=16 for ~8s then ~22s of nothing. Refill
+# promptly instead.
+DISPATCH_INTERVAL="${DISPATCH_INTERVAL:-3}"
 SLURM_MAX_CONCURRENT=30
 MAX_PHASE_ROUNDS=40        # dispatch/analyze rounds before calling a phase stuck
 
@@ -143,6 +149,7 @@ drive_phase() {
       return 1
     fi
     python -u coex/run_all.py --manifest "$base/queue.json" --max-concurrent "$mc" \
+      --interval "$DISPATCH_INTERVAL" \
       || { log "  !! $label: dispatcher failed"; return 1; }
     python -u coex/analyzer.py --results "$base/results" --manage "$base/manage.csv" \
       --samples "$base/samples" --manifest "$base/queue.json" --once \
