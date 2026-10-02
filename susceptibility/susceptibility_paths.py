@@ -27,7 +27,11 @@ SUSC_RUNS_BASE = "SUSC_RUNS"
 PROD_RESULTS_BASE = SUSC_RUNS_BASE
 
 # Scheme name → integer code used in SUSC_RUNS directory names.
-SCHEME_CODES: dict[str, int] = {"homo": 1, "positive": 2, "negative": 3}
+SCHEME_CODES: dict[str, int] = {
+    "homo": 1,
+    "positive": 2, "positive_drive": 2,
+    "negative": 3, "negative_drive": 3,
+}
 
 # Pre-SEM schema (smoke tests / early prod); current adds *_err columns after each moment/chi.
 SUSCEPTIBILITY_CSV_FIELDS_LEGACY = [
