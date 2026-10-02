@@ -283,6 +283,16 @@ def do_sweep(args: argparse.Namespace) -> None:
     if not eps_values:
         raise SystemExit("No epsilon values generated; check --eps-min/max/step.")
 
+    if args.skip_eps:
+        skip = {round(e, 6) for e in args.skip_eps}
+        unused = sorted(skip - {round(e, 6) for e in eps_values})
+        if unused:
+            raise SystemExit(f"--skip-eps values not on the ε grid: {unused}")
+        eps_values = [e for e in eps_values if round(e, 6) not in skip]
+        print(f"[sweep] Skipping {len(skip)} ε: {sorted(skip)}", flush=True)
+        if not eps_values:
+            raise SystemExit("--skip-eps removed every ε.")
+
     results_base = args.results_base
     os.makedirs(results_base, exist_ok=True)
     os.makedirs("slurm_reports", exist_ok=True)
@@ -557,6 +567,9 @@ def main() -> None:
                          "μ = -ln(e^{2|ε|} - e^{βΔf}) (requires delta_mu=0). "
                          "Without this or --mu-source the runner uses μ = 2ε, "
                          "which is coexistence only in the Ising limit.")
+    sp.add_argument("--skip-eps", type=float, nargs="+", default=[],
+                    help="ε values to leave out of the grid (e.g. ones whose "
+                         "--mu-source fit is missing or bad)")
     sp.add_argument("--delta-f", default="", help="δf override (empty = runner default)")
     sp.add_argument("--delta-mu", default="", help="δμ override (empty = runner default)")
     sp.add_argument("--k", default="", help="k override (empty = runner default)")

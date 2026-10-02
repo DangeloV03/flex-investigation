@@ -434,7 +434,7 @@ def test_mu_source_refuses_to_fall_back_to_2eps(tmp_path, monkeypatch):
     args = argparse.Namespace(
         eps_min=-1.7, eps_max=-1.7, eps_step=0.005, results_base=str(tmp_path / "RUNS"),
         sweep_script="sweep.sh", check_script="check.sh", threshold=10.0,
-        mu_source=str(src), mu_exact=False,
+        mu_source=str(src), mu_exact=False, skip_eps=[],
         delta_f="0.0", delta_mu="0.0", k="1.0", scheme="homo", dry_run=True,
     )
     with pytest.raises(SystemExit, match="Refusing to fall back"):
