@@ -40,11 +40,14 @@ EXTRA_ARGS=()
 [[ -n "$DELTA_MU" ]] && EXTRA_ARGS+=(--delta-mu "$DELTA_MU")
 [[ -n "$K_ARG"    ]] && EXTRA_ARGS+=(--k "$K_ARG")
 [[ -n "$SCHEME"   ]] && EXTRA_ARGS+=(--scheme "$SCHEME")
+# Opt-in: CHECKPOINT_EVERY=N saves each replica every N chunks so a job killed at the
+# wall continues from there when re-run (default off; see susceptibility_runner.py).
+[[ -n "${CHECKPOINT_EVERY:-}" ]] && EXTRA_ARGS+=(--checkpoint-every "$CHECKPOINT_EVERY")
 
-# 1M eq + 1M prod; chunk_time = 100 (same cadence as standard runner).
+# 1M eq + 2M prod; chunk_time = 100 (same cadence as standard runner), so 2x the samples.
 EQ_TIME=1000000.0
-PROD_TIME=1000000.0
-PROD_CHUNKS=10000
+PROD_TIME=2000000.0
+PROD_CHUNKS=20000
 SEED_BASE=7000
 INITIAL_FRACTION=0.8
 

@@ -267,7 +267,16 @@ def submit_up_to_cap(
             mark_in_flight(job_id, json_path)
             local_jobs[job_id] = proc
         else:
-            job_id = submit_slurm_job(staged_path, python, config_path)
+            try:
+                job_id = submit_slurm_job(staged_path, python, config_path)
+            except Exception as exc:
+                # sbatch hung/failed (controller busy). The canonical JSON is
+                # untouched (staging is a copy), so put the job back and retry
+                # next cycle instead of crashing the dispatcher and losing it.
+                print(f"[run_all] sbatch failed ({exc!r}); re-queuing {json_path}")
+                cleanup_job_staging(json_path)
+                requeue_front(json_path)
+                break
             mark_in_flight(job_id, json_path)
 
         print(f"[run_all] Submitted job {job_id}: {json_path} (staged: {staged_path})")

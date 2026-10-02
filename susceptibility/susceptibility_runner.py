@@ -18,6 +18,12 @@ Outputs (per job directory):
   - m_timeseries_{id}.png         — not written (CSV only, to save disk)
   - final_lattice_{id}.npy        — final lattice snapshot
 
+Optional checkpointing (--checkpoint-every N, off by default): every N chunks each
+replica atomically writes ckpt_{id}.npz (lattice + chunk history so far).  If the
+job is killed at the Slurm wall, re-running the same command picks up those
+orphaned checkpoints (ids with no row in susceptibility_data.csv) and continues
+from them; a checkpoint is deleted once its replica's row has been written.
+
 Re-running the same (ε, L) appends new replicas to susceptibility_data.csv
 (run IDs continue from the max existing ID); it never overwrites.
 
@@ -242,6 +248,67 @@ def _load_timeseries_csv(path: str) -> list[dict]:
     return rows
 
 
+def _ckpt_path(outdir: str, run_id: int) -> str:
+    return os.path.join(outdir, f"ckpt_{run_id}.npz")
+
+
+def _write_checkpoint(
+    path: str,
+    state: np.ndarray,
+    chunks: list[dict],
+    cumulative_time: float,
+    resume_id: int | None,
+) -> None:
+    """Atomically write lattice + chunk history so a kill leaves the old file intact."""
+    cols = {c: np.asarray([r[c] for r in chunks], dtype=float) for c in TIMESERIES_FIELDNAMES}
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        np.savez(
+            f,
+            state=state,
+            cumulative_time=float(cumulative_time),
+            resume_id=-1 if resume_id is None else int(resume_id),
+            **cols,
+        )
+    os.replace(tmp, path)
+
+
+def _load_checkpoint(path: str) -> dict | None:
+    """Return {state, chunks, cumulative_time, resume_id} or None if unreadable."""
+    try:
+        with np.load(path) as z:
+            n = len(z["chunk"])
+            chunks = [
+                {"chunk": int(z["chunk"][i]),
+                 **{c: float(z[c][i]) for c in TIMESERIES_FIELDNAMES if c != "chunk"}}
+                for i in range(n)
+            ]
+            rid = int(z["resume_id"])
+            return {
+                "state": z["state"],
+                "chunks": chunks,
+                "cumulative_time": float(z["cumulative_time"]),
+                "resume_id": None if rid < 0 else rid,
+            }
+    except Exception as exc:  # corrupt/partial file: fall back to a fresh run
+        print(f"[susceptibility_runner] ignoring unreadable checkpoint {path}: {exc}", flush=True)
+        return None
+
+
+def _orphan_checkpoint_ids(outdir: str, done_ids: set[int]) -> list[int]:
+    """Run ids with a checkpoint on disk but no row in the CSV (killed mid-run)."""
+    ids = []
+    for name in os.listdir(outdir):
+        if name.startswith("ckpt_") and name.endswith(".npz"):
+            try:
+                rid = int(name[len("ckpt_"):-len(".npz")])
+            except ValueError:
+                continue
+            if rid not in done_ids:
+                ids.append(rid)
+    return sorted(ids)
+
+
 def run_replica(args: tuple) -> dict:
     (
         replica_id,
@@ -274,6 +341,18 @@ def run_replica(args: tuple) -> dict:
     resume_id: int | None = run_settings.get("resume_id")
     prior_prod_time: float = float(run_settings.get("prior_prod_time", 0.0))
     prior_wall_time: float = float(run_settings.get("prior_wall_time", 0.0))
+    ckpt_every = int(run_settings.get("checkpoint_every", 0) or 0)
+    ckpt_file = _ckpt_path(outdir, run_id)
+    ckpt = _load_checkpoint(ckpt_file) if ckpt_every > 0 and os.path.isfile(ckpt_file) else None
+    if ckpt is not None and (
+        ckpt["resume_id"] != resume_id or ckpt["state"].shape != (Lx, Ly)
+    ):
+        print(
+            f"[susceptibility_runner] replica={replica_id} checkpoint {ckpt_file} does not "
+            f"match this run (resume_id/shape); starting fresh",
+            flush=True,
+        )
+        ckpt = None
 
     inert_fugacity = np.exp(beta * (mu + delta_f))
     bonding_fugacity = np.exp(beta * mu)
@@ -303,6 +382,15 @@ def run_replica(args: tuple) -> dict:
             flush=True,
         )
         eq_time = 0.0
+    elif ckpt is not None:
+        # Killed mid-run earlier: lattice + chunk history come from the checkpoint.
+        state = ckpt["state"]
+        prior_chunks = []
+        print(
+            f"[susceptibility_runner] replica={replica_id} run_id={run_id} "
+            f"CHECKPOINT resume at chunk {len(ckpt['chunks'])}/{n_chunks}",
+            flush=True,
+        )
     else:
         state = build_initial_state(Lx, Ly, initial_fraction, seed)
         prior_chunks = []
@@ -314,13 +402,19 @@ def run_replica(args: tuple) -> dict:
         simulate(state, boundary, chain, [], [Time(eq_time)], seed, scratch_dir)
         state = load.final_state(scratch_dir)
         print(f"[susceptibility_runner] replica={replica_id} equilibration done", flush=True)
+        if ckpt_every > 0:
+            _write_checkpoint(ckpt_file, state, [], 0.0, resume_id)
 
     chunk_time = prod_time / n_chunks
     new_chunk_records: list[dict] = []
     cumulative_time = 0.0
     chunk_offset = len(prior_chunks)  # so new chunk indices continue from prior
+    if ckpt is not None:
+        state = ckpt["state"]
+        new_chunk_records = ckpt["chunks"]
+        cumulative_time = ckpt["cumulative_time"]
 
-    for chunk_idx in range(n_chunks):
+    for chunk_idx in range(len(new_chunk_records), n_chunks):
         chunk_seed = seed + 1 + chunk_idx
         simulate(state, boundary, chain, [], [Time(chunk_time)], chunk_seed, scratch_dir)
         state = load.final_state(scratch_dir)
@@ -343,6 +437,8 @@ def run_replica(args: tuple) -> dict:
             f"rho_B={rho_B:.4f} rho_I={rho_I:.6f} rho_E={rho_E:.4f} m={m_t:.4f} e={e_t:.2f} t={cumulative_time:.1f}",
             flush=True,
         )
+        if ckpt_every > 0 and (chunk_idx + 1) % ckpt_every == 0 and chunk_idx + 1 < n_chunks:
+            _write_checkpoint(ckpt_file, state, new_chunk_records, cumulative_time, resume_id)
 
     # Combine prior + new for statistics and saved timeseries.
     all_chunks = prior_chunks + new_chunk_records
@@ -450,6 +546,16 @@ def main() -> None:
     parser.add_argument("--prod-chunks", type=int, default=2000)
     parser.add_argument("--seed-base", type=int, default=7000)
     parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=0,
+        help=(
+            "Every N production chunks, atomically save ckpt_<id>.npz (lattice + chunk "
+            "history) so a job killed at the Slurm wall can continue where it stopped "
+            "when the same command is re-run. 0 (default) disables checkpointing."
+        ),
+    )
+    parser.add_argument(
         "--initial-fraction",
         type=float,
         default=0.8,
@@ -518,6 +624,7 @@ def main() -> None:
         "prod_time": args.prod_time,
         "prod_chunks": args.prod_chunks,
         "initial_fraction": args.initial_fraction,
+        "checkpoint_every": args.checkpoint_every,
     }
 
     num_parallel_runs = run_settings["num_parallel_runs"]
@@ -575,15 +682,32 @@ def main() -> None:
 
     for batch_idx in range(num_batches):
         next_id = get_next_id(csv_path)
+        # Replicas killed mid-run left ckpt_<id>.npz without a CSV row: re-adopt those
+        # ids first (same id -> same seed and checkpoint) so their work is not lost.
+        orphan_ids: list[int] = []
+        if args.checkpoint_every > 0 and resume_ids is None:
+            done_ids = {
+                int(r["id"]) for r in read_susceptibility_csv(csv_path)
+                if str(r.get("id", "")).strip()
+            }
+            orphan_ids = _orphan_checkpoint_ids(outdir, done_ids)[:num_parallel_runs]
+            if orphan_ids:
+                next_id = max(next_id, max(orphan_ids) + 1)
+                print(
+                    f"[susceptibility_runner] resuming {len(orphan_ids)} checkpointed "
+                    f"replicas: ids={orphan_ids}",
+                    flush=True,
+                )
+        slot_run_ids = orphan_ids + list(range(next_id, next_id + num_parallel_runs - len(orphan_ids)))
         print(
             f"[susceptibility_runner] batch {batch_idx + 1}/{num_batches}: "
-            f"run_ids {next_id}–{next_id + num_parallel_runs - 1}",
+            f"run_ids {slot_run_ids}",
             flush=True,
         )
 
         tasks = []
         for slot_idx in range(num_parallel_runs):
-            run_id = next_id + slot_idx
+            run_id = slot_run_ids[slot_idx]
             seed = seed_base + run_id * 2
             task_settings = dict(run_settings)
             if resume_ids is not None:
@@ -604,6 +728,10 @@ def main() -> None:
             for result in pool.imap_unordered(run_replica, tasks):
                 append_to_csv(csv_path, [result])
                 results.append(result)
+                try:
+                    os.remove(_ckpt_path(outdir, result["id"]))
+                except OSError:
+                    pass
                 print(
                     f"[susceptibility_runner] replica {result['replica_id']} "
                     f"(id={result['id']}) written to {csv_path} "

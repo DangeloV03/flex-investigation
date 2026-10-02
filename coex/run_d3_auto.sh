@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
-# Experiments C3A–C3E, unattended. One command, no babysitting.
+# Experiments D3A–D3E (positive_drive, βΔf=0, k=1), unattended, Ly=16 on Della.
 #
-# Runs the whole pipeline for each experiment in turn:
+# For each experiment, with no human between steps:
 #
-#   scout (coarse, smallest Ly)  ->  criticality  ->  ε_c
-#                                                      |
-#   criticality + FSS  <-  refine (ε_c ± 0.3, all Ly) <+
+#   scout (Ly=16, ε ∈ [-3.0,-0.6] step 0.05) -> criticality -> ε_c
+#                                                              |
+#   criticality  <-  refine (Ly=16, ε_c ± 0.3 step 0.005)  <---+
 #
-# and then moves to the next experiment. Nothing here needs a human between
-# steps, and nothing needs the other machine: each host derives its own ε_c from
-# its own scout, so the workstation and Della run the identical command with no
-# handoff. Same physics as ./coex/run_c3_coex_campaign.sh — this just drives it.
+# The five experiments run as five independent pipelines in parallel (one tmux
+# session each, d3-auto-D3A .. D3E), each capped at 30 concurrent Slurm jobs, so
+# the whole set finishes together. Same physics and file layout as
+# ./coex/run_d3_coex_campaign.sh; this just drives it.
 #
-# Physics: scheme=negative_drive, flex-scheme=3, βΔf=0, k=1, Lx=10*Ly.
-#   C3A Δμ=+1   C3B Δμ=-1   C3C Δμ=+2   C3D Δμ=+3   C3E Δμ=+4
-# Refine sizes come from the host: Ly 16+20 without Slurm (workstation), Ly 40
-# with it (Della). The scout always runs at Ly=16 — it only has to centre a
-# 0.6-wide window, so there is no reason to pay for it at Ly=40.
+# Physics: scheme=positive_drive, flex-scheme=2, βΔf=0, k=1, Lx=10*Ly.
+#   D3A Δμ=+1   D3B Δμ=-1   D3C Δμ=+2   D3D Δμ=+3   D3E Δμ=+4
+# Sizes: Ly=16 only (LYS="16 20 40" would add more; the sheet's 20/40 rows come later).
 #
 # Why it can run unattended. coex/run_all.py exits by itself once the queue is
 # drained AND nothing is in flight; coex/analyzer.py has --once. The analyzer can
@@ -25,35 +23,31 @@
 # terminates because the analyzer allows at most MAX_ADDITIONAL_REQUESTS=10
 # extensions per combo before writing NaN.
 #
-# Cores are budgeted ONCE for the whole campaign and experiments run strictly one
-# at a time, so there is no way to oversubscribe the workstation by launching
-# several sessions — the failure mode of driving run_c3_coex_campaign.sh by hand.
+# If the scout yields no usable ε_c (criticality fit fails), the refine does NOT
+# stop: it falls back to FALLBACK_EPS_C (default -1.705, the measured homo k=1
+# Δμ=1 value) and logs that loudly, so there is still Ly=16 data at morning.
 #
 # Usage (repo root, after `source env.sh`):
-#   ./coex/run_c3_auto.sh reset --yes     # archive previous C3 runs, kill sessions
-#   ./coex/run_c3_auto.sh scouts          # scouts only -> eps_c for all five
-#   ./coex/run_c3_auto.sh start           # full pipeline (scout + refine)
-#   ./coex/run_c3_auto.sh start C3A C3B   # just these
-#   ./coex/run_c3_auto.sh status          # progress + last log lines
-#   ./coex/run_c3_auto.sh stop            # halt the campaign
-#   tail -f logs/c3_auto_*.log            # watch it work
+#   ./coex/run_d3_auto.sh start [EXP ...]   # all five, or just those named
+#   ./coex/run_d3_auto.sh status            # progress + last log lines
+#   ./coex/run_d3_auto.sh stop [EXP ...]    # halt
+#   ./coex/run_d3_auto.sh reset --yes       # archive COEX_RUNS_D3* to .trash/, kill sessions
+#   tail -f logs/d3_auto_<EXP>_*.log
 #
-# reset ARCHIVES rather than deletes: COEX_RUNS_C3* move to .trash/<timestamp>/.
-#
-# Overrides: RESERVED_CORES= MAX_CONCURRENT= DISPATCH_INTERVAL= LYS= SCOUT_LY=
-#            SCOUT_STEP= REFINE_HALF_WIDTH=
+# Overrides: MAX_CONCURRENT= DISPATCH_INTERVAL= LYS= SCOUT_LY= SCOUT_STEP=
+#            REFINE_HALF_WIDTH= FALLBACK_EPS_C=
 
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-ALL_EXPS=(C3A C3B C3C C3D C3E)
-SESSION=c3-auto
+ALL_EXPS=(D3A D3B D3C D3D D3E)
+SESSION_PREFIX=d3-auto   # one tmux session per experiment: d3-auto-D3A, ...
 LOG_DIR="$PROJECT_DIR/logs"
 
-SCHEME=negative_drive
-FLEX_SCHEME=3
+SCHEME=positive_drive
+FLEX_SCHEME=2
 DELTA_F=0.0
 K=1.0
 MU_WINDOW=0.05
@@ -70,27 +64,27 @@ RESERVED_CORES="${RESERVED_CORES:-4}"
 # promptly instead.
 DISPATCH_INTERVAL="${DISPATCH_INTERVAL:-3}"
 SLURM_MAX_CONCURRENT=30
+FALLBACK_EPS_C="${FALLBACK_EPS_C:--1.705}"
 MAX_PHASE_ROUNDS=40        # dispatch/analyze rounds before calling a phase stuck
 
 has_slurm() { command -v sbatch >/dev/null 2>&1; }
 
 # Per-experiment Δμ, scout window, and the ε at/above which the generator skips
-# (μ_coex_FLEX > 0). See run_c3_coex_campaign.sh for the derivation.
+# (μ_coex_FLEX > 0). See run_d3_coex_campaign.sh for the derivation.
 exp_params() {
   case "$1" in
-    C3A) DELTA_MU=1.0;  SCOUT_MIN=-2.60; SCOUT_MAX=-0.70; FLEX_CUTOFF=-0.655 ;;
-    C3B) DELTA_MU=-1.0; SCOUT_MIN=-2.80; SCOUT_MAX=-1.00; FLEX_CUTOFF= ;;
-    C3C) DELTA_MU=2.0;  SCOUT_MIN=-3.00; SCOUT_MAX=-1.10; FLEX_CUTOFF=-1.060 ;;
-    C3D) DELTA_MU=3.0;  SCOUT_MIN=-3.50; SCOUT_MAX=-1.55; FLEX_CUTOFF=-1.520 ;;
-    C3E) DELTA_MU=4.0;  SCOUT_MIN=-4.00; SCOUT_MAX=-2.05; FLEX_CUTOFF=-2.005 ;;
+    D3A) DELTA_MU=1.0;  SCOUT_MIN=-3.00; SCOUT_MAX=-0.60; FLEX_CUTOFF=-0.470 ;;
+    D3B) DELTA_MU=-1.0; SCOUT_MIN=-3.00; SCOUT_MAX=-0.60; FLEX_CUTOFF=-0.155 ;;
+    D3C) DELTA_MU=2.0;  SCOUT_MIN=-3.00; SCOUT_MAX=-0.60; FLEX_CUTOFF=-0.520 ;;
+    D3D) DELTA_MU=3.0;  SCOUT_MIN=-3.00; SCOUT_MAX=-0.60; FLEX_CUTOFF=-0.535 ;;
+    D3E) DELTA_MU=4.0;  SCOUT_MIN=-3.00; SCOUT_MAX=-0.60; FLEX_CUTOFF=-0.545 ;;
     *) echo "Unknown experiment '$1'" >&2; return 1 ;;
   esac
 }
 
 target_lys() {
   if [ -n "${LYS:-}" ]; then echo "$LYS"
-  elif has_slurm; then echo "40"
-  else echo "16 20"; fi
+  else echo "16"; fi
 }
 
 core_count() {
@@ -137,16 +131,22 @@ print(pending, inflight, analyzed, total)
 PY
 }
 
-# Alternate dispatch and analyze until the queue stays empty and nothing new
-# gets analyzed. The analyzer re-enqueues μ extensions, so one pass is not enough.
+# A hung sbatch (busy controller) blocked one dispatcher for 5+ minutes on the
+# first night's launch. Wrap sbatch in a timeout so a hang becomes a failure that
+# run_all.py re-queues, rather than a stall.
+install_sbatch_shim() {
+  has_slurm || return 0
+  local real; real="$(command -v sbatch)"
+  mkdir -p "$PROJECT_DIR/.shims"
+  printf '#!/bin/sh\nexec timeout 180 %s "$@"\n' "$real" > "$PROJECT_DIR/.shims/sbatch.$$"
+  chmod +x "$PROJECT_DIR/.shims/sbatch.$$"
+  mv -f "$PROJECT_DIR/.shims/sbatch.$$" "$PROJECT_DIR/.shims/sbatch"
+  export PATH="$PROJECT_DIR/.shims:$PATH"
+}
+
 # Unfinished samples/*.json (finished ones are archived to samples/done/) that
-# are in neither pending nor in_flight were dropped by an external kill or a
-# failed submit: re-queue. Only call between run_all.py invocations, never
-# while one is active. A killed run_all.py also leaves a phantom in_flight
-# entry with no live process behind it (local mode has no PID to reconcile
-# against on the next start), so clear in_flight outright too — safe here
-# because drive_phase never runs two run_all.py instances against the same
-# queue.json concurrently.
+# are in neither pending nor in_flight were dropped by a failed submit: re-queue.
+# Only call between dispatcher runs, never while one is active.
 recover_orphans() {
   python - "$1" <<'PY'
 import json, os, sys
@@ -158,20 +158,20 @@ sdir = os.path.join(base, "samples")
 if not (os.path.isfile(qpath) and os.path.isdir(sdir)):
     raise SystemExit(0)
 m = json.load(open(qpath))
-stale_in_flight = list(m.get("in_flight", {}).values())
 known = {os.path.basename(p) for p in m.get("pending", [])}
+known |= {os.path.basename(p) for p in m.get("in_flight", {}).values()}
 orphans = [os.path.join(sdir, f) for f in sorted(os.listdir(sdir))
            if f.endswith(".json") and f not in known]
-if m.get("in_flight"):
-    m["in_flight"] = {}
-    json.dump(m, open(qpath, "w"), indent=2)
-    print(f"  cleared {len(stale_in_flight)} stale in_flight entry/entries in {qpath}")
 if orphans:
     qm.merge_pending(orphans, path=qpath)
     print(f"  recovered {len(orphans)} orphaned job(s) into {qpath}")
 PY
 }
 
+# Alternate dispatch and analyze until the queue stays empty and nothing new
+# gets analyzed. The analyzer re-enqueues μ extensions, so one pass is not enough.
+# A failed dispatcher/analyzer is retried (transient Slurm trouble), not treated
+# as "phase finished": moving on with a half-run scout gave a bogus ε_c.
 drive_phase() {
   local base="$1" mc="$2" label="$3"
   local round=0 prev_analyzed=-1 fails=0
@@ -182,10 +182,7 @@ drive_phase() {
       return 1
     fi
     recover_orphans "$base" || true
-    if ! python -u coex/run_all.py --manifest "$base/queue.json" --max-concurrent "$mc" \
-         --interval "$DISPATCH_INTERVAL" \
-       || ! python -u coex/analyzer.py --results "$base/results" --manage "$base/manage.csv" \
-         --samples "$base/samples" --manifest "$base/queue.json" --once; then
+    if ! python -u coex/run_all.py --manifest "$base/queue.json" --max-concurrent "$mc"          --interval "$DISPATCH_INTERVAL"        || ! python -u coex/analyzer.py --results "$base/results" --manage "$base/manage.csv"          --samples "$base/samples" --manifest "$base/queue.json" --once; then
       fails=$((fails + 1))
       if [ "$fails" -gt 30 ]; then
         log "  !! $label: dispatcher/analyzer failed $fails times — giving up"
@@ -231,7 +228,7 @@ gen_grid() {
 
 run_criticality() {
   local exp="$1"; shift
-  ./coex/run_c3_criticality.sh "$exp" "$@"
+  ./coex/run_d3_criticality.sh "$exp" "$@"
 }
 
 # epsilon_c_estimate from a criticality.csv, by column name. Empty if unusable.
@@ -271,6 +268,7 @@ pipeline() {
   scout_ly="${SCOUT_LY:-16}"
   budget="$(total_budget)"
 
+  install_sbatch_shim
   log "host=$(hostname -s)  slurm=$(has_slurm && echo yes || echo no)  cores=$(core_count)"
   log "target Ly: ${lys[*]}   scout Ly: $scout_ly   budget: $budget concurrent jobs"
   log "experiments: ${exps[*]}"
@@ -287,7 +285,12 @@ pipeline() {
       log "scout: already done, skipping"
     else
       log "scout: Ly=$scout_ly  ε ∈ [$SCOUT_MIN, $SCOUT_MAX] step $SCOUT_STEP"
-      gen_grid "$exp" "$scout_ly" "$SCOUT_MIN" "$SCOUT_MAX" "$SCOUT_STEP"
+      # Re-generating re-queues finished jobs, so only generate on a first run.
+      if [ -f "$scout_base/queue.json" ]; then
+        log "scout grid already generated — resuming"
+      else
+        gen_grid "$exp" "$scout_ly" "$SCOUT_MIN" "$SCOUT_MAX" "$SCOUT_STEP"
+      fi
       # Only mark complete on a clean finish: a phase that got stuck stays
       # unmarked so re-running `start` retries it instead of skipping ahead.
       if drive_phase "$scout_base" "$budget" "scout"; then
@@ -302,10 +305,15 @@ pipeline() {
     run_criticality "$exp" "$scout_ly" || log "  !! criticality failed"
     local eps_c
     eps_c="$(read_eps_c "$root/criticality/ly$scout_ly/criticality.csv")"
+    # A usable ε_c must lie inside the scout window: outside it the fit is
+    # extrapolating (a half-finished scout once gave +4.5).
+    if [ -n "$eps_c" ] && ! python -c "import sys; sys.exit(0 if $SCOUT_MIN <= $eps_c <= $SCOUT_MAX else 1)"; then
+      log "!! $exp: ε_c=$eps_c is outside the scout window [$SCOUT_MIN, $SCOUT_MAX] — discarding"
+      eps_c=""
+    fi
     if [ -z "$eps_c" ]; then
-      log "!! $exp: no usable ε_c from the scout — skipping refine, continuing campaign"
-      echo
-      continue
+      log "!! $exp: no usable ε_c from the scout — FALLBACK to ε_c=$FALLBACK_EPS_C so the refine still runs"
+      eps_c="$FALLBACK_EPS_C"
     fi
     log "ε_c = $eps_c"
 
@@ -325,11 +333,8 @@ pipeline() {
       log "refine: ε_max clamped to $emax (FLEX cutoff $FLEX_CUTOFF; above it jobs are skipped)"
     fi
 
-    # lys are drained one at a time below (drive_phase per ly, sequentially),
-    # never concurrently, so the full budget belongs to whichever ly is active —
-    # dividing by len(lys) here silently halves throughput on any host with 2+
-    # target Ly's (e.g. the workstation's Ly 16+20) for no reason.
-    local per_ly="$budget"
+    local per_ly=$((budget / ${#lys[@]}))
+    [ "$per_ly" -lt 1 ] && per_ly=1
     for ly in "${lys[@]}"; do
       if [ -f "$root/.refine_done_ly$ly" ]; then
         log "refine Ly=$ly: already done, skipping"
@@ -363,7 +368,7 @@ pipeline() {
       local c="COEX_RUNS_$exp/criticality/ly$scout_ly/criticality.csv"
       printf '    %-4s %s\n' "$exp" "$(read_eps_c "$c" 2>/dev/null || true)"
     done
-    log "Refine with: $0 start   (or per experiment: $0 start C3A)"
+    log "Refine with: $0 start   (or per experiment: $0 start D3A)"
   else
     log "CAMPAIGN COMPLETE: ${exps[*]}"
   fi
@@ -371,21 +376,20 @@ pipeline() {
 
 # ------------------------------------------------------------------- commands
 
+session_for() { echo "${SESSION_PREFIX}-$1"; }
+
 cmd_reset() {
   if [ "${1:-}" != "--yes" ]; then
-    echo "This will stop all C3 tmux sessions and archive:"
+    echo "This will stop all D3 tmux sessions and archive:"
     for e in "${ALL_EXPS[@]}"; do
       [ -d "COEX_RUNS_$e" ] && echo "  COEX_RUNS_$e  ($(du -sh "COEX_RUNS_$e" 2>/dev/null | cut -f1))"
     done
-    tmux has-session -t "$SESSION" 2>/dev/null && echo "  tmux session $SESSION"
-    echo
-    echo "Nothing is deleted — roots move to .trash/<timestamp>/."
-    echo "Re-run with --yes to proceed."
+    echo "Nothing is deleted — roots move to .trash/<timestamp>/. Re-run with --yes."
     return 0
   fi
   local stamp; stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
   for e in "${ALL_EXPS[@]}"; do
+    tmux kill-session -t "$(session_for "$e")" 2>/dev/null || true
     tmux kill-session -t "coex-$e" 2>/dev/null || true
   done
   mkdir -p ".trash/$stamp"
@@ -404,24 +408,20 @@ cmd_reset() {
 cmd_start() {
   local exps=("$@")
   [ "${#exps[@]}" -eq 0 ] && exps=("${ALL_EXPS[@]}")
-  if tmux has-session -t "$SESSION" 2>/dev/null; then
-    echo "Session '$SESSION' already running. Stop it first: $0 stop"
-    exit 1
-  fi
   mkdir -p "$LOG_DIR"
-  local logf="$LOG_DIR/c3_auto_$(date -u +%Y%m%dT%H%M%SZ).log"
-  local setup="module load anaconda3/2024.10 2>/dev/null; source \"\$(conda info --base)/etc/profile.d/conda.sh\"; conda activate lattice; export LD_LIBRARY_PATH=\"\${CONDA_PREFIX}/lib:\${LD_LIBRARY_PATH:-}\"; export PYTHONPATH=\"$PROJECT_DIR/coex:$PROJECT_DIR/susceptibility:$PROJECT_DIR\"; export PYTHONUNBUFFERED=1"
-  tmux new-session -d -s "$SESSION" -c "$PROJECT_DIR"
-  tmux send-keys -t "$SESSION" \
-    "${setup}; SCOUTS_ONLY=${SCOUTS_ONLY:-0} ./coex/run_c3_auto.sh _pipeline ${exps[*]} 2>&1 | tee -a '$logf'" C-m
-  if [ "${SCOUTS_ONLY:-0}" = "1" ]; then
-    echo "Started '$SESSION' on $(hostname -s): SCOUTS ONLY for ${exps[*]}"
-  else
-    echo "Started '$SESSION' on $(hostname -s): ${exps[*]}"
-  fi
-  echo "  log:    tail -f $logf"
-  echo "  attach: tmux attach -t $SESSION   (Ctrl-b d to detach)"
-  echo "  stop:   $0 stop"
+  local setup="module load anaconda3/2024.10 2>/dev/null; source \"\$(conda info --base)/etc/profile.d/conda.sh\"; conda activate lattice; export LD_LIBRARY_PATH=\"\${CONDA_PREFIX}/lib:\${LD_LIBRARY_PATH:-}\"; export PYTHONPATH=\"$PROJECT_DIR/coex:$PROJECT_DIR/susceptibility:$PROJECT_DIR\"; export PYTHONUNBUFFERED=1; export LYS='${LYS:-}' REFINE_HALF_WIDTH='${REFINE_HALF_WIDTH:-0.3}' MAX_CONCURRENT='${MAX_CONCURRENT:-}' SCOUT_LY='${SCOUT_LY:-16}'"
+  for e in "${exps[@]}"; do
+    local s; s="$(session_for "$e")"
+    if tmux has-session -t "$s" 2>/dev/null; then
+      echo "Session '$s' already running — skipping $e (stop it first: $0 stop $e)"
+      continue
+    fi
+    local logf="$LOG_DIR/d3_auto_${e}_$(date -u +%Y%m%dT%H%M%SZ).log"
+    tmux new-session -d -s "$s" -c "$PROJECT_DIR"
+    tmux send-keys -t "$s" \
+      "${setup}; SCOUTS_ONLY=${SCOUTS_ONLY:-0} ./coex/run_d3_auto.sh _pipeline $e 2>&1 | tee -a '$logf'" C-m
+    echo "Started '$s' on $(hostname -s)   log: $logf"
+  done
 }
 
 cmd_status() {
@@ -429,8 +429,6 @@ cmd_status() {
   # shellcheck disable=SC2206
   lys=($(target_lys))
   scout_ly="${SCOUT_LY:-16}"
-  # The scout size is not always one of the refine sizes (on Della it is not),
-  # so show it alongside them.
   shown=("$scout_ly")
   for ly in "${lys[@]}"; do
     [ "$ly" = "$scout_ly" ] || shown+=("$ly")
@@ -441,34 +439,30 @@ cmd_status() {
     for ly in "${shown[@]}"; do
       [ -d "COEX_RUNS_$e/ly$ly" ] || continue
       read -r p i a t <<<"$(phase_state "COEX_RUNS_$e/ly$ly")"
-      local tag="refine"
-      [ "$ly" = "$scout_ly" ] && tag="scout/refine"
-      printf "  Ly=%-3s %-13s pending=%-6s in_flight=%-4s analyzed=%s/%s\n" \
-        "$ly" "$tag" "$p" "$i" "$a" "$t"
+      printf "  Ly=%-3s pending=%-6s in_flight=%-4s analyzed=%s/%s\n" "$ly" "$p" "$i" "$a" "$t"
     done
+    [ -f "COEX_RUNS_$e/.scout_done" ] && echo "  scout done"
+    [ -f "COEX_RUNS_$e/.refine_done_ly16" ] && echo "  refine done (Ly=16)"
     local c="COEX_RUNS_$e/criticality/ly$scout_ly/criticality.csv"
-    if [ -f "$c" ]; then
-      echo "  ε_c(scout) = $(read_eps_c "$c")"
+    [ -f "$c" ] && echo "  ε_c = $(read_eps_c "$c")"
+    if tmux has-session -t "$(session_for "$e")" 2>/dev/null; then
+      echo "  session $(session_for "$e"): RUNNING"
+    else
+      echo "  session $(session_for "$e"): not running"
     fi
+    local latest; latest="$(ls -t "$LOG_DIR"/d3_auto_${e}_*.log 2>/dev/null | head -1 || true)"
+    [ -n "$latest" ] && tail -2 "$latest" | sed 's/^/    | /'
   done
-  echo
-  if tmux has-session -t "$SESSION" 2>/dev/null; then
-    echo "session '$SESSION': RUNNING on $(hostname -s)"
-  else
-    echo "session '$SESSION': not running on $(hostname -s)"
-  fi
-  # pipefail would make a failing ls (no logs yet) abort the script
-  local latest; latest="$(ls -t "$LOG_DIR"/c3_auto_*.log 2>/dev/null | head -1 || true)"
-  if [ -n "$latest" ]; then
-    echo "--- $latest ---"
-    tail -8 "$latest"
-  fi
   return 0
 }
 
 cmd_stop() {
-  tmux kill-session -t "$SESSION" 2>/dev/null && echo "Stopped '$SESSION'." \
-    || echo "No session '$SESSION' running."
+  local exps=("$@")
+  [ "${#exps[@]}" -eq 0 ] && exps=("${ALL_EXPS[@]}")
+  for e in "${exps[@]}"; do
+    tmux kill-session -t "$(session_for "$e")" 2>/dev/null && echo "Stopped $(session_for "$e")." \
+      || echo "No session $(session_for "$e") running."
+  done
 }
 
 CMD="${1:-}"
@@ -478,10 +472,10 @@ case "$CMD" in
   start)     cmd_start "$@" ;;
   scouts)    SCOUTS_ONLY=1 cmd_start "$@" ;;
   status)    cmd_status ;;
-  stop)      cmd_stop ;;
+  stop)      cmd_stop "$@" ;;
   _pipeline) pipeline "$@" ;;   # internal: runs inside tmux
   *)
-    echo "usage: $0 <reset [--yes]|scouts [EXP ...]|start [EXP ...]|status|stop>"
+    echo "usage: $0 <reset [--yes]|scouts [EXP ...]|start [EXP ...]|status|stop [EXP ...]>"
     exit 1
     ;;
 esac
