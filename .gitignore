@@ -46,8 +46,27 @@ test_run_out/
 manage.csv
 test_manage.csv
 *_manage.csv
+*_in_progress.csv
 run_all_queue.json
 susceptibility_*_queue.json
+coex_queue.json
+
+# Criticality experiment run outputs (npy/json/csv/png data — keep out of git)
+criticality/C3[A-Z]/
+criticality/D3[A-Z]/
+criticality/c3_negative_drive_family/
+criticality/d3_positive_drive_family/
+criticality/equilibrium_multi_L_testing/
+criticality/homo_dmu1p0/
+criticality/scheme3_multi_L_testing/
+
+# Generated data output dir
+data/
+
+# Archived, kept locally but out of git (generated graph export + scratch notes)
+archive/graphify-out/
+archive/notes.md
+archive/umbrella.md
 
 # SLURM job logs (in-repo on /scratch, kept off /home quota)
 slurm_reports/
