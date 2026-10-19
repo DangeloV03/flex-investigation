@@ -19,31 +19,11 @@ import pandas as pd
 import pytest
 
 import flexsim.coex.queue_manifest as qm
-from flexsim.coex.analyzer import (
-    N_REFINEMENT_POINTS,
-    PSI_COEX_MAX,
-    build_curves,
-    calculate_phi_psi,
-    compute_mu_coex_sim_error,
-    extension_window,
-    find_manage_row,
-    has_phi_sign_change,
-    interior_psi_minimum,
-    is_coex_resolved,
-    is_psi_minimum_acceptable,
-    make_job_json,
-    read_manage,
-    refinement_mus,
-    sign_change_bracket,
-    unsampled_mus,
-    write_manage,
-)
-from flexsim.coex.layout import (
-    COMBO_KEY_FIELDS,
-    combo_dir_name,
-    mu_dir_name,
-    param_tag,
-)
+from flexsim.coex.criteria import N_REFINEMENT_POINTS, PSI_COEX_MAX, compute_mu_coex_sim_error, extension_window, has_phi_sign_change, interior_psi_minimum, is_coex_resolved, is_psi_minimum_acceptable, refinement_mus, sign_change_bracket, unsampled_mus
+from flexsim.coex.manage_csv import MANAGE_FIELDS, append_manage_rows, find_manage_row, read_manage, write_manage
+from flexsim.coex.phi_psi import build_curves, calculate_phi_psi
+from flexsim.coex.refine_jobs import make_job_json
+from flexsim.coex.layout import combo_dir_name, mu_dir_name, param_tag
 from flexsim.susc.layout import (
     COEX_RESULTS_DIR,
     MANAGE_CSV,
@@ -83,12 +63,6 @@ COMBO_DEFAULTS = {
     "Ly": 16,
 }
 
-MANAGE_FIELDS = COMBO_KEY_FIELDS + [
-    "mu_coex_FLEX", "isSubmitted", "isRan", "isAnalyzed",
-    "mu_coex_SIM", "mu_coex_SIM_error", "RequestForAdditionalData", "combo_path",
-]
-
-
 def _write_manage(path: str, rows: list[dict]) -> None:
     with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=MANAGE_FIELDS)
@@ -102,7 +76,7 @@ def _default_manage_row(**overrides) -> dict:
         "epsilon": -2.0, "delta_f": -20.0, "delta_mu": 0.0,
         "k": 0.0, "scheme": "homo", "Lx": 160, "Ly": 16,
         "mu_coex_FLEX": "", "isSubmitted": "", "isRan": "",
-        "isAnalyzed": "", "mu_coex_SIM": "", "mu_coex_SIM_error": "",
+        "isAnalyzed": "", "mu_coex_FITTED": "", "mu_coex_FITTED_error": "",
         "RequestForAdditionalData": "0", "combo_path": "",
     }
     row.update(overrides)
@@ -548,11 +522,28 @@ class TestManageCsv:
 
     def test_write_manage_all_fields(self, tmp_path):
         path = str(tmp_path / "manage.csv")
-        rows = [_default_manage_row(mu_coex_SIM="-3.5", isAnalyzed="2025-01-01")]
+        rows = [_default_manage_row(mu_coex_FITTED="-3.5", isAnalyzed="2025-01-01")]
         write_manage(path, rows)
         rows2 = read_manage(path)
-        assert rows2[0]["mu_coex_SIM"] == "-3.5"
+        assert rows2[0]["mu_coex_FITTED"] == "-3.5"
         assert rows2[0]["isAnalyzed"] == "2025-01-01"
+
+    def test_append_rows_keeps_existing_fits(self, tmp_path):
+        """Regression (2026-10-16 report): re-running a generator on an existing
+        ledger used to blank mu_coex_FITTED via a stale column list."""
+        path = str(tmp_path / "manage.csv")
+        write_manage(path, [_default_manage_row(mu_coex_FITTED="-3.5", mu_coex_FITTED_error="0.01")])
+        added = append_manage_rows(path, [_default_manage_row(epsilon=-1.9)])
+        rows = read_manage(path)
+        assert added == 1 and len(rows) == 2
+        assert rows[0]["mu_coex_FITTED"] == "-3.5"
+        assert rows[0]["mu_coex_FITTED_error"] == "0.01"
+
+    def test_write_refuses_to_drop_rows(self, tmp_path):
+        path = str(tmp_path / "manage.csv")
+        write_manage(path, [_default_manage_row(), _default_manage_row(epsilon=-1.9)])
+        with pytest.raises(RuntimeError, match="never deleted"):
+            write_manage(path, [_default_manage_row()])
 
 
 # ============================================================
@@ -617,7 +608,7 @@ class TestEnqueueJobsManifestRouting:
                 "run_settings": {"beta": 1.0, "num_parallel_runs": 4}}
 
     def test_enqueue_writes_to_coex_manifest(self, tmp_path):
-        from flexsim.coex.analyzer import enqueue_jobs
+        from flexsim.coex.refine_jobs import enqueue_jobs
 
         run_all = str(tmp_path / "run_all_queue.json")
         coex = str(tmp_path / "susceptibility_coex_queue.json")
@@ -647,7 +638,7 @@ class TestEnqueueJobsManifestRouting:
         )
 
     def test_enqueue_returns_count_added(self, tmp_path):
-        from flexsim.coex.analyzer import enqueue_jobs
+        from flexsim.coex.refine_jobs import enqueue_jobs
 
         coex = str(tmp_path / "coex.json")
         samples = str(tmp_path / "samples")
@@ -662,7 +653,7 @@ class TestEnqueueJobsManifestRouting:
         assert len(paths) == 3
 
     def test_enqueue_deduplicates_across_calls(self, tmp_path):
-        from flexsim.coex.analyzer import enqueue_jobs
+        from flexsim.coex.refine_jobs import enqueue_jobs
 
         coex = str(tmp_path / "coex.json")
         samples = str(tmp_path / "samples")
@@ -672,7 +663,7 @@ class TestEnqueueJobsManifestRouting:
         assert n_added == 1  # -3.5 already in queue
 
     def test_job_json_has_correct_results_base(self, tmp_path):
-        from flexsim.coex.analyzer import enqueue_jobs
+        from flexsim.coex.refine_jobs import enqueue_jobs
 
         coex = str(tmp_path / "coex.json")
         samples = str(tmp_path / "samples")

@@ -36,7 +36,6 @@ import pandas as pd
 
 from flexsim.susc.layout import find_susceptibility_csvs, read_susceptibility_csv
 
-from flexsim.susc.plot import resolve_repo_path
 
 L_COLOR: dict[int, str] = {
     16: "black", 32: "red", 48: "#2ca02c", 64: "blue",
@@ -464,8 +463,8 @@ def main() -> None:
     p.add_argument("--list", action="store_true", help="list available ε and L, then exit")
     args = p.parse_args()
 
-    args.results = resolve_repo_path(args.results)
-    args.outdir = resolve_repo_path(args.outdir)
+    args.results = os.path.abspath(args.results)
+    args.outdir = os.path.abspath(args.outdir)
 
     df = collect(args.results)
     if args.list:

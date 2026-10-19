@@ -43,7 +43,7 @@ import pandas as pd
 
 
 from flexsim.susc.chi_max_scaling import load_replica_groups
-from flexsim.susc.plot import L_PLOT_STYLE, resolve_repo_path
+from flexsim.susc.figures import L_PLOT_STYLE
 from flexsim.susc.layout import find_susc_run_csvs, parse_susc_run_dir
 
 L_COLOR = {L: style["color"] for L, style in L_PLOT_STYLE.items()}
@@ -369,8 +369,8 @@ def main() -> int:
     p.add_argument("--list", action="store_true", help="List available L and ε, then exit")
     args = p.parse_args()
 
-    args.results = resolve_repo_path(args.results)
-    args.outdir = resolve_repo_path(args.outdir)
+    args.results = os.path.abspath(args.results)
+    args.outdir = os.path.abspath(args.outdir)
 
     try:
         groups = load_replica_groups(args.results)

@@ -19,9 +19,10 @@ import time
 
 import numpy as np
 
-from flexsim.coex.layout import COMBO_KEY_FIELDS, combo_dir, combo_key_from_dict
+from flexsim.coex.layout import combo_dir, combo_key_from_dict
 from flexsim.coex.flex_theory import coex_chemical_potential
-from flexsim.coex.generate import append_manage_rows, collect_active_combo_keys, frange
+from flexsim.coex.generate import collect_active_combo_keys, frange
+from flexsim.coex.manage_csv import append_manage_rows
 from flexsim.coex.queue_manifest import merge_pending
 from flexsim.susc.layout import (
     COEX_MANIFEST,
@@ -62,18 +63,6 @@ RUN_SETTINGS = {
     "prod_time": 10000.0,
     "seed_base": 2000,
 }
-
-MANAGE_FIELDS = COMBO_KEY_FIELDS + [
-    "mu_coex_FLEX",
-    "isSubmitted",
-    "isRan",
-    "isAnalyzed",
-    "mu_coex_FITTED",
-    "mu_coex_FITTED_error",
-    "RequestForAdditionalData",
-    "combo_path",
-]
-
 
 def combo_dict(
     epsilon: float, ly: int, lx: int,

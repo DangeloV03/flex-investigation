@@ -19,10 +19,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import flexsim.criticality.bimodality as bm
-from flexsim.coex.layout import mu_dir_name
-
-BONDING, INERT, EMPTY = bm.BONDING, bm.INERT, bm.EMPTY
+from flexsim.coex.layout import combo_dir_name, mu_dir_name, param_tag
+from flexsim.criticality.bc import BC_BIMODAL_CUTOFF, BONDING, EMPTY, INERT, bc_bootstrap_error, column_op, extract_column_op, pool_column_op, sarle_bc, untag
+from flexsim.criticality.bc_sweep import backfill_bc_err, sweep_bc
+from flexsim.criticality.epsilon_c import find_criticality, grid_neighbor_uncertainty, locate_epsilon_c, transition_bracket
+from flexsim.criticality.figures import histogram_data, make_histogram_figure, run_fss
+from flexsim.criticality.mu_selection import nearest_mu_dir
+from flexsim.criticality.phase_diagram import discover_delta_mus, inspect_coverage, phase_diagram
 
 
 # --------------------------------------------------------------------------
@@ -32,7 +35,7 @@ BONDING, INERT, EMPTY = bm.BONDING, bm.INERT, bm.EMPTY
 def test_bc_single_gaussian_near_one_third():
     rng = np.random.default_rng(0)
     x = rng.normal(0.0, 1.0, size=200_000)
-    bc = bm.sarle_bc(x)["BC"]
+    bc = sarle_bc(x)["BC"]
     assert bc == pytest.approx(1.0 / 3.0, abs=0.02)
 
 
@@ -44,21 +47,21 @@ def test_bc_two_separated_gaussians_near_one():
         rng.normal(-1.0, 0.02, size=half),
         rng.normal(+1.0, 0.02, size=half),
     ])
-    bc = bm.sarle_bc(x)["BC"]
+    bc = sarle_bc(x)["BC"]
     assert bc > 0.9
 
 
 def test_bc_affine_invariant():
     rng = np.random.default_rng(2)
     x = np.concatenate([rng.normal(-1, 0.1, 50_000), rng.normal(1, 0.1, 50_000)])
-    base = bm.sarle_bc(x)["BC"]
-    scaled = bm.sarle_bc(3.7 * x - 42.0)["BC"]  # phi_col vs rho_bonding = affine map
+    base = sarle_bc(x)["BC"]
+    scaled = sarle_bc(3.7 * x - 42.0)["BC"]  # phi_col vs rho_bonding = affine map
     assert scaled == pytest.approx(base, rel=1e-9)
 
 
 def test_bc_requires_min_samples():
     with pytest.raises(ValueError):
-        bm.sarle_bc(np.array([1.0, 2.0, 3.0]))
+        sarle_bc(np.array([1.0, 2.0, 3.0]))
 
 
 # --------------------------------------------------------------------------
@@ -75,7 +78,7 @@ def test_column_op_phi_convention():
     snap[2, :] = INERT
     snap[3, : Ly // 2] = BONDING
     snap[3, Ly // 2 :] = EMPTY
-    phi = bm.column_op(snap)
+    phi = column_op(snap)
     assert phi.shape == (Lx,)
     np.testing.assert_allclose(phi, [1.0, -1.0, -1.0, 0.0])
 
@@ -83,7 +86,7 @@ def test_column_op_phi_convention():
 def test_untag_roundtrip():
     from flexsim.coex.layout import param_tag
     for v in (-2.0, -1.45, 0.5, 0.0, 2.5):
-        assert bm.untag(param_tag(v)) == pytest.approx(v)
+        assert untag(param_tag(v)) == pytest.approx(v)
 
 
 # --------------------------------------------------------------------------
@@ -126,16 +129,16 @@ def test_nearest_mu_dir_and_extract(tmp_path):
         snaps = [_phase_separated(40, 8, rng) for _ in range(4)]
         _write_mu_dir(os.path.join(combo_dir, "mu_sweeps", mu_dir_name(mu)),
                       mu, snaps, combo, epsilon=-2.0)
-    mu_dir, mu = bm.nearest_mu_dir(combo_dir, mu_coex=0.1)
+    mu_dir, mu = nearest_mu_dir(combo_dir, mu_coex=0.1)
     assert mu == pytest.approx(0.0)  # 0.0 is nearest signed mu to 0.1
-    arr, meta = bm.extract_column_op(mu_dir)
+    arr, meta = extract_column_op(mu_dir)
     assert arr.shape == (4, 40)
     assert meta["Ly"] == 8
 
 
 def test_pool_column_op_shapes():
     arr = np.arange(4 * 40, dtype=float).reshape(4, 40)
-    pooled, n_pooled, L_long = bm.pool_column_op(arr)
+    pooled, n_pooled, L_long = pool_column_op(arr)
     assert pooled.shape == (160,)
     assert n_pooled == 160
     assert L_long == 40
@@ -148,7 +151,7 @@ def test_sweep_bc_max_over_mu(tmp_path):
              "Lx": 60, "Ly": 10}
     cp = {**combo, "epsilon": -2.0}
     base = str(tmp_path / "results")
-    combo_dir = os.path.join(base, bm.combo_dir_name(cp))
+    combo_dir = os.path.join(base, combo_dir_name(cp))
     rng = np.random.default_rng(7)
     # mu=-0.4: homogeneous (unimodal); mu=0.0: phase separated (bimodal, higher BC)
     _write_mu_dir(os.path.join(combo_dir, "mu_sweeps", mu_dir_name(-0.4)),
@@ -158,12 +161,12 @@ def test_sweep_bc_max_over_mu(tmp_path):
 
     out_csv = str(tmp_path / "bc.csv")
     cache = str(tmp_path / "cache")
-    rows = bm.sweep_bc(base, combo, out_csv, cache, mu_reduction="max")
+    rows = sweep_bc(base, combo, out_csv, cache, mu_reduction="max")
     assert len(rows) == 1
     r = rows[0]
     assert r["n_mu_scanned"] == 2
     assert r["mu_at_max"] == pytest.approx(0.0)         # bimodal mu wins
-    assert r["BC"] > bm.BC_BIMODAL_CUTOFF
+    assert r["BC"] > BC_BIMODAL_CUTOFF
     assert r["beta"] == pytest.approx(2.0)
     assert r["beta_epsilon"] == pytest.approx(2.0 * -2.0)  # beta*epsilon
 
@@ -174,11 +177,11 @@ def test_sweep_bc_zero_mean_picks_near_zero_magnetization(tmp_path):
              "Lx": 60, "Ly": 10}
     cp = {**combo, "epsilon": -1.76}
     base = str(tmp_path / "results")
-    combo_dir = os.path.join(base, bm.combo_dir_name(cp))
+    combo_dir = os.path.join(base, combo_dir_name(cp))
     rng = np.random.default_rng(11)
     # skewed mostly-gas: high |mean|, can still have large BC
     gas_heavy = _phase_separated(60, 10, rng)
-    gas_heavy[:, :50] = bm.EMPTY
+    gas_heavy[:, :50] = EMPTY
     # balanced coexistence: ⟨φ⟩ closer to 0
     balanced = _phase_separated(60, 10, rng)
     _write_mu_dir(os.path.join(combo_dir, "mu_sweeps", mu_dir_name(-0.5)),
@@ -186,7 +189,7 @@ def test_sweep_bc_zero_mean_picks_near_zero_magnetization(tmp_path):
     _write_mu_dir(os.path.join(combo_dir, "mu_sweeps", mu_dir_name(0.0)),
                   0.0, [balanced for _ in range(5)], cp, -1.76)
 
-    rows = bm.sweep_bc(base, combo, str(tmp_path / "bc.csv"), str(tmp_path / "cache"),
+    rows = sweep_bc(base, combo, str(tmp_path / "bc.csv"), str(tmp_path / "cache"),
                        mu_reduction="zero_mean")
     assert len(rows) == 1
     assert rows[0]["mu_at_max"] == pytest.approx(0.0)
@@ -195,15 +198,15 @@ def test_sweep_bc_zero_mean_picks_near_zero_magnetization(tmp_path):
 
 def test_grid_neighbor_uncertainty_matches_spacing():
     x = np.round(np.arange(-1.80, -1.595, 0.005), 6)
-    assert bm.grid_neighbor_uncertainty(x, -1.76) == pytest.approx(0.005)
+    assert grid_neighbor_uncertainty(x, -1.76) == pytest.approx(0.005)
     # between -1.765 and -1.760: farther neighbor is 0.003 away
-    assert bm.grid_neighbor_uncertainty(x, -1.762) == pytest.approx(0.003)
+    assert grid_neighbor_uncertainty(x, -1.762) == pytest.approx(0.003)
     rng = np.random.default_rng(0)
     arr = np.concatenate([np.full((4, 50), -1.0), np.full((4, 50), 1.0)]) \
         + rng.normal(0, 0.05, size=(8, 50))
-    err = bm.bc_bootstrap_error(arr, n_boot=100)
+    err = bc_bootstrap_error(arr, n_boot=100)
     assert np.isfinite(err) and err >= 0.0
-    assert np.isnan(bm.bc_bootstrap_error(arr[:1]))  # <2 snapshots -> NaN
+    assert np.isnan(bc_bootstrap_error(arr[:1]))  # <2 snapshots -> NaN
 
 
 def test_sweep_bc_writes_error_bar(tmp_path):
@@ -211,11 +214,11 @@ def test_sweep_bc_writes_error_bar(tmp_path):
              "Lx": 60, "Ly": 10}
     cp = {**combo, "epsilon": -2.0}
     base = str(tmp_path / "results")
-    combo_dir = os.path.join(base, bm.combo_dir_name(cp))
+    combo_dir = os.path.join(base, combo_dir_name(cp))
     rng = np.random.default_rng(9)
     _write_mu_dir(os.path.join(combo_dir, "mu_sweeps", mu_dir_name(0.0)),
                   0.0, [_phase_separated(60, 10, rng) for _ in range(8)], cp, -2.0)
-    rows = bm.sweep_bc(base, combo, str(tmp_path / "bc.csv"), str(tmp_path / "cache"))
+    rows = sweep_bc(base, combo, str(tmp_path / "bc.csv"), str(tmp_path / "cache"))
     assert "BC_err" in rows[0]
     assert np.isfinite(rows[0]["BC_err"]) and rows[0]["BC_err"] >= 0.0
 
@@ -233,7 +236,7 @@ def test_phase_diagram_family_over_dmu(tmp_path):
         for eps in epsilons:
             cp = {"scheme": scheme, "delta_f": delta_f, "delta_mu": dmu,
                   "k": k, "Lx": Lx, "Ly": Ly, "epsilon": eps}
-            combo_dir = os.path.join(base, bm.combo_dir_name(cp))
+            combo_dir = os.path.join(base, combo_dir_name(cp))
             for mu in (-0.1, 0.0, 0.1):
                 if eps <= eps_c:
                     snaps = [_phase_separated(Lx, Ly, rng) for _ in range(5)]
@@ -242,10 +245,10 @@ def test_phase_diagram_family_over_dmu(tmp_path):
                 _write_mu_dir(os.path.join(combo_dir, "mu_sweeps", mu_dir_name(mu)),
                               mu, snaps, cp, eps)
 
-    assert bm.discover_delta_mus(base, scheme, delta_f, Lx, Ly) == delta_mus
+    assert discover_delta_mus(base, scheme, delta_f, Lx, Ly) == delta_mus
 
     out_dir = str(tmp_path / "pd_out")
-    results = bm.phase_diagram(base, scheme=scheme, delta_f=delta_f, k=k,
+    results = phase_diagram(base, scheme=scheme, delta_f=delta_f, k=k,
                                Lx=Lx, Ly=Ly, out_dir=out_dir, make_plots=True)
     assert len(results) == len(delta_mus)
     # criticality (beta*eps)_c should increase with delta_mu (curves shift right)
@@ -298,7 +301,7 @@ def test_backfill_bc_err_from_cache(tmp_path):
         "epsilon": -2.0, "beta": 1.0, "beta_epsilon": -2.0,
         "L_short": 10, "L_long": 60, "BC": 0.95, "mu_at_max": 1.234567,
     }]).to_csv(bc_csv, index=False)
-    filled, already, total = bm.backfill_bc_err(
+    filled, already, total = backfill_bc_err(
         str(bc_csv), cache_dir=str(cache_dir),
     )
     assert total == 1
@@ -339,18 +342,18 @@ def test_histogram_data_picks_coexistence_mu(tmp_path):
     base = str(tmp_path / "results")
     rng = np.random.default_rng(21)
     cp = {**combo, "epsilon": -2.0}
-    cdir = os.path.join(base, bm.combo_dir_name(cp))
+    cdir = os.path.join(base, combo_dir_name(cp))
     _write_mu_dir(os.path.join(cdir, "mu_sweeps", mu_dir_name(-0.3)),
                   -0.3, [_homogeneous(60, 10, rng) for _ in range(5)], cp, -2.0)
     _write_mu_dir(os.path.join(cdir, "mu_sweeps", mu_dir_name(0.0)),
                   0.0, [_phase_separated(60, 10, rng) for _ in range(5)], cp, -2.0)
 
-    data = bm.histogram_data(base, combo, [-2.0], str(tmp_path / "cache"),
+    data = histogram_data(base, combo, [-2.0], str(tmp_path / "cache"),
                              mu_reduction="max")
     assert len(data) == 1
     d = data[0]
     assert d["mu"] == pytest.approx(0.0)               # picked the bimodal mu
-    assert d["BC"] > bm.BC_BIMODAL_CUTOFF
+    assert d["BC"] > BC_BIMODAL_CUTOFF
     assert d["pooled"].ndim == 1
     # bimodal: column phi clusters near +1 (liquid) and -1 (gas)
     assert d["pooled"].max() > 0.5 and d["pooled"].min() < -0.5
@@ -364,10 +367,10 @@ def test_histogram_data_balanced_prefers_even_phase_fractions(tmp_path):
     base = str(tmp_path / "results")
     rng = np.random.default_rng(22)
     cp = {**combo, "epsilon": -2.0}
-    cdir = os.path.join(base, bm.combo_dir_name(cp))
+    cdir = os.path.join(base, combo_dir_name(cp))
 
-    skewed = np.full((60, 10), bm.EMPTY, dtype=np.uint32)
-    skewed[:4, :] = bm.BONDING
+    skewed = np.full((60, 10), EMPTY, dtype=np.uint32)
+    skewed[:4, :] = BONDING
     balanced = _phase_separated(60, 10, rng)
 
     _write_mu_dir(os.path.join(cdir, "mu_sweeps", mu_dir_name(-0.2)),
@@ -375,7 +378,7 @@ def test_histogram_data_balanced_prefers_even_phase_fractions(tmp_path):
     _write_mu_dir(os.path.join(cdir, "mu_sweeps", mu_dir_name(0.0)),
                   0.0, [balanced for _ in range(5)], cp, -2.0)
 
-    data = bm.histogram_data(base, combo, [-2.0], str(tmp_path / "cache"),
+    data = histogram_data(base, combo, [-2.0], str(tmp_path / "cache"),
                              mu_reduction="balanced")
     d = data[0]
     assert d["mu"] == pytest.approx(0.0)
@@ -389,12 +392,12 @@ def test_make_histogram_figure_writes_png(tmp_path):
     rng = np.random.default_rng(23)
     for eps in (-2.0, -1.5):
         cp = {**combo, "epsilon": eps}
-        cdir = os.path.join(base, bm.combo_dir_name(cp))
+        cdir = os.path.join(base, combo_dir_name(cp))
         snaps = ([_phase_separated(60, 10, rng) for _ in range(4)] if eps <= -1.7
                  else [_homogeneous(60, 10, rng) for _ in range(4)])
         _write_mu_dir(os.path.join(cdir, "mu_sweeps", mu_dir_name(0.0)), 0.0, snaps, cp, eps)
     out_png = str(tmp_path / "hist.png")
-    bm.make_histogram_figure(base, combo, [-2.0, -1.5], out_png,
+    make_histogram_figure(base, combo, [-2.0, -1.5], out_png,
                              cache_dir=str(tmp_path / "cache"))
     assert os.path.isfile(out_png)
     stem = os.path.splitext(out_png)[0]
@@ -422,7 +425,7 @@ def test_run_fss_multisize(tmp_path):
             for eps in epsilons:
                 cp = {"scheme": scheme, "delta_f": delta_f, "delta_mu": dmu,
                       "k": k, "Lx": Lx, "Ly": Ly, "epsilon": eps}
-                cdir = os.path.join(base, bm.combo_dir_name(cp))
+                cdir = os.path.join(base, combo_dir_name(cp))
                 for mu in (0.0, 0.1):
                     snaps = ([_phase_separated(Lx, Ly, rng) for _ in range(4)]
                              if eps <= eps_c else
@@ -431,11 +434,11 @@ def test_run_fss_multisize(tmp_path):
                                   mu, snaps, cp, eps)
 
     out_dir = str(tmp_path / "fss_out")
-    results = bm.run_fss(base, scheme=scheme, delta_f=delta_f, k=k, sizes=sizes,
+    results = run_fss(base, scheme=scheme, delta_f=delta_f, k=k, sizes=sizes,
                          delta_mus=[0.0, 1.0], out_dir=out_dir, make_plots=True)
     assert len(results) == 4  # 2 sizes x 2 delta_mu, all fit
     for dmu in (0.0, 1.0):
-        png = os.path.join(out_dir, f"bc_vs_beta_epsilon_dmu{bm.param_tag(dmu)}.png")
+        png = os.path.join(out_dir, f"bc_vs_beta_epsilon_dmu{param_tag(dmu)}.png")
         assert os.path.isfile(png)
     df = pd.read_csv(os.path.join(out_dir, "bc_vs_beta_epsilon.csv"))
     assert set(df["L_long"]) == {80, 160}
@@ -454,7 +457,7 @@ def test_nested_scheme3_layout_discovery(tmp_path):
         for eps in epsilons:
             cp = {"scheme": scheme, "delta_f": delta_f, "delta_mu": dmu,
                   "k": k, "Lx": Lx, "Ly": Ly, "epsilon": eps}
-            cdir = os.path.join(base, folder, "results", bm.combo_dir_name(cp))
+            cdir = os.path.join(base, folder, "results", combo_dir_name(cp))
             for mu in (-4.5, -4.4):
                 snaps = ([_phase_separated(Lx, Ly, rng) for _ in range(4)]
                          if eps <= eps_c else
@@ -463,10 +466,10 @@ def test_nested_scheme3_layout_discovery(tmp_path):
                               mu, snaps, cp, eps)
 
     # discovery walks the nested results/ roots
-    assert bm.discover_delta_mus(base, scheme, delta_f, Lx, Ly) == [1.0, 2.0]
+    assert discover_delta_mus(base, scheme, delta_f, Lx, Ly) == [1.0, 2.0]
 
     out_dir = str(tmp_path / "out")
-    results = bm.phase_diagram(base, scheme=scheme, delta_f=delta_f, k=k,
+    results = phase_diagram(base, scheme=scheme, delta_f=delta_f, k=k,
                                Lx=Lx, Ly=Ly, out_dir=out_dir, make_plots=False)
     assert {r["delta_mu"] for r in results} == {1.0, 2.0}
 
@@ -480,11 +483,11 @@ def test_inspect_coverage_reports_step(tmp_path):
     # a coarse 0.1 grid
     for eps in (-2.0, -1.9, -1.8, -1.7):
         cp = {**combo, "epsilon": round(eps, 4)}
-        cdir = os.path.join(base, bm.combo_dir_name(cp))
+        cdir = os.path.join(base, combo_dir_name(cp))
         _write_mu_dir(os.path.join(cdir, "mu_sweeps", mu_dir_name(0.0)),
                       0.0, [_phase_separated(60, 10, rng)], cp, round(eps, 4))
 
-    rep = bm.inspect_coverage(base, scheme="homo", delta_f=0.0, k=1.0,
+    rep = inspect_coverage(base, scheme="homo", delta_f=0.0, k=1.0,
                               Lx=60, Ly=10, ref_step=0.005)
     assert len(rep) == 1
     r = rep[0]
@@ -497,7 +500,7 @@ def test_transition_bracket_gradual_crossover():
     """Flat noisy plateau then gradual drop: half-width >> sigmoid unc."""
     x = np.linspace(-2.0, -1.4, 121)
     bc = np.where(x < -1.85, 0.92, np.where(x > -1.65, 0.55, 0.80 - 0.5 * (x + 1.75)))
-    bracket = bm.transition_bracket(x, bc)
+    bracket = transition_bracket(x, bc)
     assert np.isfinite(bracket["transition_x_high"])
     assert np.isfinite(bracket["transition_x_low"])
     assert bracket["transition_x_low"] > bracket["transition_x_high"]
@@ -507,7 +510,7 @@ def test_transition_bracket_gradual_crossover():
 def test_locate_epsilon_c_linear_intersect_5_9():
     """Synthetic BC = a + b x; locator must recover the 5/9 intersection."""
     # BC = -0.5 * x  with x in [-2,-1] => BC in [1.0, 0.5]; 5/9≈0.5556 => x= -2*(5/9)
-    level = bm.BC_BIMODAL_CUTOFF
+    level = BC_BIMODAL_CUTOFF
     xs = [-2.0, -1.8, -1.6, -1.4, -1.2, -1.0]
     rows = []
     for x in xs:
@@ -516,7 +519,7 @@ def test_locate_epsilon_c_linear_intersect_5_9():
             "L_long": 60, "L_short": 10, "beta": 1.0,
             "beta_epsilon": x, "BC": bc, "BC_err": 0.01,
         })
-    result = bm.locate_epsilon_c(rows, 60, x_col="beta_epsilon")
+    result = locate_epsilon_c(rows, 60, x_col="beta_epsilon")
     assert result["method"] == "linear_bc_vs_x_5_9"
     assert result["BC_target"] == pytest.approx(level)
     assert result["BC_at_criticality"] == pytest.approx(level)
@@ -536,7 +539,7 @@ def test_locate_epsilon_c_includes_transition_fields(tmp_path):
     epsilons = [-2.0, -1.9, -1.8, -1.7, -1.6, -1.5, -1.4]
     for eps in epsilons:
         cp = {**combo, "epsilon": eps}
-        combo_dir = os.path.join(base, bm.combo_dir_name(cp))
+        combo_dir = os.path.join(base, combo_dir_name(cp))
         for mu in (-0.3, 0.0, 0.3):
             if eps <= eps_true_c:
                 snaps = [_phase_separated(60, 10, rng) for _ in range(5)]
@@ -545,14 +548,14 @@ def test_locate_epsilon_c_includes_transition_fields(tmp_path):
             _write_mu_dir(os.path.join(combo_dir, "mu_sweeps", mu_dir_name(mu)),
                           mu, snaps, cp, epsilon=eps)
 
-    rows = bm.sweep_bc(base, combo, str(tmp_path / "bc.csv"), str(tmp_path / "cache"))
-    result = bm.locate_epsilon_c(rows, 60, x_col="beta_epsilon")
+    rows = sweep_bc(base, combo, str(tmp_path / "bc.csv"), str(tmp_path / "cache"))
+    result = locate_epsilon_c(rows, 60, x_col="beta_epsilon")
     assert result["method"] == "linear_bc_vs_x_5_9"
-    assert result["BC_target"] == pytest.approx(bm.BC_BIMODAL_CUTOFF)
+    assert result["BC_target"] == pytest.approx(BC_BIMODAL_CUTOFF)
     assert "recommended_uncertainty" in result
     assert np.isfinite(result["recommended_uncertainty"])
     assert np.isfinite(result["fit_uncertainty"])
-    assert result["BC_at_criticality"] == pytest.approx(bm.BC_BIMODAL_CUTOFF)
+    assert result["BC_at_criticality"] == pytest.approx(BC_BIMODAL_CUTOFF)
     # linear intersection need not land on a grid point
     assert np.isfinite(result["criticality_estimate"])
     xs = sorted(float(r["beta_epsilon"]) for r in rows)
@@ -569,7 +572,7 @@ def test_find_criticality_end_to_end(tmp_path):
     epsilons = [-2.0, -1.9, -1.8, -1.7, -1.6, -1.5, -1.4]
     for eps in epsilons:
         cp = {**combo, "epsilon": eps}
-        combo_dir = os.path.join(base, bm.combo_dir_name(cp))
+        combo_dir = os.path.join(base, combo_dir_name(cp))
         # a small mu sweep; mu_coex ~ 0, phase behaviour keyed to epsilon
         for mu in (-0.3, 0.0, 0.3):
             if eps <= eps_true_c:
@@ -580,7 +583,7 @@ def test_find_criticality_end_to_end(tmp_path):
                           mu, snaps, cp, epsilon=eps)
 
     out_dir = str(tmp_path / "criticality_out")
-    result = bm.find_criticality(base, combo, out_dir=out_dir, make_plots=False)
+    result = find_criticality(base, combo, out_dir=out_dir, make_plots=False)
 
     # BC csv written, one row per epsilon, and BC falls as epsilon rises.
     bc_csv = os.path.join(out_dir, "bc_vs_epsilon.csv")
@@ -589,8 +592,8 @@ def test_find_criticality_end_to_end(tmp_path):
     assert len(rows) == len(epsilons)
     bc_by_eps = {float(r["epsilon"]): float(r["BC"]) for r in rows}
     assert bc_by_eps[-2.0] > bc_by_eps[-1.4]              # bimodal -> unimodal
-    assert bc_by_eps[-2.0] > bm.BC_BIMODAL_CUTOFF          # clearly bimodal below
-    assert bc_by_eps[-1.4] < bm.BC_BIMODAL_CUTOFF          # clearly unimodal above
+    assert bc_by_eps[-2.0] > BC_BIMODAL_CUTOFF          # clearly bimodal below
+    assert bc_by_eps[-1.4] < BC_BIMODAL_CUTOFF          # clearly unimodal above
 
     # epsilon_c lands within the sweep, near the true crossover.
     assert epsilons[0] <= result["epsilon_c_estimate"] <= epsilons[-1]

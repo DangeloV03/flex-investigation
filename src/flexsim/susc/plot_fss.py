@@ -31,7 +31,8 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
-from flexsim.susc.plot import aggregate, aggregate_pooled, L_PLOT_STYLE, resolve_repo_path
+from flexsim.susc.aggregate import aggregate, aggregate_pooled
+from flexsim.susc.figures import L_PLOT_STYLE
 
 
 # ---------------------------------------------------------------------------
@@ -461,8 +462,8 @@ def main() -> None:
                       help='Skip Melchert S+1 parameter errors (point estimates only)')
 
     args = parser.parse_args()
-    args.results = resolve_repo_path(args.results)
-    args.outdir = resolve_repo_path(args.outdir)
+    args.results = os.path.abspath(args.results)
+    args.outdir = os.path.abspath(args.outdir)
     os.makedirs(args.outdir, exist_ok=True)
 
     print('Loading data...', flush=True)

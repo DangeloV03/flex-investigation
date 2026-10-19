@@ -19,7 +19,6 @@ Usage:
 """
 
 import argparse
-import csv
 import json
 import os
 import time
@@ -29,6 +28,7 @@ import pandas as pd
 
 from flexsim.coex.flex_theory import coex_chemical_potential
 from flexsim.coex.layout import COMBO_KEY_FIELDS, combo_dir, combo_has_results, combo_key_from_dict, iter_output_csvs
+from flexsim.coex.manage_csv import append_manage_rows, read_manage
 from flexsim.coex.queue_manifest import merge_pending, read_manifest
 
 # ---------------------------------------------------------------------------
@@ -66,19 +66,6 @@ OUTPUT_DIR = "samples"
 MANAGE_CSV = "manage.csv"
 MANIFEST_PATH = "run_all_queue.json"
 RESULTS_DIR = "results"
-
-COMBO_KEY_FIELDS = COMBO_KEY_FIELDS  # re-export
-MANAGE_FIELDS = COMBO_KEY_FIELDS + [
-    "mu_coex_FLEX",
-    "isSubmitted",
-    "isRan",
-    "isAnalyzed",
-    "mu_coex_SIM",
-    "mu_coex_SIM_error",
-    "RequestForAdditionalData",
-    "combo_path",
-]
-
 
 def frange(lo: float, hi: float, step: float) -> list[float]:
     """Inclusive float range [lo, hi] at fixed step (rounded to 6 decimals)."""
@@ -121,55 +108,6 @@ def dmu_filename_tag(delta_mu: float) -> str:
 def mu_sweep(mu_coex_flex: float) -> list[float]:
     values = np.linspace(mu_coex_flex - MU_WINDOW, mu_coex_flex + MU_WINDOW, N_MU_POINTS)
     return [round(float(v), 6) for v in values]
-
-
-def read_manage(manage_path: str) -> list[dict]:
-    if not os.path.isfile(manage_path):
-        return []
-    with open(manage_path, "r", newline="") as f:
-        raw_rows = list(csv.DictReader(f))
-    rows: list[dict] = []
-    for line_no, row in enumerate(raw_rows, start=2):
-        row.setdefault("mu_coex_SIM_error", "")
-        row.setdefault("combo_path", "")
-        missing = [f for f in COMBO_KEY_FIELDS if f not in row or row[f] is None]
-        if missing:
-            print(
-                f"WARNING: skipping malformed manage.csv line {line_no} "
-                f"(missing {missing})"
-            )
-            continue
-        rows.append(row)
-    return rows
-
-
-def write_manage(manage_path: str, rows: list[dict]) -> None:
-    """Rewrite manage.csv from the full row list (caller must preserve existing rows)."""
-    if os.path.isfile(manage_path):
-        prior_count = len(read_manage(manage_path))
-        if len(rows) < prior_count:
-            raise RuntimeError(
-                f"Refusing to write {manage_path}: {len(rows)} rows would replace "
-                f"{prior_count} existing rows. manage.csv rows are never deleted."
-            )
-
-    with open(manage_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=MANAGE_FIELDS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row.get(field, "") for field in MANAGE_FIELDS})
-
-
-def append_manage_rows(manage_path: str, new_rows: list[dict]) -> int:
-    """Append only new combo rows; never modify or drop existing manage.csv rows."""
-    existing_rows = read_manage(manage_path)
-    existing_keys = {combo_key_from_dict(row) for row in existing_rows}
-    to_add = [
-        row for row in new_rows
-        if combo_key_from_dict(row) not in existing_keys
-    ]
-    write_manage(manage_path, existing_rows + to_add)
-    return len(to_add)
 
 
 def combo_from_json_path(json_path: str) -> tuple | None:
@@ -331,8 +269,8 @@ def main():
                     "isSubmitted": timestamp,
                     "isRan": "",
                     "isAnalyzed": "",
-                    "mu_coex_SIM": "",
-                    "mu_coex_SIM_error": "",
+                    "mu_coex_FITTED": "",
+                    "mu_coex_FITTED_error": "",
                     "RequestForAdditionalData": 0,
                     "combo_path": combo_dir(combo),
                 })
