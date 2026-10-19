@@ -34,6 +34,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from flexsim.criticality.bc import sarle_bc
 from flexsim.susc.layout import find_susceptibility_csvs, read_susceptibility_csv
 
 
@@ -44,19 +45,9 @@ L_COLOR: dict[int, str] = {
 
 
 def sarle_bimodality(x: np.ndarray) -> float:
-    """Sarle's bimodality coefficient (finite-sample). BC > 5/9 ≈ 0.555 ⇒ bimodal."""
-    x = np.asarray(x, dtype=float)
-    n = x.size
-    if n < 4:
-        return float("nan")
-    s = x.std()
-    if s == 0:
-        return float("nan")
-    z = (x - x.mean()) / s
-    g1 = float(np.mean(z ** 3))          # skewness
-    g2 = float(np.mean(z ** 4) - 3.0)    # excess kurtosis
-    den = g2 + 3.0 * (n - 1) ** 2 / ((n - 2) * (n - 3))
-    return (g1 ** 2 + 1.0) / den if den != 0 else float("nan")
+    """Sarle's BC of a 1D sample (see criticality/bc.py); NaN when n < 4. BC > 5/9 => bimodal."""
+    x = np.asarray(x, dtype=float).ravel()
+    return float("nan") if x.size < 4 else sarle_bc(x)["BC"]
 
 
 def largest_gap_split(e: np.ndarray) -> dict:

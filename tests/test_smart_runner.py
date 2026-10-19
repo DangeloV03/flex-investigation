@@ -91,7 +91,7 @@ def test_csv_schema_v2_and_v3_roundtrip(tmp_path):
 def test_get_next_id_and_append(tmp_path):
     """get_next_id reads existing max; append_to_csv preserves old rows."""
     from flexsim.susc.layout import SUSCEPTIBILITY_CSV_FIELDS, SUSCEPTIBILITY_DATA_CSV
-    from flexsim.susc.runner import append_to_csv, get_next_id
+    from flexsim.susc.run_files import append_to_csv, get_next_id
 
     csv_path = str(tmp_path / SUSCEPTIBILITY_DATA_CSV)
 
@@ -119,14 +119,14 @@ def test_get_next_id_and_append(tmp_path):
 
 
 def test_load_timeseries_csv(tmp_path):
-    """_load_timeseries_csv reads m values correctly."""
-    from flexsim.susc.runner import _load_timeseries_csv
+    """load_timeseries_csv reads m values correctly."""
+    from flexsim.susc.run_files import load_timeseries_csv
 
     ts_path = str(tmp_path / "m_timeseries_0.csv")
     m_vals = [0.9, -0.9, 0.8, -0.8]
     _write_ts(ts_path, m_vals)
 
-    chunks = _load_timeseries_csv(ts_path)
+    chunks = load_timeseries_csv(ts_path)
     assert len(chunks) == 4
     assert [float(c["m"]) for c in chunks] == pytest.approx(m_vals)
 
@@ -138,11 +138,7 @@ def test_resume_prod_time_accumulation(tmp_path):
         SUSCEPTIBILITY_DATA_CSV,
         read_susceptibility_csv,
     )
-    from flexsim.susc.runner import (
-        _load_timeseries_csv,
-        append_to_csv,
-        get_next_id,
-    )
+    from flexsim.susc.run_files import append_to_csv, get_next_id, load_timeseries_csv
 
     run_dir = str(tmp_path)
     csv_path = os.path.join(run_dir, SUSCEPTIBILITY_DATA_CSV)
@@ -171,7 +167,7 @@ def test_resume_prod_time_accumulation(tmp_path):
     prior_prod_time = float(latest[0]["prod_time"])
     prior_wall_time = float(latest[0]["time"])
 
-    prior_chunks = _load_timeseries_csv(os.path.join(run_dir, f"m_timeseries_{resume_id}.csv"))
+    prior_chunks = load_timeseries_csv(os.path.join(run_dir, f"m_timeseries_{resume_id}.csv"))
     assert len(prior_chunks) == 10
 
     # new top-up: 5 more chunks
@@ -219,7 +215,7 @@ def test_resume_prod_time_accumulation(tmp_path):
 def test_latest_gen_detection_multi_round(tmp_path):
     """After two top-up rounds, auto-detection picks the highest-prod_time rows."""
     from flexsim.susc.layout import SUSCEPTIBILITY_CSV_FIELDS, SUSCEPTIBILITY_DATA_CSV
-    from flexsim.susc.runner import get_next_id
+    from flexsim.susc.run_files import get_next_id
 
     csv_path = str(tmp_path / SUSCEPTIBILITY_DATA_CSV)
 
@@ -383,16 +379,16 @@ def test_check_aborts_when_jump_data_stops_changing(tmp_path):
     """A top-up that adds no samples must not chain rounds forever."""
     import pandas as pd
 
-    from flexsim.susc.smart_sweep import _check_stalled, _progress_fingerprint
+    from flexsim.susc.smart_report import check_stalled, progress_fingerprint
 
     base = str(tmp_path)
     summary = pd.DataFrame({"L": [32], "epsilon": [-1.7], "n_replicas": [4],
                             "J_mean": [0.0], "passes": [False]})
-    fp = _progress_fingerprint(summary)
-    assert [_check_stalled(base, fp) for _ in range(4)] == [0, 1, 2, 3]
+    fp = progress_fingerprint(summary)
+    assert [check_stalled(base, fp) for _ in range(4)] == [0, 1, 2, 3]
 
     moved = summary.assign(J_mean=[1.0])
-    assert _check_stalled(base, _progress_fingerprint(moved)) == 0
+    assert check_stalled(base, progress_fingerprint(moved)) == 0
 
 
 def test_exact_mu_map_matches_coex_formula():
@@ -453,19 +449,52 @@ def test_runner_requires_mu_outside_ising_limit(monkeypatch, tmp_path):
 
 
 def test_drop_superseded_timeseries_only_on_exact_prefix(tmp_path):
-    from flexsim.susc.runner import _drop_superseded_timeseries
+    from flexsim.susc.run_files import drop_superseded_timeseries
 
     old = tmp_path / "m_timeseries_0.csv"
     new = tmp_path / "m_timeseries_16.csv"
     new.write_text("chunk,m\n0,0.1\n1,0.2\n2,0.3\n")
 
     old.write_text("chunk,m\n0,0.1\n1,0.9\n")          # diverges: keep
-    assert not _drop_superseded_timeseries(str(old), str(new))
+    assert not drop_superseded_timeseries(str(old), str(new))
     assert old.exists()
 
     old.write_text("chunk,m\n0,0.1\n1,0.2\n")          # true prefix: drop
-    assert _drop_superseded_timeseries(str(old), str(new))
+    assert drop_superseded_timeseries(str(old), str(new))
     assert not old.exists() and new.exists()
 
-    assert not _drop_superseded_timeseries(str(new), str(new))  # never self
+    assert not drop_superseded_timeseries(str(new), str(new))  # never self
     assert new.exists()
+
+
+def test_check_dry_run_plans_topups_for_failing_pairs(tmp_path, capsys, monkeypatch):
+    """End-to-end `check` on a tiny campaign: a replica with no jumps fails the
+    threshold, so a dry run must plan a top-up job (exercises do_check fully)."""
+    import argparse
+    import csv as _csv
+
+    from flexsim.susc.layout import SUSCEPTIBILITY_CSV_FIELDS, SUSCEPTIBILITY_DATA_CSV, susc_run_dir
+    from flexsim.susc.smart_sweep import do_check
+
+    monkeypatch.chdir(tmp_path)  # do_check creates slurm_reports/ in the cwd
+    base = str(tmp_path / "SUSC_RUNS_TEST")
+    run_dir = susc_run_dir(dict(Lx=16, Ly=16, epsilon=-1.76, delta_f=-20.0,
+                                delta_mu=0.0, k=0.0, scheme="homo"), base)
+    os.makedirs(run_dir)
+    row = {f: "" for f in SUSCEPTIBILITY_CSV_FIELDS}
+    row.update(id=1, replica_id=1, epsilon=-1.76, L=16, Lx=16, Ly=16, beta=1.0, prod_time=1000.0)
+    with open(os.path.join(run_dir, SUSCEPTIBILITY_DATA_CSV), "w", newline="") as f:
+        w = _csv.DictWriter(f, fieldnames=SUSCEPTIBILITY_CSV_FIELDS)
+        w.writeheader()
+        w.writerow(row)
+    with open(os.path.join(run_dir, "m_timeseries_1.csv"), "w") as f:
+        f.write("chunk,m\n" + "".join(f"{i},0.9\n" for i in range(50)))
+
+    args = argparse.Namespace(results_base=base, threshold=10.0, max_stalled_rounds=3,
+                              check_script="check.sh", topup_script="topup.sh", dry_run=True)
+    do_check(args)
+
+    out = capsys.readouterr().out
+    assert "1 pairs failing" in out
+    assert "[DRY-RUN] sbatch --parsable --job-name=susc_top_L16 topup.sh -1.76" in out
+    assert os.path.isfile(os.path.join(base, "jump_check_round_1.png"))

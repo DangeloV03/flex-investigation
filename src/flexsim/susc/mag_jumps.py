@@ -42,7 +42,7 @@ import numpy as np
 import pandas as pd
 
 
-from flexsim.susc.chi_max_scaling import load_replica_groups
+from flexsim.susc.replica_data import load_replica_groups
 from flexsim.susc.figures import L_PLOT_STYLE
 from flexsim.susc.layout import find_susc_run_csvs, parse_susc_run_dir
 

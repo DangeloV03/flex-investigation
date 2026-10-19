@@ -27,7 +27,17 @@ import os
 import pandas as pd
 
 from flexsim.susc.aggregate import aggregate, aggregate_pooled
-from flexsim.susc.figures import draw_peak_chi_figure, plot_binder_vs_epsilon, plot_chi_vs_epsilon, plot_fig7_panels, plot_heat_capacity_vs_epsilon, plot_m_histograms_at_peak, plot_m_vs_epsilon, plot_peak_chi_vs_L, print_moments_summary
+from flexsim.susc.figures import (
+    draw_peak_chi_figure,
+    plot_binder_vs_epsilon,
+    plot_chi_vs_epsilon,
+    plot_fig7_panels,
+    plot_heat_capacity_vs_epsilon,
+    plot_m_histograms_at_peak,
+    plot_m_vs_epsilon,
+    plot_peak_chi_vs_L,
+    print_moments_summary,
+)
 
 
 def main() -> None:

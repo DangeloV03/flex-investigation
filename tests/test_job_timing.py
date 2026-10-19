@@ -6,14 +6,16 @@ import os
 import subprocess
 
 from flexsim.susc.job_timing import (
-    _parse_sacct_output,
-    _stats_from_sacct_rows,
     append_slurm_job,
     fmt_hms,
     load_l_timings,
+    write_round_timing_report,
+)
+from flexsim.susc.slurm_stats import (
+    _parse_sacct_output,
+    _stats_from_sacct_rows,
     parse_hms,
     parse_seff,
-    write_round_timing_report,
 )
 
 
@@ -69,12 +71,12 @@ def test_sacct_stats_without_steps_fall_back_to_alloc_row():
 
 
 def test_run_swallows_timeout(monkeypatch):
-    import flexsim.susc.job_timing as job_timing
+    import flexsim.susc.slurm_stats as slurm_stats
     def boom(*_args, **_kwargs):
         raise subprocess.TimeoutExpired(cmd="seff", timeout=8)
 
-    monkeypatch.setattr(job_timing.subprocess, "run", boom)
-    assert job_timing._run(["seff", "1"]) == ""
+    monkeypatch.setattr(slurm_stats.subprocess, "run", boom)
+    assert slurm_stats._run(["seff", "1"]) == ""
 
 
 def test_write_round_timing_report(tmp_path, monkeypatch):

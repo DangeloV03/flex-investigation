@@ -27,7 +27,14 @@ import numpy as np
 import pandas as pd
 
 from flexsim.coex.flex_theory import coex_chemical_potential
-from flexsim.coex.layout import COMBO_KEY_FIELDS, combo_dir, combo_has_results, combo_key_from_dict, iter_output_csvs
+from flexsim.coex.layout import (
+    COMBO_KEY_FIELDS,
+    combo_dir,
+    combo_has_results,
+    combo_key_from_dict,
+    iter_output_csvs,
+)
+from flexsim.grid import frange
 from flexsim.coex.manage_csv import append_manage_rows, read_manage
 from flexsim.coex.queue_manifest import merge_pending, read_manifest
 
@@ -66,12 +73,6 @@ OUTPUT_DIR = "samples"
 MANAGE_CSV = "manage.csv"
 MANIFEST_PATH = "run_all_queue.json"
 RESULTS_DIR = "results"
-
-def frange(lo: float, hi: float, step: float) -> list[float]:
-    """Inclusive float range [lo, hi] at fixed step (rounded to 6 decimals)."""
-    n = int(round((hi - lo) / step)) + 1
-    return [round(lo + i * step, 6) for i in range(n)]
-
 
 def grid_outer_combos() -> list[tuple[float, float]]:
     """Full Cartesian grid over (epsilon, delta_mu)."""

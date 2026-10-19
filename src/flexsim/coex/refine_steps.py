@@ -6,7 +6,19 @@ import numpy as np
 
 from flexsim.coex.manage_csv import write_manage
 from flexsim.coex.refine_jobs import jobs_already_in_manifest, enqueue_jobs
-from flexsim.coex.criteria import MAX_ADDITIONAL_REQUESTS, PSI_COEX_MAX, extension_window, finalize_combo, finalize_unstable, interior_psi_minimum, is_psi_minimum_acceptable, min_psi_value, psi_min_index, refinement_mus, sign_change_bracket
+from flexsim.coex.criteria import (
+    MAX_ADDITIONAL_REQUESTS,
+    PSI_COEX_MAX,
+    extension_window,
+    finalize_combo,
+    finalize_unstable,
+    interior_psi_minimum,
+    is_psi_minimum_acceptable,
+    min_psi_value,
+    psi_min_index,
+    refinement_mus,
+    sign_change_bracket,
+)
 
 
 # ---------------------------------------------------------------------------

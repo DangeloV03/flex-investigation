@@ -22,7 +22,7 @@ import os
 import subprocess
 import sys
 
-from flexsim.coex.generate import frange
+from flexsim.grid import frange
 from flexsim.paths import SUSC_SLURM_DIR
 
 EPS_MIN = -2.0

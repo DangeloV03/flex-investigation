@@ -10,7 +10,15 @@ from typing import Optional
 import numpy as np
 
 from flexsim.coex.layout import combo_dir_name, mu_dir_name
-from flexsim.criticality.bc import BC_BIMODAL_CUTOFF, bc_bootstrap_error, cache_column_op, extract_column_op, pool_column_op, sarle_bc, untag
+from flexsim.criticality.bc import (
+    BC_BIMODAL_CUTOFF,
+    bc_bootstrap_error,
+    cache_column_op,
+    extract_column_op,
+    pool_column_op,
+    sarle_bc,
+    untag,
+)
 from flexsim.criticality.mu_selection import read_output_field, enumerate_mu_dirs, resolve_mu_coex
 
 

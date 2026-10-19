@@ -21,7 +21,8 @@ import numpy as np
 
 from flexsim.coex.layout import combo_dir, combo_key_from_dict
 from flexsim.coex.flex_theory import coex_chemical_potential
-from flexsim.coex.generate import collect_active_combo_keys, frange
+from flexsim.coex.generate import collect_active_combo_keys
+from flexsim.grid import frange
 from flexsim.coex.manage_csv import append_manage_rows
 from flexsim.coex.queue_manifest import merge_pending
 from flexsim.susc.layout import (

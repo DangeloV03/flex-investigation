@@ -10,7 +10,13 @@ import numpy as np
 
 from flexsim.coex.layout import param_tag, size_tag
 from flexsim.criticality.bc import untag
-from flexsim.criticality.bc_sweep import CRIT_FIELDS, append_row, discover_epsilons, results_roots, sweep_bc
+from flexsim.criticality.bc_sweep import (
+    CRIT_FIELDS,
+    append_row,
+    discover_epsilons,
+    results_roots,
+    sweep_bc,
+)
 from flexsim.criticality.epsilon_c import locate_epsilon_c
 
 

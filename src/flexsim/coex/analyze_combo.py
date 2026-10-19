@@ -10,7 +10,21 @@ from flexsim.coex.layout import COMBO_KEY_FIELDS, combo_dir_name
 from flexsim.coex.queue_manifest import read_manifest
 from flexsim.coex.manage_csv import find_manage_row, read_manage
 from flexsim.coex.phi_psi import build_curves
-from flexsim.coex.criteria import MAX_ADDITIONAL_REQUESTS, N_INITIAL_MU_POINTS, N_REFINEMENT_POINTS, PSI_COEX_MAX, count_in_bracket, extension_window, finalize_unstable, has_phi_sign_change, interior_psi_minimum, is_coex_resolved, psi_min_index, refinement_mus, sign_change_bracket
+from flexsim.coex.criteria import (
+    MAX_ADDITIONAL_REQUESTS,
+    N_INITIAL_MU_POINTS,
+    N_REFINEMENT_POINTS,
+    PSI_COEX_MAX,
+    count_in_bracket,
+    extension_window,
+    finalize_unstable,
+    has_phi_sign_change,
+    interior_psi_minimum,
+    is_coex_resolved,
+    psi_min_index,
+    refinement_mus,
+    sign_change_bracket,
+)
 from flexsim.coex.refine_steps import finalize_if_psi_acceptable, request_more_data
 
 

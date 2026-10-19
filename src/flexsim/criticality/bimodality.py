@@ -44,7 +44,12 @@ import os
 from flexsim.coex.layout import param_tag
 from flexsim.criticality.bc import BC_BIMODAL_CUTOFF
 from flexsim.criticality.bc_sweep import bc_err_stats, backfill_bc_err
-from flexsim.criticality.phase_diagram import DEFAULT_SCHEME_COMPARISON_PANELS, inspect_coverage, phase_diagram, scheme_comparison
+from flexsim.criticality.phase_diagram import (
+    DEFAULT_SCHEME_COMPARISON_PANELS,
+    inspect_coverage,
+    phase_diagram,
+    scheme_comparison,
+)
 from flexsim.criticality.figures import make_histogram_figure, run_fss
 
 

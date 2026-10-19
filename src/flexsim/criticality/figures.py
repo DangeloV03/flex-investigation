@@ -7,7 +7,13 @@ from typing import Optional
 
 from flexsim.coex.layout import combo_dir_name, param_tag
 from flexsim.criticality.mu_selection import enumerate_mu_dirs, resolve_mu_coex
-from flexsim.criticality.bc_sweep import CRIT_FIELDS, append_row, best_mu_over_sweep, discover_epsilons, sweep_bc
+from flexsim.criticality.bc_sweep import (
+    CRIT_FIELDS,
+    append_row,
+    best_mu_over_sweep,
+    discover_epsilons,
+    sweep_bc,
+)
 from flexsim.criticality.epsilon_c import locate_epsilon_c
 
 
