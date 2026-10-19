@@ -1,81 +1,42 @@
+# All run outputs: data, plots, queues, Slurm logs, notes (see src/flexsim/paths.py)
+output/
+
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
 *.egg-info/
-.eggs/
-dist/
 build/
+dist/
 
-# Virtual environments / Conda
+# Environments
 .env
-.venv
 .venv*/
 venv/
-env/
 
-# IDE / OS
+# Editors / OS / tool caches
 .idea/
 .vscode/
 *.swp
-*.swo
 .DS_Store
-
-# Jupyter (not used in this repo)
+.mplconfig/
+.cache/
+.pytest_cache/
 *.ipynb
 .ipynb_checkpoints/
 
-# Local tooling caches
-.mplconfig/
-.cache/
-
-# Generated pipeline outputs (large data — keep out of git)
-samples/
-test_samples/
-susceptibility_samples/
-results/
-susceptibility_results/
-coex_eq/
-COEX_RUNS_*/
-plots/
-test_run_out/
-
-# Run tracking and queue state (generated / local)
-manage.csv
-test_manage.csv
-*_manage.csv
-*_in_progress.csv
-run_all_queue.json
-susceptibility_*_queue.json
-coex_queue.json
-
-# Criticality experiment run outputs (npy/json/csv/png data — keep out of git)
-criticality/C3[A-Z]/
-criticality/D3[A-Z]/
-criticality/c3_negative_drive_family/
-criticality/d3_positive_drive_family/
-criticality/equilibrium_multi_L_testing/
-criticality/homo_dmu1p0/
-criticality/scheme3_multi_L_testing/
-
-# Generated data output dir
-data/
-
-# Archived, kept locally but out of git (generated graph export + scratch notes)
-archive/graphify-out/
-archive/notes.md
-archive/umbrella.md
-
-# SLURM job logs (in-repo on /scratch, kept off /home quota)
-slurm_reports/
-
-# Simulation scratch dirs (if any remain outside results/)
-_scratch_*/
-
-# Lattice snapshots from runs
-**/final_lattice_*.npy
-
-# Local-only pipeline notes
-susceptibility/PIPELINE.md
+# Old top-level output locations (pre-output/ layout), so existing checkouts
+# such as the one on Della stay clean until their data is moved into output/.
+/COEX_RUNS_*/
+/SUSC_RUNS*/
+/samples/
+/results/
+/plots/
+/data/
+/slurm_reports/
+/manage.csv
+/run_all_queue.json
+/coex/
+/susceptibility/
+/criticality/
+/archive/
+/misc/

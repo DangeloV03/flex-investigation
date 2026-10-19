@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-# Stub out the compiled Rust extension so susceptibility_runner is importable locally.
+# Stub out the compiled Rust extension so flexsim.susc.runner is importable locally.
 for _mod in (
     "lattice_gas",
     "lattice_gas.load",
@@ -27,7 +27,7 @@ for _mod in (
     sys.modules.setdefault(_mod, MagicMock())
 
 # ---------------------------------------------------------------------------
-# Helpers that mirror what susceptibility_runner.py does, but without Rust.
+# Helpers that mirror what susc/runner.py does, but without Rust.
 # ---------------------------------------------------------------------------
 
 
@@ -57,7 +57,7 @@ def _write_ts(ts_path: str, m_values: list[float]) -> None:
 
 def test_csv_schema_v2_and_v3_roundtrip(tmp_path):
     """v2 rows (no resume_id) and v3 rows both read back with all fields."""
-    from susceptibility_paths import (
+    from flexsim.susc.layout import (
         SUSCEPTIBILITY_CSV_FIELDS,
         SUSCEPTIBILITY_CSV_FIELDS_V2,
         read_susceptibility_csv,
@@ -90,8 +90,8 @@ def test_csv_schema_v2_and_v3_roundtrip(tmp_path):
 
 def test_get_next_id_and_append(tmp_path):
     """get_next_id reads existing max; append_to_csv preserves old rows."""
-    from susceptibility_paths import SUSCEPTIBILITY_CSV_FIELDS, SUSCEPTIBILITY_DATA_CSV
-    from susceptibility_runner import append_to_csv, get_next_id
+    from flexsim.susc.layout import SUSCEPTIBILITY_CSV_FIELDS, SUSCEPTIBILITY_DATA_CSV
+    from flexsim.susc.runner import append_to_csv, get_next_id
 
     csv_path = str(tmp_path / SUSCEPTIBILITY_DATA_CSV)
 
@@ -112,7 +112,7 @@ def test_get_next_id_and_append(tmp_path):
     new_row.update(id="8", epsilon="-1.76", prod_time="1000000.0", time="99.0", resume_id="")
     append_to_csv(csv_path, [new_row])
 
-    from susceptibility_paths import read_susceptibility_csv
+    from flexsim.susc.layout import read_susceptibility_csv
     rows = read_susceptibility_csv(csv_path)
     assert len(rows) == 3
     assert {r["id"] for r in rows} == {"0", "7", "8"}
@@ -120,7 +120,7 @@ def test_get_next_id_and_append(tmp_path):
 
 def test_load_timeseries_csv(tmp_path):
     """_load_timeseries_csv reads m values correctly."""
-    from susceptibility_runner import _load_timeseries_csv
+    from flexsim.susc.runner import _load_timeseries_csv
 
     ts_path = str(tmp_path / "m_timeseries_0.csv")
     m_vals = [0.9, -0.9, 0.8, -0.8]
@@ -133,12 +133,12 @@ def test_load_timeseries_csv(tmp_path):
 
 def test_resume_prod_time_accumulation(tmp_path):
     """Simulate what run_replica does in resume mode: prod_time and timeseries accumulate."""
-    from susceptibility_paths import (
+    from flexsim.susc.layout import (
         SUSCEPTIBILITY_CSV_FIELDS,
         SUSCEPTIBILITY_DATA_CSV,
         read_susceptibility_csv,
     )
-    from susceptibility_runner import (
+    from flexsim.susc.runner import (
         _load_timeseries_csv,
         append_to_csv,
         get_next_id,
@@ -218,8 +218,8 @@ def test_resume_prod_time_accumulation(tmp_path):
 
 def test_latest_gen_detection_multi_round(tmp_path):
     """After two top-up rounds, auto-detection picks the highest-prod_time rows."""
-    from susceptibility_paths import SUSCEPTIBILITY_CSV_FIELDS, SUSCEPTIBILITY_DATA_CSV
-    from susceptibility_runner import get_next_id
+    from flexsim.susc.layout import SUSCEPTIBILITY_CSV_FIELDS, SUSCEPTIBILITY_DATA_CSV
+    from flexsim.susc.runner import get_next_id
 
     csv_path = str(tmp_path / SUSCEPTIBILITY_DATA_CSV)
 
@@ -238,7 +238,7 @@ def test_latest_gen_detection_multi_round(tmp_path):
     _write_fresh_rows(csv_path, rows, SUSCEPTIBILITY_CSV_FIELDS)
     assert get_next_id(csv_path) == 4
 
-    from susceptibility_paths import read_susceptibility_csv
+    from flexsim.susc.layout import read_susceptibility_csv
     all_rows = read_susceptibility_csv(csv_path)
     max_pt = max(float(r.get("prod_time", 0) or 0) for r in all_rows)
     latest = [r for r in all_rows if abs(float(r.get("prod_time", 0) or 0) - max_pt) < 1.0]
@@ -256,7 +256,7 @@ def _touch_csv(path: str) -> None:
 
 def test_s1a_ising_folder_names():
     """Experiment S1A: Δf=-20, k=0, Δμ=0, homo → _{L}_{L}_S1_DF-20.0_DMU0.0_K0.0/_{eps}."""
-    from susceptibility_paths import (
+    from flexsim.susc.layout import (
         ISING_DELTA_F,
         ISING_DELTA_MU,
         ISING_K,
@@ -283,7 +283,7 @@ def test_s1a_ising_folder_names():
 
 def test_s1b_three_state_folder_names():
     """S1B: Δf=0, k=1, Δμ=0, homo → _{L}_{L}_S1_DF0.0_DMU0.0_K1.0/_{eps}."""
-    from susceptibility_paths import susc_param_dir_name, susc_run_dir
+    from flexsim.susc.layout import susc_param_dir_name, susc_run_dir
 
     params = dict(
         Lx=64, Ly=64, epsilon=-1.76,
@@ -297,7 +297,7 @@ def test_s1b_three_state_folder_names():
 
 def test_split_size_groups_one_job_per_size():
     """Each L gets its own job: a slow L must not drag the others past the wall."""
-    from smart_sweep import _split_size_groups
+    from flexsim.susc.smart_sweep import _split_size_groups
 
     assert _split_size_groups([16, 32, 48, 64, 96, 128]) == [
         ("L16", [16]),
@@ -313,7 +313,7 @@ def test_split_size_groups_one_job_per_size():
 
 def test_find_susceptibility_csvs_legacy_and_smart(tmp_path):
     """Analysis loaders must find both legacy susceptibility_* dirs and SUSC_RUNS."""
-    from susceptibility_paths import (
+    from flexsim.susc.layout import (
         SUSCEPTIBILITY_DATA_CSV,
         find_susceptibility_csvs,
         susc_run_dir,
@@ -345,7 +345,7 @@ def _write_run_csv(run_dir, *, L, eps, delta_f, delta_mu, k, scheme, mu):
     import csv as _csv
     import os as _os
 
-    from susceptibility_paths import SUSCEPTIBILITY_CSV_FIELDS, SUSCEPTIBILITY_DATA_CSV
+    from flexsim.susc.layout import SUSCEPTIBILITY_CSV_FIELDS, SUSCEPTIBILITY_DATA_CSV
 
     _os.makedirs(run_dir, exist_ok=True)
     row = {f: "" for f in SUSCEPTIBILITY_CSV_FIELDS}
@@ -360,7 +360,7 @@ def _write_run_csv(run_dir, *, L, eps, delta_f, delta_mu, k, scheme, mu):
 
 def test_topup_resolves_s1b_run_dir_and_physics(tmp_path):
     """Top-up must find S1B runs (Δf=0, k=1), not assume the S1A parameters."""
-    from susceptibility_paths import find_susc_run_dir, read_run_physics, susc_run_dir
+    from flexsim.susc.layout import find_susc_run_dir, read_run_physics, susc_run_dir
 
     base = str(tmp_path / "SUSC_RUNS_S1B")
     params = dict(Lx=64, Ly=64, epsilon=-1.76,
@@ -383,7 +383,7 @@ def test_check_aborts_when_jump_data_stops_changing(tmp_path):
     """A top-up that adds no samples must not chain rounds forever."""
     import pandas as pd
 
-    from smart_sweep import _check_stalled, _progress_fingerprint
+    from flexsim.susc.smart_sweep import _check_stalled, _progress_fingerprint
 
     base = str(tmp_path)
     summary = pd.DataFrame({"L": [32], "epsilon": [-1.7], "n_replicas": [4],
@@ -398,7 +398,7 @@ def test_check_aborts_when_jump_data_stops_changing(tmp_path):
 def test_exact_mu_map_matches_coex_formula():
     """βΔf=0 coexistence sits above 2ε; Ising limit reduces to 2ε."""
     import pytest
-    from smart_sweep import _exact_mu_map
+    from flexsim.susc.smart_sweep import _exact_mu_map
 
     m = _exact_mu_map([-1.8, -1.7, -1.6], delta_f=0.0, delta_mu=0.0)
     # Values from coex_chemical_potential(..., DRIVEN=False) and manage.csv FLEX.
@@ -410,7 +410,7 @@ def test_exact_mu_map_matches_coex_formula():
 
 def test_exact_mu_map_rejects_driven():
     import pytest
-    from smart_sweep import _exact_mu_map
+    from flexsim.susc.smart_sweep import _exact_mu_map
 
     with pytest.raises(SystemExit):
         _exact_mu_map([-1.7], delta_f=0.0, delta_mu=1.0)
@@ -421,7 +421,7 @@ def test_mu_source_refuses_to_fall_back_to_2eps(tmp_path, monkeypatch):
     import argparse
     import csv
     import pytest
-    from smart_sweep import do_sweep
+    from flexsim.susc.smart_sweep import do_sweep
 
     src = tmp_path / "manage.csv"
     with open(src, "w", newline="") as f:
@@ -443,10 +443,9 @@ def test_mu_source_refuses_to_fall_back_to_2eps(tmp_path, monkeypatch):
 
 def test_runner_requires_mu_outside_ising_limit(monkeypatch, tmp_path):
     import pytest
-    import susceptibility_runner
-
+    import flexsim.susc.runner as susceptibility_runner
     monkeypatch.setattr(sys, "argv", [
-        "susceptibility_runner.py", "--epsilon", "-1.7", "--L", "16",
+        "susc/runner.py", "--epsilon", "-1.7", "--L", "16",
         "--delta-f", "0.0", "--k", "1.0", "--outdir", str(tmp_path),
     ])
     with pytest.raises(SystemExit, match="--mu is required"):
@@ -454,7 +453,7 @@ def test_runner_requires_mu_outside_ising_limit(monkeypatch, tmp_path):
 
 
 def test_drop_superseded_timeseries_only_on_exact_prefix(tmp_path):
-    from susceptibility_runner import _drop_superseded_timeseries
+    from flexsim.susc.runner import _drop_superseded_timeseries
 
     old = tmp_path / "m_timeseries_0.csv"
     new = tmp_path / "m_timeseries_16.csv"

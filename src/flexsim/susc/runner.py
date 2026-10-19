@@ -1,0 +1,764 @@
+"""
+Long production runs on a square L×L lattice at μ_coex for susceptibility
+measurement. Driven entirely by command-line flags (one (ε, L) per invocation).
+
+For each replica:
+  - Equilibrate (eq_time), discard.
+  - Production in chunks; record per-species densities (rho_bonding, rho_inert, rho_empty)
+    at the end of each chunk.
+  - Derive m = rho_bonding - rho_inert - rho_empty and M = N*m from raw densities.
+  - Compute time-averaged ⟨m⟩, ⟨m²⟩, ⟨m⁴⟩ (order parameter / Binder) and
+    χ = (N/T)(⟨m²⟩ - ⟨m⟩²) with T = 1/β.
+
+Outputs (per job directory):
+  - susceptibility_data.csv       — one row per replica with aggregate statistics
+  - m_timeseries_{id}.csv         — per-chunk (chunk, rho_bonding, rho_inert, rho_empty, m)
+  - m_timeseries_{id}.png         — not written (CSV only, to save disk)
+  - final_lattice_{id}.npy        — final lattice snapshot
+
+Optional checkpointing (--checkpoint-every N, off by default): every N chunks each
+replica atomically writes ckpt_{id}.npz (lattice + chunk history so far).  If the
+job is killed at the Slurm wall, re-running the same command picks up those
+orphaned checkpoints (ids with no row in susceptibility_data.csv) and continues
+from them; a checkpoint is deleted once its replica's row has been written.
+
+Re-running the same (ε, L) appends new replicas to susceptibility_data.csv
+(run IDs continue from the max existing ID); it never overwrites.
+
+Usage:
+    python run/susc.py run-one --epsilon -1.76 --L 64 --cpus 16 \\
+        --results-base susceptibility/results/exact_2026-07-02
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import multiprocessing as mp
+import os
+import shutil
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+from lattice_gas import load
+from lattice_gas.boundary_condition import Periodic
+from lattice_gas.ending_criterion import Time
+from lattice_gas.markov_chain import HeteroChain
+from lattice_gas.simulate import simulate
+
+from flexsim.susc.layout import (
+    ISING_DELTA_F,
+    ISING_DELTA_MU,
+    ISING_K,
+    ISING_SCHEME,
+    PROD_RESULTS_BASE,
+    SUSCEPTIBILITY_CSV_FIELDS,
+    SUSCEPTIBILITY_DATA_CSV,
+    read_susceptibility_csv,
+    susceptibility_prod_dir,
+)
+
+EMPTY, INERT, BONDING = 0, 1, 2
+
+CSV_FIELDNAMES = SUSCEPTIBILITY_CSV_FIELDS
+
+TIMESERIES_FIELDNAMES = ["chunk", "rho_bonding", "rho_inert", "rho_empty", "m", "energy"]
+
+
+def compute_densities(state: np.ndarray) -> tuple[float, float, float]:
+    """Return (rho_bonding, rho_inert, rho_empty) — fractions of each species."""
+    flat = state.ravel()
+    n = flat.size
+    rho_bonding = float(np.count_nonzero(flat == BONDING)) / n
+    rho_inert = float(np.count_nonzero(flat == INERT)) / n
+    rho_empty = float(np.count_nonzero(flat == EMPTY)) / n
+    return rho_bonding, rho_inert, rho_empty
+
+
+def compute_energy(
+    state: np.ndarray, beta: float, epsilon: float, mu: float, delta_f: float
+) -> float:
+    """Total dimensionless energy βE (equals E at β=1).
+
+    E = (βε/2) Σᵢ_{bonding} n_bonding_neighbors(i) − βμ·n_bonding − β(μ+Δf)·n_inert
+
+    Matches the Rust Energy::record() implementation exactly.
+    """
+
+    # 2d Grid of 0's and 1's where 1's are the bonding sites
+    bonding = (state == BONDING).astype(np.float64)
+    bonding_neighbors = (
+        np.roll(bonding, 1, axis=0) +
+        np.roll(bonding, -1, axis=0) +
+        np.roll(bonding, 1, axis=1) +
+        np.roll(bonding, -1, axis=1)
+    )
+    e_interact = 0.5 * beta * epsilon * float(np.dot(bonding.ravel(), bonding_neighbors.ravel()))
+    flat = state.ravel()
+    n_bonding = float(np.count_nonzero(flat == BONDING))
+    n_inert = float(np.count_nonzero(flat == INERT))
+    e_chem = -beta * mu * n_bonding - beta * (mu + delta_f) * n_inert
+    return e_interact + e_chem
+
+
+def build_initial_state(Lx: int, Ly: int, fraction: float, seed: int) -> np.ndarray:
+    """Random fraction of sites set to BONDING, rest EMPTY."""
+    rng = np.random.default_rng(seed)
+    state = np.zeros((Lx, Ly), dtype=np.uint32)
+    n_active = int(round(fraction * Lx * Ly))
+    if n_active > 0:
+        idx = rng.choice(Lx * Ly, n_active, replace=False)
+        state.ravel()[idx] = BONDING
+    return state
+
+
+def replica_fraction(base_fraction: float, run_id: int) -> float:
+    """Alternate the initial BONDING fill between two mirror-image sides so
+    replicas seed both branches of the magnetization distribution.
+
+    Even run_id -> high side (base_fraction, e.g. 0.8 = 80% BONDING).
+    Odd  run_id -> low  side (1 - base_fraction, e.g. 0.2 = 20% BONDING).
+    With base_fraction=0.5 both sides coincide (symmetric, original behaviour).
+    """
+    high = max(base_fraction, 1.0 - base_fraction)
+    low = 1.0 - high
+    return high if run_id % 2 == 0 else low
+
+
+def sem(values: np.ndarray) -> float:
+    """Standard error of the mean."""
+    n = len(values)
+    if n <= 1:
+        return 0.0
+    return float(np.std(values, ddof=1) / np.sqrt(n))
+
+
+def compute_chi_err(
+    m_abs_mean: float,
+    m_abs_mean_err: float,
+    m2_mean_err: float,
+    n_sites: int,
+    beta: float,
+) -> float:
+    """Delta-method SEM for χ = N·β·(⟨m²⟩-⟨|m|⟩²)."""
+    factor = n_sites * beta
+    var = (factor * m2_mean_err) ** 2 + (2.0 * factor * m_abs_mean * m_abs_mean_err) ** 2
+    return float(np.sqrt(var))
+
+
+def compute_chi(m2_mean: float, m_abs_mean: float, n_sites: int, beta: float) -> float:
+    """χ = (1/NT)(⟨M²⟩-⟨|M|⟩²) with M = N·m, |M| = N·|m|, T = 1/β.
+
+    ⟨M²⟩ = N²⟨m²⟩ and ⟨|M|⟩² = N²⟨|m|⟩², so this equals N·β·(⟨m²⟩-⟨|m|⟩²).
+    Using ⟨|m|⟩ (not ⟨m⟩) removes the spurious symmetry-degeneracy term that small,
+    flipping lattices would otherwise pick up — the connected (FSS) susceptibility.
+    """
+    M2_mean = n_sites ** 2 * m2_mean
+    absM_mean = n_sites * m_abs_mean
+    return beta / n_sites * (M2_mean - absM_mean ** 2)
+
+
+def save_timeseries_csv(path: str, chunks: list[dict]) -> None:
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=TIMESERIES_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(chunks)
+
+
+def save_timeseries_plot(path: str, chunks: list[dict], run_id: int, epsilon: float, L: int) -> None:
+    chunk_indices = [c["chunk"] for c in chunks]
+    m_values = [c["m"] for c in chunks]
+    e_values = [c["energy"] for c in chunks]
+    fig, (ax_m, ax_e) = plt.subplots(2, 1, figsize=(8, 5), sharex=True)
+    ax_m.plot(chunk_indices, m_values, "o-", markersize=4)
+    ax_m.axhline(0.0, color="0.5", linewidth=0.8, linestyle="--")
+    ax_m.set_ylabel("m")
+    ax_m.grid(True, alpha=0.3)
+    ax_e.plot(chunk_indices, e_values, "o-", markersize=4, color="tab:orange")
+    ax_e.set_xlabel("Chunk")
+    ax_e.set_ylabel("E")
+    ax_e.grid(True, alpha=0.3)
+    fig.suptitle(f"replica {run_id}  ε={epsilon}  L={L}")
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+
+
+def get_next_id(csv_path: str) -> int:
+    existing_ids = [
+        int(r["id"])
+        for r in read_susceptibility_csv(csv_path)
+        if str(r.get("id", "")).strip()
+    ]
+    return max(existing_ids) + 1 if existing_ids else 0
+
+
+def append_to_csv(csv_path: str, rows: list[dict]) -> None:
+    existing = read_susceptibility_csv(csv_path)
+    normalized = [{field: row.get(field, "") for field in CSV_FIELDNAMES} for row in rows]
+    all_rows = existing + normalized
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(all_rows)
+
+
+def _drop_superseded_timeseries(old_path: str, new_path: str) -> bool:
+    """Delete a resumed-from timeseries once its successor is safely recorded.
+
+    A top-up writes the full history (prior + new chunks) to a new file, so the
+    prior file is a byte-for-byte prefix of it.  Keeping every generation grew
+    disk quadratically (S1B: 726 of 748 GiB were superseded copies).  Called
+    only after the successor's CSV row is written, and deletes only when the
+    prefix really matches, so no history can be lost.
+    """
+    if os.path.abspath(old_path) == os.path.abspath(new_path):
+        return False
+    try:
+        if os.path.getsize(new_path) <= os.path.getsize(old_path):
+            return False
+        with open(old_path, "rb") as f_old, open(new_path, "rb") as f_new:
+            while True:
+                block = f_old.read(1 << 20)
+                if not block:
+                    break
+                if f_new.read(len(block)) != block:
+                    return False
+        os.remove(old_path)
+    except OSError:
+        return False
+    return True
+
+
+def _load_timeseries_csv(path: str) -> list[dict]:
+    """Read m_timeseries CSV; return list of row dicts with numeric types."""
+    if not os.path.isfile(path):
+        return []
+    with open(path, newline="") as f:
+        rows = list(csv.DictReader(f))
+    for r in rows:
+        r["chunk"] = int(r["chunk"])
+        for k in ("rho_bonding", "rho_inert", "rho_empty", "m", "energy"):
+            r[k] = float(r[k])
+    return rows
+
+
+def _ckpt_path(outdir: str, run_id: int) -> str:
+    return os.path.join(outdir, f"ckpt_{run_id}.npz")
+
+
+def _write_checkpoint(
+    path: str,
+    state: np.ndarray,
+    chunks: list[dict],
+    cumulative_time: float,
+    resume_id: int | None,
+) -> None:
+    """Atomically write lattice + chunk history so a kill leaves the old file intact."""
+    cols = {c: np.asarray([r[c] for r in chunks], dtype=float) for c in TIMESERIES_FIELDNAMES}
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        np.savez(
+            f,
+            state=state,
+            cumulative_time=float(cumulative_time),
+            resume_id=-1 if resume_id is None else int(resume_id),
+            **cols,
+        )
+    os.replace(tmp, path)
+
+
+def _load_checkpoint(path: str) -> dict | None:
+    """Return {state, chunks, cumulative_time, resume_id} or None if unreadable."""
+    try:
+        with np.load(path) as z:
+            n = len(z["chunk"])
+            chunks = [
+                {"chunk": int(z["chunk"][i]),
+                 **{c: float(z[c][i]) for c in TIMESERIES_FIELDNAMES if c != "chunk"}}
+                for i in range(n)
+            ]
+            rid = int(z["resume_id"])
+            return {
+                "state": z["state"],
+                "chunks": chunks,
+                "cumulative_time": float(z["cumulative_time"]),
+                "resume_id": None if rid < 0 else rid,
+            }
+    except Exception as exc:  # corrupt/partial file: fall back to a fresh run
+        print(f"[susc.runner] ignoring unreadable checkpoint {path}: {exc}", flush=True)
+        return None
+
+
+def _orphan_checkpoint_ids(outdir: str, done_ids: set[int]) -> list[int]:
+    """Run ids with a checkpoint on disk but no row in the CSV (killed mid-run)."""
+    ids = []
+    for name in os.listdir(outdir):
+        if name.startswith("ckpt_") and name.endswith(".npz"):
+            try:
+                rid = int(name[len("ckpt_"):-len(".npz")])
+            except ValueError:
+                continue
+            if rid not in done_ids:
+                ids.append(rid)
+    return sorted(ids)
+
+
+def run_replica(args: tuple) -> dict:
+    (
+        replica_id,
+        run_id,
+        seed,
+        params,
+        run_settings,
+        outdir,
+    ) = args
+
+    beta = run_settings["beta"]
+    epsilon = params["epsilon"]
+    delta_mu = params["delta_mu"]
+    delta_f = params["delta_f"]
+    k = params["k"]
+    scheme = params["scheme"]
+    mu = params["mu"]
+    Lx = int(params["Lx"])
+    Ly = int(params["Ly"])
+    n_sites = Lx * Ly
+
+    eq_time = run_settings["eq_time"]
+    prod_time = run_settings["prod_time"]
+    n_chunks = run_settings.get("prod_chunks", 1000)
+    base_fraction = run_settings.get("initial_fraction", 0.5)
+    initial_fraction = replica_fraction(base_fraction, run_id)
+
+    # Resume-mode: per-task resume info injected by main() into run_settings.
+    resume_dir: str | None = run_settings.get("resume_dir")
+    resume_id: int | None = run_settings.get("resume_id")
+    prior_prod_time: float = float(run_settings.get("prior_prod_time", 0.0))
+    prior_wall_time: float = float(run_settings.get("prior_wall_time", 0.0))
+    ckpt_every = int(run_settings.get("checkpoint_every", 0) or 0)
+    ckpt_file = _ckpt_path(outdir, run_id)
+    ckpt = _load_checkpoint(ckpt_file) if ckpt_every > 0 and os.path.isfile(ckpt_file) else None
+    if ckpt is not None and (
+        ckpt["resume_id"] != resume_id or ckpt["state"].shape != (Lx, Ly)
+    ):
+        print(
+            f"[susc.runner] replica={replica_id} checkpoint {ckpt_file} does not "
+            f"match this run (resume_id/shape); starting fresh",
+            flush=True,
+        )
+        ckpt = None
+
+    inert_fugacity = np.exp(beta * (mu + delta_f))
+    bonding_fugacity = np.exp(beta * mu)
+
+    chain = HeteroChain(
+        beta,
+        epsilon,
+        delta_mu,
+        inert_fugacity,
+        bonding_fugacity,
+        k,
+        scheme,
+    )
+
+    boundary = Periodic()
+    scratch_dir = os.path.join(outdir, f"_scratch_{replica_id}")
+
+    if resume_dir is not None and resume_id is not None:
+        # Resume mode: load prior lattice, skip equilibration.
+        lattice_path = os.path.join(resume_dir, f"final_lattice_{resume_id}.npy")
+        prior_ts_path = os.path.join(resume_dir, f"m_timeseries_{resume_id}.csv")
+        state = np.load(lattice_path)
+        prior_chunks = _load_timeseries_csv(prior_ts_path)
+        print(
+            f"[susc.runner] replica={replica_id} run_id={run_id} "
+            f"RESUME from id={resume_id} ({len(prior_chunks)} prior chunks)",
+            flush=True,
+        )
+        eq_time = 0.0
+    elif ckpt is not None:
+        # Killed mid-run earlier: lattice + chunk history come from the checkpoint.
+        state = ckpt["state"]
+        prior_chunks = []
+        print(
+            f"[susc.runner] replica={replica_id} run_id={run_id} "
+            f"CHECKPOINT resume at chunk {len(ckpt['chunks'])}/{n_chunks}",
+            flush=True,
+        )
+    else:
+        state = build_initial_state(Lx, Ly, initial_fraction, seed)
+        prior_chunks = []
+        print(
+            f"[susc.runner] replica={replica_id} run_id={run_id} "
+            f"initial_fraction={initial_fraction}",
+            flush=True,
+        )
+        simulate(state, boundary, chain, [], [Time(eq_time)], seed, scratch_dir)
+        state = load.final_state(scratch_dir)
+        print(f"[susc.runner] replica={replica_id} equilibration done", flush=True)
+        if ckpt_every > 0:
+            _write_checkpoint(ckpt_file, state, [], 0.0, resume_id)
+
+    chunk_time = prod_time / n_chunks
+    new_chunk_records: list[dict] = []
+    cumulative_time = 0.0
+    chunk_offset = len(prior_chunks)  # so new chunk indices continue from prior
+    if ckpt is not None:
+        state = ckpt["state"]
+        new_chunk_records = ckpt["chunks"]
+        cumulative_time = ckpt["cumulative_time"]
+
+    for chunk_idx in range(len(new_chunk_records), n_chunks):
+        chunk_seed = seed + 1 + chunk_idx
+        simulate(state, boundary, chain, [], [Time(chunk_time)], chunk_seed, scratch_dir)
+        state = load.final_state(scratch_dir)
+        cumulative_time += load.final_time(scratch_dir)
+
+        rho_B, rho_I, rho_E = compute_densities(state)
+        m_t = rho_B - rho_I - rho_E
+        e_t = compute_energy(state, beta, epsilon, mu, delta_f)
+
+        new_chunk_records.append({
+            "chunk": chunk_offset + chunk_idx,
+            "rho_bonding": rho_B,
+            "rho_inert": rho_I,
+            "rho_empty": rho_E,
+            "m": m_t,
+            "energy": e_t,
+        })
+        print(
+            f"[susc.runner] replica={replica_id} chunk {chunk_idx + 1}/{n_chunks} "
+            f"rho_B={rho_B:.4f} rho_I={rho_I:.6f} rho_E={rho_E:.4f} m={m_t:.4f} e={e_t:.2f} t={cumulative_time:.1f}",
+            flush=True,
+        )
+        if ckpt_every > 0 and (chunk_idx + 1) % ckpt_every == 0 and chunk_idx + 1 < n_chunks:
+            _write_checkpoint(ckpt_file, state, new_chunk_records, cumulative_time, resume_id)
+
+    # Combine prior + new for statistics and saved timeseries.
+    all_chunks = prior_chunks + new_chunk_records
+    m_arr = np.asarray([float(c["m"]) for c in all_chunks], dtype=float)
+    e_arr = np.asarray([float(c["energy"]) for c in all_chunks], dtype=float)
+
+    abs_m_arr = np.abs(m_arr)
+    m2_arr = m_arr ** 2
+    m4_arr = m_arr ** 4
+    m_mean = float(np.mean(m_arr))
+    abs_m_mean = float(np.mean(abs_m_arr))
+    m2_mean = float(np.mean(m2_arr))
+    m4_mean = float(np.mean(m4_arr))
+    m_mean_err = sem(m_arr)
+    abs_m_mean_err = sem(abs_m_arr)
+    m2_mean_err = sem(m2_arr)
+    m4_mean_err = sem(m4_arr)
+    chi = compute_chi(m2_mean, abs_m_mean, n_sites, beta)
+    chi_err = compute_chi_err(abs_m_mean, abs_m_mean_err, m2_mean_err, n_sites, beta)
+
+    e2_arr = e_arr ** 2
+    e_mean = float(np.mean(e_arr))
+    e2_mean = float(np.mean(e2_arr))
+    e_mean_err = sem(e_arr)
+    e2_mean_err = sem(e2_arr)
+
+    np.save(os.path.join(outdir, f"final_lattice_{run_id}.npy"), state)
+    shutil.rmtree(scratch_dir, ignore_errors=True)
+
+    # Save combined timeseries (full history: prior + new chunks).
+    ts_csv = os.path.join(outdir, f"m_timeseries_{run_id}.csv")
+    save_timeseries_csv(ts_csv, all_chunks)
+
+    total_prod_time = prior_prod_time + prod_time
+    total_wall_time = prior_wall_time + cumulative_time
+
+    return {
+        "id": run_id,
+        "replica_id": replica_id,
+        "epsilon": epsilon,
+        "delta_f": delta_f,
+        "delta_mu": delta_mu,
+        "k": k,
+        "scheme": scheme,
+        "L": Lx,
+        "Lx": Lx,
+        "Ly": Ly,
+        "mu": mu,
+        "mu_coex_FITTED": params.get("mu_coex_FITTED", mu),
+        "m_mean": m_mean,
+        "m_mean_err": m_mean_err,
+        "m2_mean": m2_mean,
+        "m2_mean_err": m2_mean_err,
+        "m4_mean": m4_mean,
+        "m4_mean_err": m4_mean_err,
+        "chi": chi,
+        "chi_err": chi_err,
+        "e_mean": e_mean,
+        "e_mean_err": e_mean_err,
+        "e2_mean": e2_mean,
+        "e2_mean_err": e2_mean_err,
+        "beta": beta,
+        "eq_time": eq_time,
+        "prod_time": total_prod_time,
+        "prod_chunks": len(all_chunks),
+        "initial_fraction": initial_fraction,
+        "seed": seed,
+        "time": total_wall_time,
+        "resume_id": "" if resume_id is None else str(resume_id),
+    }
+
+
+def summarize_replicas(results: list[dict]) -> None:
+    if not results:
+        return
+    chi_vals = [r["chi"] for r in results]
+    chi_mean = float(np.mean(chi_vals))
+    chi_stderr = float(np.std(chi_vals, ddof=1) / np.sqrt(len(chi_vals))) if len(chi_vals) > 1 else 0.0
+    print(
+        f"[susc.runner] chi across {len(results)} replicas: "
+        f"{chi_mean:.6f} ± {chi_stderr:.6f}",
+        flush=True,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Square-lattice susceptibility production runner")
+    parser.add_argument("--epsilon", type=float, required=True, help="Interaction strength ε")
+    parser.add_argument("--L", type=int, required=True, help="Square lattice side (Lx = Ly = L)")
+    parser.add_argument(
+        "--mu",
+        type=float,
+        default=None,
+        help="Chemical potential; default is μ_coex_EXACT = 2*ε",
+    )
+    parser.add_argument(
+        "--cpus",
+        type=int,
+        default=1,
+        help="Parallel replicas per batch (= SLURM_CPUS_PER_TASK)",
+    )
+    parser.add_argument("--num-batches", type=int, default=1, help="Sequential batches to append")
+    parser.add_argument("--eq-time", type=float, default=100000.0)
+    parser.add_argument("--prod-time", type=float, default=200000.0)
+    parser.add_argument("--prod-chunks", type=int, default=2000)
+    parser.add_argument("--seed-base", type=int, default=7000)
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=0,
+        help=(
+            "Every N production chunks, atomically save ckpt_<id>.npz (lattice + chunk "
+            "history) so a job killed at the Slurm wall can continue where it stopped "
+            "when the same command is re-run. 0 (default) disables checkpointing."
+        ),
+    )
+    parser.add_argument(
+        "--initial-fraction",
+        type=float,
+        default=0.8,
+        help=(
+            "High-side BONDING fill fraction. Even run_ids seed this fraction "
+            "(e.g. 0.8 = 80/20), odd run_ids seed its mirror (0.2 = 20/80), so "
+            "replicas sample both branches of the magnetization distribution."
+        ),
+    )
+    parser.add_argument("--beta", type=float, default=1.0)
+    parser.add_argument("--scheme", default=ISING_SCHEME)
+    parser.add_argument("--delta-f", type=float, default=ISING_DELTA_F)
+    parser.add_argument("--delta-mu", type=float, default=ISING_DELTA_MU)
+    parser.add_argument("--k", type=float, default=ISING_K)
+    parser.add_argument("--results-base", default=PROD_RESULTS_BASE)
+    parser.add_argument(
+        "--outdir",
+        default=None,
+        help="Output directory (default: SUSC_RUNS/_{Lx}_{Ly}_S{n}_.../_eps/)",
+    )
+    parser.add_argument(
+        "--resume-dir",
+        default=None,
+        help="Directory with final_lattice_*.npy and m_timeseries_*.csv to resume from",
+    )
+    parser.add_argument(
+        "--resume-ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Replica IDs to resume from (one per CPU slot; auto-detected from CSV if omitted)",
+    )
+    args = parser.parse_args()
+
+    if args.mu is not None:
+        mu = args.mu
+    elif args.delta_mu == 0.0 and args.delta_f <= -15.0:
+        # Ising limit: exact coexistence -ln(e^{2|ε|} - e^{βΔf}) is 2ε to <1e-6.
+        mu = 2.0 * args.epsilon
+    else:
+        # μ = 2ε is NOT coexistence here (S1B ran 53 rounds at βΔf=0 this way,
+        # pinned in one phase at every L ≥ 32).  Make the caller choose.
+        raise SystemExit(
+            f"--mu is required for delta_f={args.delta_f}, delta_mu={args.delta_mu}: "
+            f"μ=2ε is coexistence only in the Ising limit (βΔf << 0, Δμ=0). "
+            f"Launch with `run/susc.py sweep --mu-exact` or --mu-source."
+        )
+
+    params = {
+        "epsilon": args.epsilon,
+        "delta_f": args.delta_f,
+        "delta_mu": args.delta_mu,
+        "k": args.k,
+        "scheme": args.scheme,
+        "Lx": args.L,
+        "Ly": args.L,
+        "mu": mu,
+        "results_base": args.results_base,
+    }
+    run_settings = {
+        "beta": args.beta,
+        "num_parallel_runs": args.cpus,
+        "num_batches": args.num_batches,
+        "seed_base": args.seed_base,
+        "eq_time": args.eq_time,
+        "prod_time": args.prod_time,
+        "prod_chunks": args.prod_chunks,
+        "initial_fraction": args.initial_fraction,
+        "checkpoint_every": args.checkpoint_every,
+    }
+
+    num_parallel_runs = run_settings["num_parallel_runs"]
+    num_batches = run_settings["num_batches"]
+    seed_base = run_settings["seed_base"]
+
+    outdir = args.outdir or susceptibility_prod_dir(params, base=args.results_base)
+    os.makedirs(outdir, exist_ok=True)
+
+    # Resolve resume IDs: auto-detect the latest-generation replicas from the CSV.
+    resume_ids: list[int] | None = None
+    prior_stats: dict[int, dict] = {}  # resume_id → {prior_prod_time, prior_wall_time}
+    if args.resume_dir is not None:
+        resume_dir_resolved = args.resume_dir
+        prior_csv = os.path.join(resume_dir_resolved, SUSCEPTIBILITY_DATA_CSV)
+        prior_rows = read_susceptibility_csv(prior_csv)
+        if not prior_rows:
+            raise SystemExit(f"No data found in {prior_csv} for resume")
+        if args.resume_ids is not None:
+            resume_ids = args.resume_ids
+        else:
+            # Take the replicas with the highest prod_time (latest generation).
+            max_pt = max(float(r.get("prod_time", 0) or 0) for r in prior_rows)
+            latest = [r for r in prior_rows
+                      if abs(float(r.get("prod_time", 0) or 0) - max_pt) < 1.0]
+            latest.sort(key=lambda r: int(r.get("id", 0) or 0))
+            resume_ids = [int(r["id"]) for r in latest]
+        assert resume_ids is not None  # set by either branch above
+        for r in prior_rows:
+            rid = int(r.get("id", -1) or -1)
+            if rid in resume_ids:
+                prior_stats[rid] = {
+                    "prior_prod_time": float(r.get("prod_time", 0) or 0),
+                    "prior_wall_time": float(r.get("time", 0) or 0),
+                }
+        # When resuming, ignore --cpus and use the count of resume_ids.
+        num_parallel_runs = len(resume_ids)
+        run_settings = dict(run_settings)
+        run_settings["num_parallel_runs"] = num_parallel_runs
+        print(
+            f"[susc.runner] RESUME mode: {num_parallel_runs} replicas from "
+            f"{resume_dir_resolved}, ids={resume_ids}",
+            flush=True,
+        )
+
+    print(
+        f"[susc.runner] START "
+        f"eps={args.epsilon} L={args.L} mu={mu} "
+        f"replicas={num_parallel_runs} batches={num_batches} "
+        f"total={num_parallel_runs * num_batches} outdir={outdir}",
+        flush=True,
+    )
+
+    csv_path = os.path.join(outdir, SUSCEPTIBILITY_DATA_CSV)
+
+    for batch_idx in range(num_batches):
+        next_id = get_next_id(csv_path)
+        # Replicas killed mid-run left ckpt_<id>.npz without a CSV row: re-adopt those
+        # ids first (same id -> same seed and checkpoint) so their work is not lost.
+        orphan_ids: list[int] = []
+        if args.checkpoint_every > 0 and resume_ids is None:
+            done_ids = {
+                int(r["id"]) for r in read_susceptibility_csv(csv_path)
+                if str(r.get("id", "")).strip()
+            }
+            orphan_ids = _orphan_checkpoint_ids(outdir, done_ids)[:num_parallel_runs]
+            if orphan_ids:
+                next_id = max(next_id, max(orphan_ids) + 1)
+                print(
+                    f"[susc.runner] resuming {len(orphan_ids)} checkpointed "
+                    f"replicas: ids={orphan_ids}",
+                    flush=True,
+                )
+        slot_run_ids = orphan_ids + list(range(next_id, next_id + num_parallel_runs - len(orphan_ids)))
+        print(
+            f"[susc.runner] batch {batch_idx + 1}/{num_batches}: "
+            f"run_ids {slot_run_ids}",
+            flush=True,
+        )
+
+        tasks = []
+        for slot_idx in range(num_parallel_runs):
+            run_id = slot_run_ids[slot_idx]
+            seed = seed_base + run_id * 2
+            task_settings = dict(run_settings)
+            if resume_ids is not None:
+                rid = resume_ids[slot_idx]
+                stats = prior_stats.get(rid, {})
+                task_settings["resume_dir"] = args.resume_dir
+                task_settings["resume_id"] = rid
+                task_settings["prior_prod_time"] = stats.get("prior_prod_time", 0.0)
+                task_settings["prior_wall_time"] = stats.get("prior_wall_time", 0.0)
+                task_settings["eq_time"] = 0.0  # skip equilibration on resume
+            tasks.append((slot_idx, run_id, seed, params, task_settings, outdir))
+
+        # Append each replica's row as it lands, not once the whole batch is
+        # done: a job killed at the wall used to discard every finished replica
+        # with it (up to a full day of compute per job).
+        results = []
+        with mp.Pool(processes=num_parallel_runs) as pool:
+            for result in pool.imap_unordered(run_replica, tasks):
+                append_to_csv(csv_path, [result])
+                results.append(result)
+                try:
+                    os.remove(_ckpt_path(outdir, result["id"]))
+                except OSError:
+                    pass
+                print(
+                    f"[susc.runner] replica {result['replica_id']} "
+                    f"(id={result['id']}) written to {csv_path} "
+                    f"[{len(results)}/{num_parallel_runs}]",
+                    flush=True,
+                )
+                # The new row now points at the full history; the file it
+                # resumed from is a redundant prefix of it.
+                if args.resume_dir and str(result.get("resume_id", "")).strip():
+                    _drop_superseded_timeseries(
+                        os.path.join(args.resume_dir, f"m_timeseries_{result['resume_id']}.csv"),
+                        os.path.join(outdir, f"m_timeseries_{result['id']}.csv"),
+                    )
+
+        results.sort(key=lambda r: r["id"])
+        summarize_replicas(results)
+
+        print(
+            f"Wrote {len(results)} rows to {csv_path} "
+            f"(batch {batch_idx + 1}/{num_batches})",
+            flush=True,
+        )
+        for r in results:
+            print(
+                f"  replica {r['replica_id']}: m={r['m_mean']:.4f}±{r['m_mean_err']:.4f} "
+                f"chi={r['chi']:.4f}±{r['chi_err']:.4f}",
+                flush=True,
+            )
+
+
+if __name__ == "__main__":
+    main()

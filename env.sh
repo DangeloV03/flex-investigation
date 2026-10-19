@@ -4,14 +4,15 @@
 # Usage — source from your SSH session (recommended):
 #   source /path/to/flex-investigation/env.sh
 #
-# Sets PYTHONPATH to include the coex/ and susceptibility/ package folders so
-# bare imports (e.g. `from combo_paths import ...`) resolve from the repo root.
+# Loads conda, activates the env, and cd's to the repo. The flexsim package must
+# be installed into that env once with `pip install -e .` (see README).
 #
 # Optional overrides (before sourcing):
 #   export PROJECT_ROOT=/custom/path
 #   export LATTICE_GAS_ROOT=$HOME/software/lattice-gas
 #   export FLEX_CONDA_ENV=lattice
 #   export FLEX_ENV_CD=0          # skip cd into PROJECT_ROOT
+#   export FLEX_OUTPUT_ROOT=/path  # where run outputs go (default: <repo>/output)
 #
 # Add to ~/.bashrc on Della (edit path for your clone):
 #   source /scratch/gpfs/WJACOBS/$USER/flex-investigation/env.sh
@@ -39,9 +40,6 @@ _flex_env_setup() {
         fi
     fi
     export PROJECT_ROOT
-
-    # --- import path: coex/ and susceptibility/ hold the source packages ---
-    export PYTHONPATH="${PROJECT_ROOT}/coex:${PROJECT_ROOT}/susceptibility:${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
     if [[ -z "${LATTICE_GAS_ROOT:-}" ]]; then
         LATTICE_GAS_ROOT="${HOME}/software/lattice-gas"
@@ -96,9 +94,10 @@ _flex_env_status() {
     if command -v python >/dev/null 2>&1; then
         python -c "
 from lattice_gas.simulate import simulate
-from flex_coex_chemical_potential_prediction import coex_chemical_potential
+from flexsim.paths import OUTPUT_ROOT
 print('  import check:    OK')
-" 2>/dev/null || echo "  import check:    FAILED (build lattice-gas or activate conda env)"
+print('  output root:    ', OUTPUT_ROOT)
+" 2>/dev/null || echo "  import check:    FAILED (build lattice-gas, run 'pip install -e .', or activate conda env)"
     else
         echo "  import check:    skipped (python not found)"
     fi

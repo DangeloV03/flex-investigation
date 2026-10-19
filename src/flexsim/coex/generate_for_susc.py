@@ -1,0 +1,236 @@
+"""
+Generate slab coexistence μ-sweep jobs for the Ising-limit susceptibility study.
+Uses the same coex runner + analyzer workflow as the main campaign (slab IC,
+Lx = 10 * Ly). μ_coex_SIM from this phase is reused for all square-L prod runs
+at the same ε.
+
+Usage:
+    python run/coex.py generate-susc
+    python run/coex.py generate-susc --eps-step 0.05 --ly 16
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import time
+
+import numpy as np
+
+from flexsim.coex.layout import COMBO_KEY_FIELDS, combo_dir, combo_key_from_dict
+from flexsim.coex.flex_theory import coex_chemical_potential
+from flexsim.coex.generate import append_manage_rows, collect_active_combo_keys, frange
+from flexsim.coex.queue_manifest import merge_pending
+from flexsim.susc.layout import (
+    COEX_MANIFEST,
+    COEX_RESULTS_DIR,
+    COEX_SAMPLES_DIR,
+    ISING_DELTA_F,
+    ISING_DELTA_MU,
+    ISING_K,
+    ISING_SCHEME,
+    MANAGE_CSV,
+    coex_job_filename,
+)
+
+FLEX_INDEX = 1
+LX_MULTIPLIER = 10
+DEFAULT_COEX_LY = 16
+
+EPS_MIN = -2.0
+EPS_MAX = -1.4
+EPS_STEP = 0.01
+
+# Default initial μ window around μ_coex_FLEX. Pass --mu-window 0.05 for the
+# half-window used by the multi-L eq campaign (analyzer can still extend).
+MU_WINDOW = 0.1
+N_MU_POINTS = 10
+
+
+def mu_sweep(mu_coex_flex: float, *, window: float = MU_WINDOW, n_points: int = N_MU_POINTS) -> list[float]:
+    values = np.linspace(mu_coex_flex - window, mu_coex_flex + window, n_points)
+    return [round(float(v), 6) for v in values]
+
+RUN_SETTINGS = {
+    "beta": 1.0,
+    "k": ISING_K,
+    "initial_condition": "slab_half_active_half_empty",
+    "num_parallel_runs": 8,
+    "eq_time": 100000.0,
+    "prod_time": 10000.0,
+    "seed_base": 2000,
+}
+
+MANAGE_FIELDS = COMBO_KEY_FIELDS + [
+    "mu_coex_FLEX",
+    "isSubmitted",
+    "isRan",
+    "isAnalyzed",
+    "mu_coex_FITTED",
+    "mu_coex_FITTED_error",
+    "RequestForAdditionalData",
+    "combo_path",
+]
+
+
+def combo_dict(
+    epsilon: float, ly: int, lx: int,
+    delta_f: float, delta_mu: float, k: float, scheme: str,
+) -> dict:
+    return {
+        "epsilon": epsilon,
+        "delta_f": delta_f,
+        "delta_mu": delta_mu,
+        "k": k,
+        "scheme": scheme,
+        "Lx": lx,
+        "Ly": ly,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate susceptibility coex μ-sweep JSONs")
+    parser.add_argument("--eps-min", type=float, default=EPS_MIN)
+    parser.add_argument("--eps-max", type=float, default=EPS_MAX)
+    parser.add_argument("--eps-step", type=float, default=EPS_STEP)
+    parser.add_argument("--ly", type=int, default=DEFAULT_COEX_LY, help="Slab Ly (Lx = 10*Ly)")
+    parser.add_argument(
+        "--mu-window", type=float, default=MU_WINDOW,
+        help="Half-width of initial μ sweep around μ_coex_FLEX (default 0.1)",
+    )
+    parser.add_argument(
+        "--n-mu-points", type=int, default=N_MU_POINTS,
+        help="Number of μ points in the initial sweep (default 10)",
+    )
+    parser.add_argument("--delta-f", type=float, default=ISING_DELTA_F, help="Δf (default: Ising-limit)")
+    parser.add_argument("--delta-mu", type=float, default=ISING_DELTA_MU, help="Δμ (default: Ising-limit)")
+    parser.add_argument("--k", type=float, default=ISING_K, help="Chemical recycling base rate k")
+    parser.add_argument("--scheme", default=ISING_SCHEME, help="HeteroChain markov scheme, e.g. 'homo'")
+    parser.add_argument(
+        "--flex-scheme", type=int, default=FLEX_INDEX,
+        help="FLEX prediction scheme index (1=homo/plain k)",
+    )
+    parser.add_argument("--samples-dir", default=COEX_SAMPLES_DIR)
+    parser.add_argument("--manage", default=MANAGE_CSV)
+    parser.add_argument("--manifest", default=COEX_MANIFEST)
+    parser.add_argument("--results-dir", default=COEX_RESULTS_DIR)
+    args = parser.parse_args()
+
+    ly = args.ly
+    lx = LX_MULTIPLIER * ly
+    eps_values = frange(args.eps_min, args.eps_max, args.eps_step)
+    mu_window = float(args.mu_window)
+    n_mu_points = int(args.n_mu_points)
+
+    os.makedirs(args.samples_dir, exist_ok=True)
+
+    active_combos = collect_active_combo_keys(
+        args.manage, args.manifest, args.samples_dir, args.results_dir,
+    )
+
+    pending_paths: list[str] = []
+    new_manage_rows: list[dict] = []
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    n_files = 0
+    n_existing_json = 0
+    skipped_flex = 0
+    skipped_dedup = 0
+
+    existing_keys = set()
+    if os.path.isfile(args.manage):
+        with open(args.manage, newline="") as f:
+            for row in csv.DictReader(f):
+                existing_keys.add(combo_key_from_dict(row))
+
+    print(
+        f"Susceptibility coex: epsilon [{args.eps_min}, {args.eps_max}] "
+        f"step {args.eps_step} ({len(eps_values)} pts), Ly={ly}, Lx={lx}\n"
+        f"  scheme={args.scheme} (flex={args.flex_scheme}) "
+        f"delta_f={args.delta_f} delta_mu={args.delta_mu} k={args.k}\n"
+        f"  mu_window=±{mu_window} ({n_mu_points} pts)\n"
+        f"  results={args.results_dir}  manage={args.manage}  "
+        f"manifest={args.manifest}  samples={args.samples_dir}"
+    )
+
+    run_settings = dict(RUN_SETTINGS)
+    run_settings["k"] = args.k
+
+    for epsilon in eps_values:
+        combo = combo_dict(epsilon, ly, lx, args.delta_f, args.delta_mu, args.k, args.scheme)
+        key = combo_key_from_dict(combo)
+
+        if key in active_combos:
+            print(f"[skip dedup:{active_combos[key]}] eps={epsilon}")
+            skipped_dedup += 1
+            continue
+
+        try:
+            mu_coex_flex = coex_chemical_potential(
+                epsilon=epsilon,
+                df=args.delta_f,
+                dmu=args.delta_mu,
+                chem_rec_baserate=args.k,
+                DRIVEN=True,
+                scheme=args.flex_scheme,
+            )
+            mu_coex_flex = float(np.asarray(mu_coex_flex).ravel()[0])
+        except Exception as exc:
+            print(f"[skip flex] eps={epsilon}: {exc}")
+            skipped_flex += 1
+            continue
+
+        if mu_coex_flex > 0:
+            print(f"[skip flex] eps={epsilon}: mu_coex_FLEX={mu_coex_flex:.6f} > 0")
+            skipped_flex += 1
+            continue
+
+        print(f"eps={epsilon}: mu_coex_FLEX={mu_coex_flex:.6f}")
+        mu_values = mu_sweep(mu_coex_flex, window=mu_window, n_points=n_mu_points)
+
+        if key not in existing_keys:
+            new_manage_rows.append({
+                **combo,
+                "mu_coex_FLEX": mu_coex_flex,
+                "isSubmitted": timestamp,
+                "isRan": "",
+                "isAnalyzed": "",
+                "mu_coex_FITTED": "",
+                "mu_coex_FITTED_error": "",
+                "RequestForAdditionalData": 0,
+                "combo_path": combo_dir(combo, base=args.results_dir),
+            })
+            existing_keys.add(key)
+
+        for idx, mu in enumerate(mu_values):
+            job = {
+                **combo,
+                "mu": mu,
+                "mu_coex_FLEX": mu_coex_flex,
+                "run_settings": dict(run_settings),
+                "results_base": args.results_dir,
+                "manage_csv": args.manage,
+            }
+            filename = coex_job_filename(args.scheme, epsilon, args.delta_mu, ly, idx)
+            filepath = os.path.join(args.samples_dir, filename)
+            if os.path.isfile(filepath):
+                n_existing_json += 1
+            else:
+                with open(filepath, "w") as f:
+                    json.dump(job, f, indent=2)
+                n_files += 1
+            pending_paths.append(filepath)
+
+    merge_pending(pending_paths, path=args.manifest)
+    n_added = append_manage_rows(args.manage, new_manage_rows)
+
+    print(f"\nWrote {n_files} new JSON files to '{args.samples_dir}/' "
+          f"({n_existing_json} already existed)")
+    print(f"Queued {len(pending_paths)} path(s) into '{args.manifest}'")
+    print(f"Added {n_added} new rows to '{args.manage}'")
+    print(f"Skipped {skipped_dedup} dedup, {skipped_flex} FLEX filter")
+
+
+if __name__ == "__main__":
+    main()

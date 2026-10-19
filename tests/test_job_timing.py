@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 
-from job_timing import (
+from flexsim.susc.job_timing import (
     _parse_sacct_output,
     _stats_from_sacct_rows,
     append_slurm_job,
@@ -69,8 +69,7 @@ def test_sacct_stats_without_steps_fall_back_to_alloc_row():
 
 
 def test_run_swallows_timeout(monkeypatch):
-    import job_timing
-
+    import flexsim.susc.job_timing as job_timing
     def boom(*_args, **_kwargs):
         raise subprocess.TimeoutExpired(cmd="seff", timeout=8)
 
@@ -79,8 +78,7 @@ def test_run_swallows_timeout(monkeypatch):
 
 
 def test_write_round_timing_report(tmp_path, monkeypatch):
-    import job_timing
-
+    import flexsim.susc.job_timing as job_timing
     monkeypatch.setattr(job_timing, "query_sacct_batch", lambda _ids: {
         "999": {
             "job_id": "999",

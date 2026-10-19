@@ -1,6 +1,4 @@
 """
-tests/test_bimodality.py
-
 Tests for the bimodality-based epsilon_c pipeline (criticality/bimodality.py).
 
 Validates Sarle's BC against synthetic cases with known limits (spec deliverable
@@ -21,8 +19,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import bimodality as bm
-from combo_paths import mu_dir_name
+import flexsim.criticality.bimodality as bm
+from flexsim.coex.layout import mu_dir_name
 
 BONDING, INERT, EMPTY = bm.BONDING, bm.INERT, bm.EMPTY
 
@@ -83,7 +81,7 @@ def test_column_op_phi_convention():
 
 
 def test_untag_roundtrip():
-    from combo_paths import param_tag
+    from flexsim.coex.layout import param_tag
     for v in (-2.0, -1.45, 0.5, 0.0, 2.5):
         assert bm.untag(param_tag(v)) == pytest.approx(v)
 
@@ -262,7 +260,7 @@ def test_phase_diagram_family_over_dmu(tmp_path):
 
 def test_plot_bc_family_no_transition_bracket(tmp_path):
     """Family plot with show_transition_bracket=False skips orange shading."""
-    from plot_bimodality import plot_bc_family
+    from flexsim.criticality.plot_bimodality import plot_bc_family
 
     rows = []
     for dmu in [0.0, 1.0]:
@@ -312,7 +310,7 @@ def test_backfill_bc_err_from_cache(tmp_path):
 
 def test_plot_bc_scheme_comparison(tmp_path):
     """Side-by-side scheme comparison figure includes BC_err vertical bars."""
-    from plot_bimodality import plot_bc_scheme_comparison
+    from flexsim.criticality.plot_bimodality import plot_bc_scheme_comparison
 
     rng = np.random.default_rng(99)
     rows = []

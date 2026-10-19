@@ -13,22 +13,13 @@ from __future__ import annotations
 import csv
 import json
 import os
-import sys
-import tempfile
-import textwrap
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-# Make sure project root is on sys.path regardless of how pytest is invoked.
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import queue_manifest as qm
-from analyzer import (
-    MAX_ADDITIONAL_REQUESTS,
-    N_INITIAL_MU_POINTS,
+import flexsim.coex.queue_manifest as qm
+from flexsim.coex.analyzer import (
     N_REFINEMENT_POINTS,
     PSI_COEX_MAX,
     build_curves,
@@ -47,14 +38,13 @@ from analyzer import (
     unsampled_mus,
     write_manage,
 )
-from combo_paths import (
+from flexsim.coex.layout import (
     COMBO_KEY_FIELDS,
     combo_dir_name,
     mu_dir_name,
     param_tag,
 )
-from susceptibility_paths import (
-    COEX_MANIFEST,
+from flexsim.susc.layout import (
     COEX_RESULTS_DIR,
     MANAGE_CSV,
     coex_combo_dir,
@@ -218,7 +208,7 @@ class TestQueueManifest:
 
 
 # ============================================================
-# 2. combo_paths helpers
+# 2. coex.layout helpers
 # ============================================================
 
 class TestComboPaths:
@@ -252,7 +242,7 @@ class TestComboPaths:
 
 
 # ============================================================
-# 3. susceptibility_paths helpers
+# 3. susc.layout helpers
 # ============================================================
 
 class TestSusceptibilityPaths:
@@ -627,7 +617,7 @@ class TestEnqueueJobsManifestRouting:
                 "run_settings": {"beta": 1.0, "num_parallel_runs": 4}}
 
     def test_enqueue_writes_to_coex_manifest(self, tmp_path):
-        from analyzer import enqueue_jobs
+        from flexsim.coex.analyzer import enqueue_jobs
 
         run_all = str(tmp_path / "run_all_queue.json")
         coex = str(tmp_path / "susceptibility_coex_queue.json")
@@ -657,7 +647,7 @@ class TestEnqueueJobsManifestRouting:
         )
 
     def test_enqueue_returns_count_added(self, tmp_path):
-        from analyzer import enqueue_jobs
+        from flexsim.coex.analyzer import enqueue_jobs
 
         coex = str(tmp_path / "coex.json")
         samples = str(tmp_path / "samples")
@@ -672,7 +662,7 @@ class TestEnqueueJobsManifestRouting:
         assert len(paths) == 3
 
     def test_enqueue_deduplicates_across_calls(self, tmp_path):
-        from analyzer import enqueue_jobs
+        from flexsim.coex.analyzer import enqueue_jobs
 
         coex = str(tmp_path / "coex.json")
         samples = str(tmp_path / "samples")
@@ -682,7 +672,7 @@ class TestEnqueueJobsManifestRouting:
         assert n_added == 1  # -3.5 already in queue
 
     def test_job_json_has_correct_results_base(self, tmp_path):
-        from analyzer import enqueue_jobs
+        from flexsim.coex.analyzer import enqueue_jobs
 
         coex = str(tmp_path / "coex.json")
         samples = str(tmp_path / "samples")

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flexsim"
+version = "0.1.0"
+description = "FLEX theory vs Monte Carlo lattice-gas simulations: coexistence, susceptibility, criticality"
+requires-python = ">=3.10"
+# lattice_gas (the Rust simulation engine) is installed separately; see README.
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "pandas",
+    "pyyaml",
+    "simple-slurm",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+flexsim = ["coex/*.yml", "susc/slurm/*.sh"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.pyright]
+extraPaths = ["src"]
