@@ -79,7 +79,7 @@ def stats(dmu, err):
 
 
 def plot(data, fss, best, path):
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.8),
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5.4),
                                    gridspec_kw={"width_ratios": [1.6, 1]})
     for ax in (ax1, ax2):
         ax.axhspan(-JITTER, JITTER, color="#e6e5e0", zorder=0, lw=0)
@@ -103,12 +103,13 @@ def plot(data, fss, best, path):
     ax1.set_title("(a) Slab coex μ minus exact equilibrium μ", loc="left", fontsize=11)
     ax1.text(0.01, 0.02, f"grey band: ±{JITTER:.0e}, the μ jitter that gave ⟨m⟩ ≠ 0",
              transform=ax1.transAxes, fontsize=8, color=INK2)
-    ax1.legend(frameon=False, fontsize=9)
+    ax1.legend(frameon=False, fontsize=9, ncol=4, loc="upper center",
+               bbox_to_anchor=(0.5, -0.14))
 
     # (b) dmu vs 1/Ly at a few eps spread over the grid.
     eps_all = sorted(fss["epsilon"]) if len(fss) else []
-    picks = [eps_all[i] for i in np.linspace(0, len(eps_all) - 1, 4).astype(int)] if eps_all else []
-    shades = ["#0d366b", "#256abf", "#5598e7", "#9ec5f4"]
+    picks = [eps_all[i] for i in np.linspace(0, len(eps_all) - 1, 3).astype(int)] if eps_all else []
+    shades = ["#0d366b", "#256abf", "#6da7ec"]
     power = 1 if best == "inv_ly" else 2
     for eps, c in zip(picks, shades):
         d = data[data["epsilon"] == eps].sort_values("Ly")
@@ -122,7 +123,8 @@ def plot(data, fss, best, path):
     ax2.set_xlabel("1 / Ly" if power == 1 else "1 / Ly²")
     ax2.set_ylabel("μ_fit − μ_exact")
     ax2.set_title("(b) Extrapolation to Ly → ∞", loc="left", fontsize=11)
-    ax2.legend(frameon=False, fontsize=8)
+    ax2.legend(frameon=False, fontsize=9, ncol=3, loc="upper center",
+               bbox_to_anchor=(0.5, -0.14))
 
     fig.suptitle("Equilibrium benchmark: homo, βΔf = 0, k = 1, βΔμ = 0", x=0.01,
                  ha="left", fontsize=12)
