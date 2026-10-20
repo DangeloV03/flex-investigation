@@ -66,6 +66,9 @@ def load_measured(runs_root: str) -> pd.DataFrame:
             "beta_mu_coex_SIM_err": pd.to_numeric(err, errors="coerce"),
         })
         frames.append(out.dropna(subset=["beta_mu_coex_SIM"]))
+    if not any(len(f) for f in frames):
+        raise SystemExit(f"No fitted mu_coex yet in {pattern} "
+                         f"({len(frames)} manage.csv found); run the analyzer first.")
     df = pd.concat(frames, ignore_index=True)
     df["residual_SIM_minus_FLEX"] = df["beta_mu_coex_SIM"] - df["beta_mu_coex_FLEX"]
     return df.sort_values(["experiment", "Ly", "beta_epsilon"]).reset_index(drop=True)

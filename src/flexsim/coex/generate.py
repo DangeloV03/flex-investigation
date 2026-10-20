@@ -1,6 +1,7 @@
 """
-Full grid campaign over (epsilon, delta_mu) for homo scheme 1 / K=1.
-Grid: epsilon in [-2.5, -1.5] step 0.1, delta_mu in [-1, 5] step 0.25.
+Grid campaign over (epsilon, delta_mu) for homo scheme 1 / K=1.
+Default grid: epsilon in [-2.5, -1.5] step 0.1, delta_mu in [-1, 5] step 0.25
+(override with --eps-min/--eps-max/--eps-step and --dmu-min/--dmu-max/--dmu-step).
 Default chain sizes: Ly in {8, 16} with Lx = 10 * Ly (override with --ly).
 
   1. Enumerate every (epsilon, delta_mu, Ly) on the configured grid.
@@ -16,6 +17,7 @@ Usage:
     python run/coex.py generate
     python run/coex.py generate --ly 8 16
     python run/coex.py generate --ly 32
+    python run/coex.py generate --ly 16 --eps-min -2.0 --eps-max -1.6 --dmu-min 1 --dmu-max 1
 """
 
 import argparse
@@ -74,13 +76,9 @@ MANAGE_CSV = "manage.csv"
 MANIFEST_PATH = "run_all_queue.json"
 RESULTS_DIR = "results"
 
-def grid_outer_combos() -> list[tuple[float, float]]:
+def grid_outer_combos(eps_values: list[float], dmu_values: list[float]) -> list[tuple[float, float]]:
     """Full Cartesian grid over (epsilon, delta_mu)."""
-    pairs: list[tuple[float, float]] = []
-    for epsilon in frange(EPS_MIN, EPS_MAX, EPS_STEP):
-        for delta_mu in frange(DMU_MIN, DMU_MAX, DMU_STEP):
-            pairs.append((epsilon, delta_mu))
-    return pairs
+    return [(epsilon, delta_mu) for epsilon in eps_values for delta_mu in dmu_values]
 
 
 def combo_dict(epsilon: float, delta_mu: float, ly: int, lx: int) -> dict:
@@ -189,17 +187,25 @@ def main():
         default=DEFAULT_LY_VALUES,
         help="Chain lengths Ly (Lx = 10 * Ly). Default: 8 16",
     )
+    parser.add_argument("--eps-min", type=float, default=EPS_MIN)
+    parser.add_argument("--eps-max", type=float, default=EPS_MAX)
+    parser.add_argument("--eps-step", type=float, default=EPS_STEP)
+    parser.add_argument("--dmu-min", type=float, default=DMU_MIN)
+    parser.add_argument("--dmu-max", type=float, default=DMU_MAX)
+    parser.add_argument("--dmu-step", type=float, default=DMU_STEP)
     args = parser.parse_args()
     ly_values = sorted(set(args.ly))
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    outer_pairs = grid_outer_combos()
-    n_eps = len(frange(EPS_MIN, EPS_MAX, EPS_STEP))
-    n_dmu = len(frange(DMU_MIN, DMU_MAX, DMU_STEP))
+    eps_values = frange(args.eps_min, args.eps_max, args.eps_step)
+    dmu_values = frange(args.dmu_min, args.dmu_max, args.dmu_step)
+    if not eps_values or not dmu_values:
+        parser.error("empty epsilon or delta_mu grid; check the min/max/step flags")
+    outer_pairs = grid_outer_combos(eps_values, dmu_values)
     print(
-        f"Grid: epsilon [{EPS_MIN}, {EPS_MAX}] step {EPS_STEP} ({n_eps} pts) x "
-        f"delta_mu [{DMU_MIN}, {DMU_MAX}] step {DMU_STEP} ({n_dmu} pts) "
+        f"Grid: epsilon [{args.eps_min}, {args.eps_max}] step {args.eps_step} ({len(eps_values)} pts) x "
+        f"delta_mu [{args.dmu_min}, {args.dmu_max}] step {args.dmu_step} ({len(dmu_values)} pts) "
         f"-> {len(outer_pairs)} (epsilon, delta_mu) pairs per Ly"
     )
     print(f"Ly values: {ly_values}  (Lx = {LX_MULTIPLIER} * Ly)")

@@ -430,11 +430,26 @@ def test_mu_source_refuses_to_fall_back_to_2eps(tmp_path, monkeypatch):
     args = argparse.Namespace(
         eps_min=-1.7, eps_max=-1.7, eps_step=0.005, results_base=str(tmp_path / "RUNS"),
         sweep_script="sweep.sh", check_script="check.sh", threshold=10.0,
-        mu_source=str(src), mu_exact=False, skip_eps=[],
+        mu_source=str(src), mu_exact=False, skip_eps=[], sizes=[16, 32],
         delta_f="0.0", delta_mu="0.0", k="1.0", scheme="homo", dry_run=True,
     )
     with pytest.raises(SystemExit, match="Refusing to fall back"):
         do_sweep(args)
+
+
+def test_sweep_sizes_flag_sets_one_job_per_size(tmp_path, monkeypatch, capsys):
+    """--sizes 16 32 submits exactly one job per (epsilon, L) for those L only."""
+    from flexsim.susc import smart_sweep
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", [
+        "smart_sweep", "sweep", "--eps-min", "-1.8", "--eps-max", "-1.7", "--eps-step", "0.1",
+        "--sizes", "32", "16", "--results-base", "RUNS", "--mu-exact", "--dry-run",
+    ])
+    smart_sweep.main()
+    jobs = [line for line in capsys.readouterr().out.splitlines() if "[DRY-RUN] sbatch" in line]
+    assert len(jobs) == 4
+    assert sorted(line.split()[-1] for line in jobs) == ["16", "16", "32", "32"]
 
 
 def test_runner_requires_mu_outside_ising_limit(monkeypatch, tmp_path):

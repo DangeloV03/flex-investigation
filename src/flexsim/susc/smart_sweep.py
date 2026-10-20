@@ -3,8 +3,8 @@ Orchestrator for the smart susceptibility campaign.
 
 Subcommands
 -----------
-sweep   Submit initial epsilon sweep (10^6 eq + 10^6 prod per replica).
-Check   Post-sweep jump analysis; writes jump_report.md plus a timing report
+sweep   Submit initial epsilon sweep (10^6 eq + 2x10^6 prod per replica), one job per (ε, L).
+check   Post-sweep jump analysis; writes jump_report.md plus a timing report
         (wall time per L, Slurm CPU/time/memory efficiency); submits top-up
         jobs if needed; loops until every (ε, L) pair meets the ≥ threshold
         avg-jump requirement.
@@ -42,8 +42,6 @@ from flexsim.susc.smart_report import (
 
 
 SMART_L_VALUES = [16, 32, 48, 64, 96, 128]
-SMALL_L_VALUES = [16, 32, 48, 64, 96]
-LARGE_L_VALUES = [128]
 
 
 def _split_size_groups(sizes: list[int]) -> list[tuple[str, list[int]]]:
@@ -104,7 +102,8 @@ def do_sweep(args: argparse.Namespace) -> None:
     sweep_script = args.sweep_script
     check_script = args.check_script
 
-    n_groups = len(_split_size_groups(SMART_L_VALUES))
+    size_groups = _split_size_groups(args.sizes)
+    n_groups = len(size_groups)
     print(
         f"[sweep] Submitting {len(eps_values)} ε × {n_groups} size-groups "
         f"({len(eps_values) * n_groups} jobs) → {results_base}",
@@ -160,7 +159,7 @@ def do_sweep(args: argparse.Namespace) -> None:
     sweep_job_ids: list[str] = []
     for eps in eps_values:
         mu_arg = f"{mu_map[eps]:.10g}" if eps in mu_map else ""
-        for tag, sizes in _split_size_groups(SMART_L_VALUES):
+        for tag, sizes in size_groups:
             cmd = [
                 "sbatch", "--parsable",
                 f"--job-name=susc_{tag}",
@@ -366,6 +365,8 @@ def main() -> None:
                          "μ = -ln(e^{2|ε|} - e^{βΔf}) (requires delta_mu=0). "
                          "Without this or --mu-source the runner uses μ = 2ε, "
                          "which is coexistence only in the Ising limit.")
+    sp.add_argument("--sizes", type=int, nargs="+", default=SMART_L_VALUES,
+                    help="Square lattice sizes L (default: 16 32 48 64 96 128)")
     sp.add_argument("--skip-eps", type=float, nargs="+", default=[],
                     help="ε values to leave out of the grid (e.g. ones whose "
                          "--mu-source fit is missing or bad)")

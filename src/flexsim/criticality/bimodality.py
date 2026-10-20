@@ -3,7 +3,7 @@ Locate the critical drive strength epsilon_c of a coex run *independently* of th
 mu_coex calculation, by measuring how bimodal the column-order-parameter
 distribution of the stored configuration snapshots is.
 
-Physics (see criticality/bimodality.md):
+Physics (see docs/bimodality.md):
   Below epsilon_c the slab phase-separates into a liquid region and a gas region
   with a single interface, so most columns sit at the liquid or the gas value and
   P(phi_col) is BIMODAL. As epsilon -> epsilon_c the interface roughens and
