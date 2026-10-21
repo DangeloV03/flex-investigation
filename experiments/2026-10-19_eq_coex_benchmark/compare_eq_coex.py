@@ -21,13 +21,14 @@ COLORS = {16: "#2a78d6", 20: "#eb6834", 40: "#1baf7a", "FSS": "#0b0b0b"}
 MARKERS = {16: "o", 20: "s", 40: "^", "FSS": "D"}
 INK2 = "#52514e"
 JITTER = 3e-4  # mu jitter level that gave <m> != 0 in the susc runs
+MAX_FIT_ERR = 5e-3  # analyzer fits with a larger error are treated as failed
 
 
 def exact_mu(eps, delta_f=0.0):
     return -np.log(np.exp(2 * np.abs(eps)) - np.exp(delta_f))
 
 
-def load(root):
+def load(root, delta_f=0.0):
     frames = []
     for ly in LYS:
         path = os.path.join(root, f"ly{ly}", "manage.csv")
@@ -41,9 +42,12 @@ def load(root):
         frames.append(df[["epsilon", "Ly", "mu_fit", "mu_err"]])
     out = pd.concat(frames).dropna(subset=["mu_fit"])
     out["epsilon"] = out["epsilon"].round(6)
-    out["mu_exact"] = exact_mu(out["epsilon"])
+    out["mu_exact"] = exact_mu(out["epsilon"], delta_f)
     out["dmu"] = out["mu_fit"] - out["mu_exact"]
-    return out
+    bad = out["mu_err"].isna() | (out["mu_err"] > MAX_FIT_ERR)
+    for ly, e, err in out.loc[bad, ["Ly", "epsilon", "mu_err"]].itertuples(index=False):
+        print(f"[failed fit, dropped] Ly={ly} eps={e} err={err:.2e}")
+    return out[~bad]
 
 
 def fss_fit(sub, power):
@@ -58,12 +62,12 @@ def fss_fit(sub, power):
     return coef[0], float(np.sqrt(cov[0, 0])), chi2, coef[1]
 
 
-def fss_table(data):
+def fss_table(data, delta_f=0.0):
     rows = []
     for eps, sub in data.groupby("epsilon"):
         if sub["Ly"].nunique() < 2:
             continue
-        r = {"epsilon": eps, "n_ly": sub["Ly"].nunique(), "mu_exact": exact_mu(eps)}
+        r = {"epsilon": eps, "n_ly": sub["Ly"].nunique(), "mu_exact": exact_mu(eps, delta_f)}
         for p, tag in [(1, "inv_ly"), (2, "inv_ly2")]:
             mu_inf, err, chi2, a = fss_fit(sub, p)
             r.update({f"mu_inf_{tag}": mu_inf, f"err_{tag}": err, f"chi2_{tag}": chi2,
@@ -78,7 +82,7 @@ def stats(dmu, err):
     return len(dmu), np.mean(dmu), np.sqrt(np.mean(dmu**2)), np.median(err), within
 
 
-def plot(data, fss, best, path):
+def plot(data, fss, best, path, title):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5.4),
                                    gridspec_kw={"width_ratios": [1.6, 1]})
     for ax in (ax1, ax2):
@@ -121,12 +125,13 @@ def plot(data, fss, best, path):
         ax2.plot(xs, r[f"dmu_{best}"] + r[f"a_{best}"] * xs, color=c, lw=1.5, ls="--")
     ax2.set_xlim(left=-0.002 if power == 1 else -0.0001)
     ax2.set_xlabel("1 / Ly" if power == 1 else "1 / Ly²")
+    ax2.locator_params(axis="x", nbins=5)
     ax2.set_ylabel("μ_fit − μ_exact")
     ax2.set_title("(b) Extrapolation to Ly → ∞", loc="left", fontsize=11)
     ax2.legend(frameon=False, fontsize=9, ncol=3, loc="upper center",
                bbox_to_anchor=(0.5, -0.14))
 
-    fig.suptitle("Equilibrium benchmark: homo, βΔf = 0, k = 1, βΔμ = 0", x=0.01,
+    fig.suptitle(title, x=0.01,
                  ha="left", fontsize=12)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
@@ -136,11 +141,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--delta-f", type=float, default=0.0)
+    ap.add_argument("--title", default="Equilibrium benchmark: homo, βΔf = 0, k = 1, βΔμ = 0")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
-    data = load(args.root)
-    fss = fss_table(data)
+    data = load(args.root, args.delta_f)
+    fss = fss_table(data, args.delta_f)
     data.to_csv(os.path.join(args.out, "eq_coex_comparison.csv"), index=False)
     fss.to_csv(os.path.join(args.out, "eq_coex_fss.csv"), index=False)
 
@@ -164,7 +171,7 @@ def main():
     open(os.path.join(args.out, "eq_coex_summary.md"), "w").write(summary + "\n")
     print(summary)
 
-    plot(data, fss, best, os.path.join(args.out, "eq_coex_vs_exact.png"))
+    plot(data, fss, best, os.path.join(args.out, "eq_coex_vs_exact.png"), args.title)
     print(f"wrote {args.out}/eq_coex_vs_exact.png (FSS form shown: {best})")
 
 
