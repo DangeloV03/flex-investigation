@@ -111,16 +111,16 @@ def main():
                   loc="left", fontsize=11)
 
     ax3.errorbar(mu["epsilon"], mu["resid"], yerr=mu["err"], fmt="o", ms=5, color=INK2,
-                 elinewidth=1, capsize=1.5, zorder=3, label="μ used − smooth fit (± coex fit error)")
+                 elinewidth=1, capsize=1.5, zorder=3, label="μ jump: μ used − smooth curve (bars: coex fit error)")
     flag = mu["epsilon"].isin(bad)
     ax3.plot(mu.loc[flag, "epsilon"], mu.loc[flag, "resid"], "o", ms=8, mfc=EMPH, mec="white",
-             mew=1, zorder=4, label="bad coex fit (|μ error| > 4×10⁻⁴)")
+             mew=1, zorder=4, label="bad coex fit (|jump| > 4×10⁻⁴)")
     ax3.set_ylim(-3e-3, 3e-3)
-    ax3.set_ylabel("μ error")
-    ax3.set_title("(c) Error in the coex μ each run used (C2A Ly = 40 fit minus a smooth curve)",
+    ax3.set_ylabel("μ jump")
+    ax3.set_title("(c) μ jump vs neighbours: coex μ used minus a smooth curve through all ε (not an error vs exact)",
                   loc="left", fontsize=11)
-    ax3.text(0.01, 0.95, "above 0: μ too high → pushed dense → ⟨m⟩ > 0      "
-             "below 0: μ too low → ⟨m⟩ < 0",
+    ax3.text(0.01, 0.95, "above 0: μ above its neighbours → pushed dense → ⟨m⟩ > 0      "
+             "below 0: μ below → ⟨m⟩ < 0",
              transform=ax3.transAxes, fontsize=9, color=INK2, va="top")
     ax3.legend(frameon=False, fontsize=9, loc="lower right")
 
