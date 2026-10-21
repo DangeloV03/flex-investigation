@@ -26,8 +26,26 @@ k = 1, βΔμ = 0, where μ_coex = −ln(e^{2|ε|} − 1).
 - Compare: `python compare_eq_coex.py --root <COEX_RUNS_EQ_DMU0> --out <dir>`. It compares each
   Ly and an FSS extrapolation (1/Ly or 1/Ly², whichever has the lower χ²) against exact.
 
-## Results
-_pending: jobs held by the Della maintenance window, 2026-10-20 05:30–18:00._
+## Results (βΔf = 0, finished 2026-10-21)
+Files are in `results_eq_dmu0/`. Fits left out: the analyzer gave up on 3 (Ly20 ε −1.90, −1.72; Ly40 ε −1.74),
+and 3 failed with error > 5e-3 (Ly16 −1.64; Ly40 −1.80, −1.72).
+
+| set | n ε | mean bias | RMS error | median σ_fit | within 2σ | below exact |
+|---|---|---|---|---|---|---|
+| Ly = 16 | 20 | −1.8e-04 | 6.3e-04 | 2.9e-04 | 75% | 16/20 |
+| Ly = 20 | 19 | −5.7e-05 | 5.8e-04 | 3.0e-04 | 84% | 11/19 |
+| Ly = 40 | 18 | +6.1e-06 | **1.5e-04** | 2.0e-04 | 94% | 10/18 |
+| FSS 1/Ly | 20 | +3.3e-04 | 1.1e-03 | 6.4e-04 | 80% | 6/20 |
+| FSS 1/Ly² | 20 | +9.5e-05 | 6.1e-04 | 3.3e-04 | 85% | 8/20 |
+
+- Narrow slabs bias μ low. Ly = 16 is below exact at 16/20 ε, Ly = 20 is weaker, and **Ly = 40 has no
+  measurable bias.** Its error bars are honest: 94% within 2σ.
+- The FSS extrapolation is worse than Ly = 40 alone. It amplifies the noise and any outlier at Ly 16/20.
+  It only helps at ε where the bias is clearly real (e.g. ε = −1.9).
+- Both benchmarks agree: at Ly = 40 the slab method is unbiased in equilibrium, but its scatter (~1.5–2.4e-4)
+  is ~15–20× the ~1e-5 μ accuracy the L = 128 susc runs need.
+- About 10% of fits fail or don't converge, so failures need to be detected.
+- Caveat: equilibrium only. A drive-dependent bias at Ly = 40 is not ruled out.
 
 ## Existing data: July Ising-limit coex (`coex/coex_eq`, βΔf = −20, k = 0, Δμ = 0, exact μ = 2ε)
 41 ε in [−1.8, −1.6] at Ly 16/20/40. 7 of 123 fits failed (error > 5e-3) and are dropped.
