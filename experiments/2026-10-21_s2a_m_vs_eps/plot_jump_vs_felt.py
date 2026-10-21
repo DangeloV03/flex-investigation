@@ -99,7 +99,7 @@ def main():
         ax.set_xlabel("μ jump vs neighbours (coex)")
     for ax in (axes[0], axes[4]):
         ax.set_ylabel("μ offset felt, 2⟨m⟩/χ (susc)")
-    fig.suptitle("The μ error seen two independent ways agrees: coex-fit jumps explain ⟨m⟩ ≠ 0",
+    fig.suptitle("Coex μ jumps predict the μ offset the susc runs respond to (y = x ⇒ jumps are fit errors)",
                  x=0.01, ha="left", fontsize=13)
     fig.tight_layout()
     os.makedirs(args.out, exist_ok=True)
