@@ -1,0 +1,6 @@
+epsilon,delta_f,delta_mu,k,scheme,mu_coex_FITTED,mu_original,method
+-1.745,0.0,1.0,1.0,homo,-2.9693482000,-2.9698826090,linear interp between -1.755 and -1.735
+-1.74,0.0,1.0,1.0,homo,-2.9587052375,-2.9572106510,linear interp between -1.755 and -1.735
+-1.685,0.0,1.0,1.0,homo,-2.8403546950,-2.8412412320,linear interp between -1.69 and -1.68
+-1.665,0.0,1.0,1.0,homo,-2.7971597390,-2.7952212920,linear interp between -1.67 and -1.66
+-1.735,0.0,1.0,1.0,homo,-2.9480622750,-2.9480622750,"control: original mu, new seeds"
