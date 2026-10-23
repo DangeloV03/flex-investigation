@@ -37,7 +37,7 @@ COEX="${COEX:-COEX_RUNS_C2A/ly40/manage.csv}"                # coex fits it was 
 DEGREE="${DEGREE:-1}"                                        # 1 = linear fit of mu(eps)
 MAX_FIT_ERR="${MAX_FIT_ERR:-1e-3}"                           # coex fits with larger error are not used
 M_THRESHOLD="${M_THRESHOLD:-0.05}"                           # rerun eps with any L |<m>| >= this
-MIN_EPS="${MIN_EPS:--1.775}"                                 # skip colder eps (large L never converges)
+MIN_EPS="${MIN_EPS:--1.775}"                                 # skip colder eps (large L never converges); "none" = keep all
 EPS_STEP="${EPS_STEP:-0.005}"                                # the campaign's eps grid step
 SIZES="${SIZES:-16 32 48 64 96 128}"
 J_THRESHOLD="${J_THRESHOLD:-10}"                             # jumps per (eps, L) before a run counts as done
@@ -55,7 +55,9 @@ do_fit() {
 }
 
 do_select() {
-  refit select --campaign "$CAMPAIGN" --threshold "$M_THRESHOLD" --min-eps "$MIN_EPS" --out "$WORK"
+  local cold=()
+  [[ "$MIN_EPS" != none ]] && cold=(--min-eps "$MIN_EPS")
+  refit select --campaign "$CAMPAIGN" --threshold "$M_THRESHOLD" ${cold[@]+"${cold[@]}"} --out "$WORK"
 }
 
 do_launch() {

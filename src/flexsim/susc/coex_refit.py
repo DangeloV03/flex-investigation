@@ -39,11 +39,18 @@ PHYSICS = ("delta_f", "delta_mu", "k", "scheme")
 # ---------------------------------------------------------------------------
 
 def campaign_runs(base: str) -> dict[tuple[int, float], str]:
-    """{(L, eps): run_dir} for every run folder with data under a SUSC_RUNS base."""
+    """{(L, eps): run_dir} for every run folder with data under a SUSC_RUNS base.
+
+    eps comes from the data rows, not the folder name: folder names keep only 6
+    significant figures (-1.568011 is stored as _-1.56801).
+    """
     out = {}
     for path in find_susc_run_csvs(base):
         run_dir = os.path.dirname(path)
         L, eps = parse_susc_run_dir(run_dir)
+        rows = read_susceptibility_csv(path)
+        if rows and rows[0].get("epsilon", "") != "":
+            eps = float(rows[0]["epsilon"])
         if L is not None and eps is not None:
             out[(L, round(eps, 6))] = run_dir
     return out

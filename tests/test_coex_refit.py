@@ -109,3 +109,11 @@ def test_promote_refuses_unconverged_without_force(campaign, tmp_path):
     with pytest.raises(SystemExit):
         coex_refit.do_promote(args)
     assert os.path.exists(os.path.join(staging, PARAM_DIR.format(L=16), "_-1.74"))
+
+
+def test_eps_comes_from_data_not_folder_name(tmp_path):
+    """Folder names keep 6 significant figures; the true eps must survive."""
+    base = str(tmp_path / "SUSC_RUNS_Y")
+    make_run(base, 16, -1.568011, [0.1, 0.12], mu=-3.0)
+    assert os.path.basename(coex_refit.campaign_runs(base)[(16, -1.568011)]) == "_-1.56801"
+    assert coex_refit.m_table(base)[0]["epsilon"] == -1.568011
