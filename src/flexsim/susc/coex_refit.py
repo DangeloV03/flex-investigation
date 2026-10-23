@@ -120,7 +120,9 @@ def do_fit(args) -> None:
     phys = campaign_physics(camp)
     eps_campaign = sorted({t["epsilon"] for t in camp})
     mu_campaign = {t["epsilon"]: t["mu"] for t in camp}
-    lo, hi = eps_campaign[0] - 1e-9, eps_campaign[-1] + 1e-9
+    # 1e-5 slack: campaigns ran at eps rounded to 6 significant figures (-1.61301)
+    # while the coex grid keeps more digits (-1.613011).
+    lo, hi = eps_campaign[0] - 1e-5, eps_campaign[-1] + 1e-5
 
     eps, mu, err = [], [], []
     with open(args.coex, newline="") as fh:
