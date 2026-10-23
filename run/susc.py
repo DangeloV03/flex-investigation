@@ -7,6 +7,7 @@ COMMANDS = {
     "check": Command("flexsim.susc.smart_sweep", "count jumps and submit top-ups by hand", prefix=["check"]),
     "fixed-sweep": Command("flexsim.susc.sweep", "older fixed-length sweep, one job per epsilon (no top-ups)"),
     "run-one": Command("flexsim.susc.runner", "run one (epsilon, L) point directly (debugging)"),
+    "refit": Command("flexsim.susc.coex_refit", "fit mu_coex(eps), pick eps with <m> off 0, promote reruns, compare"),
 }
 
 if __name__ == "__main__":
