@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Example susceptibility campaign: a small smart sweep on Della.
 #
+#   bash run/examples/susc.sh quick    # ~1 min smoke test on the login node, no Slurm
 #   bash run/examples/susc.sh launch   # submit the sweep (6 Slurm jobs + a check job)
 #   bash run/examples/susc.sh status   # Slurm queue + latest jump report
 #   bash run/examples/susc.sh plots    # chi, <|m|>, c, U4 vs epsilon and jump counts
@@ -23,6 +24,15 @@ RESULTS=examples/SUSC_RUNS_EXAMPLE      # relative to the output root
 PLOTS=examples/plots/susc
 
 case "${1:-}" in
+  quick)
+    # One (eps, L = 16) point, 4 replicas, run right here (no Slurm), ~1 minute.
+    # Checks the lattice engine, the runner and the output files.
+    rm -rf "$OUT/examples/SUSC_QUICK"
+    python run/susc.py run-one --epsilon -1.75 --L 16 --cpus 4 \
+        --eq-time 500000 --prod-time 1000000 --prod-chunks 10000 \
+        --results-base examples/SUSC_QUICK
+    echo "OK: susc quick test finished. Data in $OUT/examples/SUSC_QUICK"
+    ;;
   launch)
     python run/susc.py sweep \
         --eps-min -1.85 --eps-max -1.65 --eps-step 0.1 \
