@@ -361,8 +361,8 @@ def do_compare(args) -> None:
     nrow = math.ceil(len(Ls) / ncol)
     fig, axes = plt.subplots(nrow, ncol, figsize=(5 * ncol, 3.6 * nrow), sharex=True, squeeze=False)
     for ax, L in zip(axes.ravel(), Ls):
-        for data, color, face, label in ((before, "#8a8984", "white", "before"),
-                                         (after, "#2a78d6", "#2a78d6", "after")):
+        for data, color, face, label in ((before, "#8a8984", "white", args.before_label),
+                                         (after, "#2a78d6", "#2a78d6", args.after_label)):
             pts = sorted((k[1], v) for k, v in data.items() if k[0] == L)
             if pts:
                 ax.errorbar([e for e, _ in pts], [v["m_mean"] for _, v in pts],
@@ -377,12 +377,15 @@ def do_compare(args) -> None:
         ax.grid(alpha=0.25)
         ax.set_xlabel("βε")
         ax.set_ylabel("⟨m⟩")
+        ax.tick_params(labelbottom=True)
     for ax in axes.ravel()[len(Ls):]:
         ax.axis("off")
-    axes[0, 0].legend(frameon=False, fontsize=9)
-    fig.suptitle(f"⟨m⟩ before vs after the coex refit (green: |⟨m⟩| < {args.threshold})",
-                 x=0.01, ha="left")
-    fig.tight_layout()
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    handles.append(plt.Rectangle((0, 0), 1, 1, color="#e3efe3"))
+    labels.append(f"target: |⟨m⟩| < {args.threshold}")
+    fig.legend(handles, labels, loc="upper right", ncol=3, frameon=False, fontsize=10)
+    fig.suptitle("⟨m⟩ at each rerun ε, before vs after the coex refit", x=0.01, ha="left")
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
     fig.savefig(os.path.join(args.out, "compare.png"), dpi=150)
     plt.close(fig)
     n_ok = sum(1 for r in rows if r["after_within"])
@@ -429,6 +432,8 @@ def main() -> None:
     p.add_argument("--after", required=True)
     p.add_argument("--eps-file", default=None)
     p.add_argument("--threshold", type=float, default=0.05)
+    p.add_argument("--before-label", default="before")
+    p.add_argument("--after-label", default="after")
     p.add_argument("--out", required=True)
     p.set_defaults(func=do_compare)
 

@@ -111,12 +111,17 @@ do_status() {
 
 do_compare() {
   need "$WORK/rerun_eps.csv" select
+  local deg kind
+  deg=$(python -c "import json; print(json.load(open('$WORK/fit.json'))['degree'])")
+  case "$deg" in 1) kind=linear ;; 2) kind=quadratic ;; 3) kind=cubic ;; *) kind="degree-$deg" ;; esac
+  local labels=(--before-label "before: original $CAMPAIGN (per-ε coex μ)"
+                --after-label "after: rerun at the $kind-fit μ")
   if [[ -d "$ARCHIVE" ]]; then
     refit compare --before "$ARCHIVE" --after "$CAMPAIGN" --eps-file "$WORK/rerun_eps.csv" \
-        --threshold "$M_THRESHOLD" --out "$WORK/compare"
+        --threshold "$M_THRESHOLD" --out "$WORK/compare" "${labels[@]}"
   else
     refit compare --before "$CAMPAIGN" --after "$RUNS" --eps-file "$WORK/rerun_eps.csv" \
-        --threshold "$M_THRESHOLD" --out "$WORK/compare"
+        --threshold "$M_THRESHOLD" --out "$WORK/compare" "${labels[@]}"
   fi
 }
 
