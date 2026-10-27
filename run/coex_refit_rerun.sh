@@ -47,6 +47,15 @@ ARCHIVE="$WORK/archived_runs"
 
 refit() { python "$REPO/run/susc.py" refit "$@"; }
 
+# Fail early, with the fix, when the campaign isn't under the output root (e.g. running
+# from a different clone than the one holding the data).
+if [[ "${1:-}" =~ ^(fit|select|launch|all|compare|promote)$ && ! -d "$CAMPAIGN" ]]; then
+  echo "No $CAMPAIGN in $FLEX_OUTPUT_ROOT." >&2
+  echo "If the campaign data lives in another checkout, point at it first, e.g." >&2
+  echo "  export FLEX_OUTPUT_ROOT=/scratch/gpfs/WJACOBS/vd7294/flex-investigation" >&2
+  exit 1
+fi
+
 need() { [[ -f "$1" ]] || { echo "Missing $1 — run '$0 $2' first." >&2; exit 1; }; }
 
 do_fit() {

@@ -116,7 +116,8 @@ def robust_polyfit(eps, mu, err, degree, max_err, clip=4.0, iters=3):
 def do_fit(args) -> None:
     camp = m_table(args.campaign)
     if not camp:
-        raise SystemExit(f"no runs found under {args.campaign}")
+        raise SystemExit(f"no runs found under {os.path.abspath(args.campaign)}; set FLEX_OUTPUT_ROOT "
+                         f"to the folder that holds the campaign")
     phys = campaign_physics(camp)
     eps_campaign = sorted({t["epsilon"] for t in camp})
     mu_campaign = {t["epsilon"]: t["mu"] for t in camp}
