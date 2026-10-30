@@ -82,3 +82,27 @@ class TestSusceptibilityPaths:
             json.dump(job, f)
         changed = patch_coex_job_json(p)
         assert not changed
+
+
+def test_latest_row_per_replica_keeps_replicas_behind_a_partial_round():
+    """A top-up round that finished for only half the replicas must not hide the rest."""
+    from flexsim.susc.layout import latest_row_per_replica
+
+    rows = []
+    for gen, pt in enumerate((1e6, 2e6)):
+        for rep in range(4):
+            rows.append({"id": str(4 * gen + rep), "replica_id": str(rep),
+                         "prod_time": str(pt), "m_mean": str(0.7 if rep % 2 == 0 else -0.7)})
+    rows.append({"id": "8", "replica_id": "0", "prod_time": "3e6", "m_mean": "0.7"})   # partial round
+    rows.append({"id": "9", "replica_id": "2", "prod_time": "3e6", "m_mean": "0.7"})
+    latest = latest_row_per_replica(rows)
+    assert [r["id"] for r in latest] == ["5", "7", "8", "9"]          # one row per replica
+    assert sum(float(r["m_mean"]) for r in latest) == 0.0              # not the +0.7 of the partial round
+
+
+def test_latest_row_per_replica_falls_back_without_replica_ids():
+    from flexsim.susc.layout import latest_row_per_replica
+
+    rows = [{"id": "0", "replica_id": "", "prod_time": "1e6"},
+            {"id": "1", "replica_id": "", "prod_time": "2e6"}]
+    assert [r["id"] for r in latest_row_per_replica(rows)] == ["1"]

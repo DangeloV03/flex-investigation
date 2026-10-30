@@ -254,13 +254,13 @@ def load_susc_runs_groups(base: str) -> dict[tuple[int, float], dict]:
     and loads the m_timeseries_{id}.csv for each replica.
 
     Returns { (L, eps): {"beta": float, "N": int, "replicas": [m_array, ...]} }
-    Only uses the most up-to-date row per (L, eps) group (highest prod_time).
+    Only uses each replica's newest row (highest prod_time per replica_id).
     """
     csv_paths = find_susc_run_csvs(base)
     if not csv_paths:
         return {}
 
-    from flexsim.susc.layout import read_susceptibility_csv
+    from flexsim.susc.layout import latest_row_per_replica, read_susceptibility_csv
 
     groups: dict[tuple[int, float], dict] = {}
     n_paths = len(csv_paths)
@@ -278,10 +278,7 @@ def load_susc_runs_groups(base: str) -> dict[tuple[int, float], dict]:
         if not rows:
             continue
 
-        # Only keep the most recent generation (max prod_time).
-        max_pt = max(float(r.get("prod_time", 0) or 0) for r in rows)
-        latest_rows = [r for r in rows
-                       if abs(float(r.get("prod_time", 0) or 0) - max_pt) < 1.0]
+        latest_rows = latest_row_per_replica(rows)
 
         beta = float(latest_rows[0].get("beta", 1.0) or 1.0)
         n_sites = L * L

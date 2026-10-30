@@ -134,6 +134,32 @@ def read_susceptibility_csv(path: str) -> list[dict]:
     return rows
 
 
+def latest_row_per_replica(rows: list[dict]) -> list[dict]:
+    """Each replica's newest row (max prod_time per replica_id), sorted by id.
+
+    A smart-sweep top-up appends one row per replica, and its timeseries holds the
+    whole history, so only the newest row per replica should be used. Taking the
+    rows at one overall max prod_time instead loses every replica of a top-up
+    round that only partly finished. Replicas start half in each phase, so that
+    can fake a large <m>. Rows without replica ids (old runs) fall back to that
+    overall-max rule.
+    """
+    def pt(r: dict) -> float:
+        return float(r.get("prod_time", 0) or 0)
+
+    if not rows:
+        return rows
+    if not all(str(r.get("replica_id", "")).strip() for r in rows):
+        top = max(pt(r) for r in rows)
+        return [r for r in rows if abs(pt(r) - top) < 1.0]
+    best: dict[str, dict] = {}
+    for r in rows:
+        rid = str(r["replica_id"]).strip()
+        if rid not in best or pt(r) > pt(best[rid]):
+            best[rid] = r
+    return sorted(best.values(), key=lambda r: int(r.get("id", 0) or 0))
+
+
 def find_susceptibility_csvs(results_dir: str) -> list[str]:
     """All susceptibility_data.csv files for the campaign rooted at results_dir.
 

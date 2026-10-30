@@ -31,6 +31,7 @@ import numpy as np
 from flexsim.grid import frange
 from flexsim.susc.layout import (
     find_susc_run_csvs,
+    latest_row_per_replica,
     parse_susc_run_dir,
     read_susceptibility_csv,
 )
@@ -61,12 +62,8 @@ def campaign_runs(base: str) -> dict[tuple[int, float], str]:
 
 
 def latest_generation(run_dir: str) -> list[dict]:
-    """Rows of the newest generation (max prod_time), as the jump check uses."""
-    rows = read_susceptibility_csv(os.path.join(run_dir, "susceptibility_data.csv"))
-    if not rows:
-        return []
-    pt = max(float(r["prod_time"] or 0) for r in rows)
-    return [r for r in rows if abs(float(r["prod_time"] or 0) - pt) < 1.0]
+    """Each replica's newest row (see layout.latest_row_per_replica)."""
+    return latest_row_per_replica(read_susceptibility_csv(os.path.join(run_dir, "susceptibility_data.csv")))
 
 
 def m_table(base: str) -> list[dict]:
