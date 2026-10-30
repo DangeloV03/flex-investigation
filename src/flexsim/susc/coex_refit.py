@@ -4,11 +4,14 @@ A smart-sweep susc campaign runs each eps at its own coex fit. Noise in those fi
 pushes <m> away from 0 (see the S2A study on the experiments branch). The fix:
 
   fit      fit mu_coex(eps) from a coex manage.csv to a polynomial (degree 1 = linear)
-           over the campaign's eps range; write a manage-style CSV the sweep can read
+           over the campaign's eps range (or --fit-min/--fit-max); write a manage-style
+           CSV the sweep can read, at the campaign's eps (or a new --eps-min/max/step grid)
   select   list the eps where any L has |<m>| >= threshold (skipping eps below a cold cut)
   promote  after the reruns converge: move the old eps folders out of the campaign
            into an archive and move the rerun folders in (prints the plan unless --yes)
   compare  <m> vs eps per L, before vs after, with the +-threshold band
+  combine  link the (eps, L) points of several campaigns with |<m>| <= a cut into one
+           folder for plots and fits (drops nothing on disk)
 
 `run/coex_refit_rerun.sh` strings these together with the sweep itself.
 """
@@ -25,6 +28,7 @@ from datetime import datetime
 
 import numpy as np
 
+from flexsim.grid import frange
 from flexsim.susc.layout import (
     find_susc_run_csvs,
     parse_susc_run_dir,
@@ -124,6 +128,14 @@ def do_fit(args) -> None:
     # 1e-5 slack: campaigns ran at eps rounded to 6 significant figures (-1.61301)
     # while the coex grid keeps more digits (-1.613011).
     lo, hi = eps_campaign[0] - 1e-5, eps_campaign[-1] + 1e-5
+    if args.fit_min is not None:
+        lo = args.fit_min - 1e-9
+    if args.fit_max is not None:
+        hi = args.fit_max + 1e-9
+    grid_flags = (args.eps_min, args.eps_max, args.eps_step)
+    if any(v is not None for v in grid_flags) and None in grid_flags:
+        raise SystemExit("give all of --eps-min, --eps-max and --eps-step, or none")
+    eps_out = frange(*grid_flags) if args.eps_min is not None else eps_campaign
 
     eps, mu, err = [], [], []
     with open(args.coex, newline="") as fh:
@@ -145,13 +157,15 @@ def do_fit(args) -> None:
     coef, x0, resid, keep = robust_polyfit(eps, mu, err, args.degree, args.max_fit_err)
     os.makedirs(args.out, exist_ok=True)
 
-    # The sweep reads mu_coex_FITTED from this file, one row per campaign eps.
+    # The sweep reads mu_coex_FITTED from this file, one row per output eps.
+    # mu_campaign/shift stay blank for eps the campaign has not run.
     rows = []
-    for e in eps_campaign:
+    for e in eps_out:
         fit = float(np.polyval(coef, e - x0))
+        old = mu_campaign.get(round(e, 6))
         rows.append(dict(epsilon=e, **phys, mu_coex_FITTED=f"{fit:.10f}",
-                         mu_campaign=f"{mu_campaign[e]:.10f}",
-                         shift=f"{fit - mu_campaign[e]:+.3e}"))
+                         mu_campaign="" if old is None else f"{old:.10f}",
+                         shift="" if old is None else f"{fit - old:+.3e}"))
     with open(os.path.join(args.out, "fitted_mu.csv"), "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()
@@ -166,20 +180,23 @@ def do_fit(args) -> None:
     used = resid[keep]
     info = dict(degree=args.degree, coefficients_high_to_low=[float(c) for c in coef],
                 x0=x0, form=f"mu = polyval(coefficients, eps - x0)", coex=args.coex,
-                campaign=args.campaign, physics=phys, eps_range=[eps_campaign[0], eps_campaign[-1]],
+                campaign=args.campaign, physics=phys, eps_range=[eps_out[0], eps_out[-1]],
+                fit_range=[float(min(eps)), float(max(eps))],
                 n_points=len(eps), n_used=int(keep.sum()), max_fit_err=args.max_fit_err,
                 rms_residual=float(np.sqrt(np.mean(used ** 2))),
                 created=datetime.now().isoformat(timespec="seconds"))
     with open(os.path.join(args.out, "fit.json"), "w") as fh:
         json.dump(info, fh, indent=2)
-    _plot_fit(eps, mu, err, resid, keep, coef, x0, args.degree, os.path.join(args.out, "fit.png"))
+    _plot_fit(eps, mu, err, resid, keep, coef, x0, args.degree, os.path.join(args.out, "fit.png"),
+              eps_out=eps_out)
 
     print(f"[fit] degree {args.degree} through {keep.sum()}/{len(eps)} coex points "
           f"({args.coex}), rms residual {info['rms_residual']:.1e}")
+    print(f"[fit] fitted mu at {len(eps_out)} eps, {eps_out[0]:+.6f} .. {eps_out[-1]:+.6f}")
     print(f"[fit] wrote {args.out}/fitted_mu.csv, fit.json, fit.png")
 
 
-def _plot_fit(eps, mu, err, resid, keep, coef, x0, degree, path):
+def _plot_fit(eps, mu, err, resid, keep, coef, x0, degree, path, eps_out=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -187,7 +204,8 @@ def _plot_fit(eps, mu, err, resid, keep, coef, x0, degree, path):
     eps, mu, err, resid = map(np.asarray, (eps, mu, err, resid))
     fig, (a1, a2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True,
                                  gridspec_kw={"height_ratios": [1.4, 1]})
-    xs = np.linspace(eps.min(), eps.max(), 200)
+    span = [eps.min(), eps.max()] + ([min(eps_out), max(eps_out)] if eps_out else [])
+    xs = np.linspace(min(span), max(span), 200)
     a1.plot(xs, np.polyval(coef, xs - x0), color="#eb6834", lw=2, label=f"degree-{degree} fit")
     a1.errorbar(eps[keep], mu[keep], yerr=err[keep], fmt="o", ms=4, color="#2a78d6",
                 label="coex fit used")
@@ -202,6 +220,11 @@ def _plot_fit(eps, mu, err, resid, keep, coef, x0, degree, path):
     a2.set_xlabel("βε")
     for a in (a1, a2):
         a.grid(alpha=0.25)
+        if eps_out:
+            a.axvspan(min(eps_out), max(eps_out), color="#1baf7a", alpha=0.08, lw=0)
+    if eps_out:
+        a1.plot([], [], color="#1baf7a", alpha=0.3, lw=6, label="susc eps written")
+        a1.legend(frameon=False)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -397,6 +420,62 @@ def do_compare(args) -> None:
 
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# combine
+# ---------------------------------------------------------------------------
+
+def do_combine(args) -> None:
+    """Link every (eps, L) run with |<m>| <= cut from several bases into one folder.
+
+    The folder holds only symlinks, laid out like a SUSC_RUNS base, so the plot and
+    FSS commands read it directly. Points over the cut stay on disk; they are listed
+    in dropped_points.csv.
+    """
+    out = os.path.abspath(args.out)
+    if os.path.isdir(out):
+        # Rebuild only a folder this command made: the two CSVs plus size folders of links.
+        for name in os.listdir(out):
+            path = os.path.join(out, name)
+            if name in ("kept_points.csv", "dropped_points.csv"):
+                continue
+            if os.path.islink(path) or not os.path.isdir(path) or not all(
+                    os.path.islink(os.path.join(path, x)) for x in os.listdir(path)):
+                raise SystemExit(f"{out} holds more than links ({path}); refusing to rebuild it")
+        shutil.rmtree(out)  # removes the links, never what they point to
+    os.makedirs(out)
+
+    seen: dict[tuple[int, float], str] = {}
+    kept, dropped = [], []
+    for base in args.base:
+        table = m_table(base)
+        if not table:
+            raise SystemExit(f"no runs found under {os.path.abspath(base)}")
+        for t in table:
+            key = (t["L"], t["epsilon"])
+            if key in seen:
+                raise SystemExit(f"L={key[0]} eps={key[1]} is in both {seen[key]} and {base}")
+            seen[key] = base
+            row = dict(L=t["L"], epsilon=t["epsilon"], m_mean=f"{t['m_mean']:+.4f}",
+                       m_se=f"{t['m_se']:.4f}", n_replicas=t["n"], source=base)
+            if abs(t["m_mean"]) > args.max_abs_m:
+                dropped.append(row)
+                continue
+            kept.append(row)
+            run_dir = os.path.abspath(t["run_dir"])
+            size_dir = os.path.join(out, os.path.basename(os.path.dirname(run_dir)))
+            os.makedirs(size_dir, exist_ok=True)
+            os.symlink(run_dir, os.path.join(size_dir, os.path.basename(run_dir)))
+
+    for name, rows in (("kept_points.csv", kept), ("dropped_points.csv", dropped)):
+        with open(os.path.join(out, name), "w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=["L", "epsilon", "m_mean", "m_se", "n_replicas", "source"])
+            w.writeheader()
+            w.writerows(sorted(rows, key=lambda r: (r["L"], r["epsilon"])))
+    print(f"[combine] {len(kept)} points kept, {len(dropped)} dropped (|<m>| > {args.max_abs_m}) -> {out}")
+    for r in sorted(dropped, key=lambda r: (r["L"], r["epsilon"])):
+        print(f"   dropped L={r['L']:4d} eps={r['epsilon']:+.6f} <m>={r['m_mean']} ({r['source']})")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -407,6 +486,14 @@ def main() -> None:
     p.add_argument("--degree", type=int, default=1, help="polynomial degree (1 = linear)")
     p.add_argument("--max-fit-err", type=float, default=1e-3,
                    help="drop coex fits with a larger reported error")
+    p.add_argument("--fit-min", type=float, default=None,
+                   help="fit coex points from this eps (default: campaign's coldest eps)")
+    p.add_argument("--fit-max", type=float, default=None,
+                   help="fit coex points up to this eps (default: campaign's warmest eps)")
+    p.add_argument("--eps-min", type=float, default=None,
+                   help="write fitted mu on a new eps grid instead of the campaign's eps")
+    p.add_argument("--eps-max", type=float, default=None)
+    p.add_argument("--eps-step", type=float, default=None)
     p.add_argument("--out", required=True)
     p.set_defaults(func=do_fit)
 
@@ -437,6 +524,12 @@ def main() -> None:
     p.add_argument("--after-label", default="after")
     p.add_argument("--out", required=True)
     p.set_defaults(func=do_compare)
+
+    p = sub.add_parser("combine", help="link points with |<m>| <= cut from several bases into one folder")
+    p.add_argument("--base", action="append", required=True, help="SUSC_RUNS base (repeat for each)")
+    p.add_argument("--max-abs-m", type=float, default=0.05, help="drop points with |<m>| above this")
+    p.add_argument("--out", required=True)
+    p.set_defaults(func=do_combine)
 
     args = ap.parse_args()
     args.func(args)

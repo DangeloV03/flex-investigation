@@ -117,3 +117,76 @@ def test_eps_comes_from_data_not_folder_name(tmp_path):
     make_run(base, 16, -1.568011, [0.1, 0.12], mu=-3.0)
     assert os.path.basename(coex_refit.campaign_runs(base)[(16, -1.568011)]) == "_-1.56801"
     assert coex_refit.m_table(base)[0]["epsilon"] == -1.568011
+
+
+def write_coex(path, eps_values, mu_fn, err=1e-4):
+    with open(path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["epsilon", "delta_f", "delta_mu", "k", "scheme", "mu_coex_FITTED", "mu_coex_FITTED_error"])
+        for e in eps_values:
+            w.writerow([e, 0.0, 1.0, 1.0, "homo", mu_fn(e), err])
+
+
+def test_fit_on_new_grid_outside_campaign(campaign, tmp_path):
+    """--fit-min/max pick the coex points; --eps-min/max/step pick where mu is written."""
+    from flexsim.susc.sweep import load_mu_map
+
+    cubic = lambda e: 0.4 * (e + 1.7) ** 3 + 0.1 * (e + 1.7) ** 2 + 2.17 * e + 0.45
+    coex = str(tmp_path / "manage.csv")
+    write_coex(coex, [round(-1.95 + 0.01 * i, 4) for i in range(41)], cubic)
+    out = str(tmp_path / "work")
+    coex_refit.do_fit(argparse.Namespace(
+        campaign=campaign, coex=coex, degree=3, max_fit_err=1e-3, out=out,
+        fit_min=-1.90, fit_max=-1.60, eps_min=-1.900042, eps_max=-1.825042, eps_step=0.005))
+
+    rows = list(csv.DictReader(open(os.path.join(out, "fitted_mu.csv"))))
+    assert len(rows) == 16
+    assert float(rows[0]["epsilon"]) == -1.900042 and float(rows[-1]["epsilon"]) == -1.825042
+    for r in rows:
+        assert abs(float(r["mu_coex_FITTED"]) - cubic(float(r["epsilon"])) ) < 1e-8
+        assert r["mu_campaign"] == "" and r["shift"] == ""      # the campaign never ran these
+    # The sweep must find a mu for every eps on the same grid it builds itself.
+    from flexsim.grid import frange
+    mu_map = load_mu_map(os.path.join(out, "fitted_mu.csv"), delta_f="0.0", delta_mu="1.0",
+                         k="1.0", scheme="homo")
+    assert all(round(e, 6) in mu_map for e in frange(-1.900042, -1.825042, 0.005))
+
+
+def test_fit_grid_flags_must_come_together(campaign, tmp_path):
+    coex = str(tmp_path / "manage.csv")
+    write_coex(coex, [-1.80, -1.75, -1.70, -1.65], lambda e: 2 * e)
+    with pytest.raises(SystemExit, match="--eps-min"):
+        coex_refit.do_fit(argparse.Namespace(
+            campaign=campaign, coex=coex, degree=1, max_fit_err=1e-3, out=str(tmp_path / "w"),
+            fit_min=None, fit_max=None, eps_min=-1.8, eps_max=None, eps_step=None))
+
+
+def test_combine_links_kept_points_and_lists_dropped(campaign, tmp_path):
+    new = str(tmp_path / "NEW")
+    make_run(new, 16, -1.85, [0.02, 0.0], mu=-3.2)       # kept
+    make_run(new, 32, -1.85, [0.09, 0.07], mu=-3.2)      # dropped: |<m>| = 0.08
+    out = str(tmp_path / "combined")
+    args = argparse.Namespace(base=[campaign, new], max_abs_m=0.05, out=out)
+    coex_refit.do_combine(args)
+
+    kept = {(int(r["L"]), float(r["epsilon"])) for r in csv.DictReader(open(os.path.join(out, "kept_points.csv")))}
+    dropped = {(int(r["L"]), float(r["epsilon"])) for r in csv.DictReader(open(os.path.join(out, "dropped_points.csv")))}
+    assert kept == {(16, -1.70), (32, -1.70), (16, -1.85)}
+    assert dropped == {(16, -1.80), (32, -1.80), (16, -1.74), (32, -1.74), (32, -1.85)}
+    # The combined folder reads like a campaign, and only holds links.
+    assert set(coex_refit.campaign_runs(out)) == kept
+    link = os.path.join(out, PARAM_DIR.format(L=16), "_-1.85")
+    assert os.path.islink(link) and os.path.realpath(link) == os.path.realpath(
+        os.path.join(new, PARAM_DIR.format(L=16), "_-1.85"))
+
+    coex_refit.do_combine(args)                          # rebuilding is fine
+    assert os.path.isdir(os.path.join(new, PARAM_DIR.format(L=32), "_-1.85"))   # data untouched
+
+
+def test_combine_refuses_overlap_and_real_folders(campaign, tmp_path):
+    with pytest.raises(SystemExit, match="in both"):
+        coex_refit.do_combine(argparse.Namespace(base=[campaign, campaign], max_abs_m=0.05,
+                                                 out=str(tmp_path / "c1")))
+    with pytest.raises(SystemExit, match="more than links"):
+        coex_refit.do_combine(argparse.Namespace(base=[campaign], max_abs_m=0.05,
+                                                 out=os.path.dirname(campaign)))
