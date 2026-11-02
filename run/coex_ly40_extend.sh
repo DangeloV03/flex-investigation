@@ -43,7 +43,14 @@ export FLEX_OUTPUT_ROOT="$DATA_ROOT"
 
 coex() { python "$REPO/run/coex.py" "$@"; }
 
-[[ -d "$BASE" ]] || { echo "No $BASE (wrong DATA_ROOT or EXP?)" >&2; exit 1; }
+# NEW_BASE=1 (set by a wrapper) starts a campaign's first Ly = 40 folder; the campaign itself must exist.
+if [[ ! -d "$BASE" ]]; then
+  if [[ "${NEW_BASE:-0}" == 1 && -d "$DATA_ROOT/COEX_RUNS_$EXP" ]]; then
+    mkdir -p "$BASE"
+  else
+    echo "No $BASE (wrong DATA_ROOT or EXP?)" >&2; exit 1
+  fi
+fi
 
 # Fraction of the new eps that are analyzed: prints "<analyzed> <fitted> <total>".
 progress() {
@@ -63,7 +70,7 @@ do_generate() {
     exit 1
   fi
   local stamp; stamp=$(date +%Y%m%d_%H%M%S)
-  cp -p "$BASE/manage.csv" "$BASE/manage.csv.bak_extend_$stamp"
+  [[ -f "$BASE/manage.csv" ]] && cp -p "$BASE/manage.csv" "$BASE/manage.csv.bak_extend_$stamp"
   [[ -f "$BASE/queue.json" ]] && cp -p "$BASE/queue.json" "$BASE/queue.json.bak_extend_$stamp"
   mkdir -p "$BASE/samples" "$BASE/results"
   coex generate-susc --scheme "$SCHEME" --flex-scheme "$FLEX_SCHEME" \
@@ -73,7 +80,8 @@ do_generate() {
       --samples-dir "$BASE/samples" --results-dir "$BASE/results" \
       --manage "$BASE/manage.csv" --manifest "$BASE/queue.json"
   date > "$MARKER"
-  echo "Backups: $BASE/manage.csv.bak_extend_$stamp (and queue.json)"
+  [[ -f "$BASE/manage.csv.bak_extend_$stamp" ]] && echo "Backups: $BASE/manage.csv.bak_extend_$stamp (and queue.json)"
+  return 0
 }
 
 # tmux panes run these two (through the per-campaign script, so the settings carry over).
