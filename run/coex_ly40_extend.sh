@@ -78,10 +78,12 @@ do_generate() {
 
 # tmux panes run these two (through the per-campaign script, so the settings carry over).
 pane_env() {
+  set +u                                     # conda's activate scripts read unset vars (PS1)
   module load anaconda3/2024.10 2>/dev/null || true
   # shellcheck disable=SC1091
   source "$(conda info --base)/etc/profile.d/conda.sh"
   conda activate lattice
+  set -u
   export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}" PYTHONUNBUFFERED=1
   cd "$DATA_ROOT"
 }
