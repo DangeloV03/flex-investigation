@@ -49,6 +49,9 @@ FAILURE_STATES = {
     "OUT_OF_MEMORY",
     "PREEMPTED",
 }
+# Still alive in Slurm. `squeue --me` misses jobs another account submitted (a campaign
+# handed from one account to another), so sacct gets the last word before a re-queue.
+ACTIVE_STATES = {"PENDING", "RUNNING", "REQUEUED", "RESIZING", "SUSPENDED", "CONFIGURING"}
 # Ly -> Slurm wall time (scales roughly with area; Lx = 10*Ly)
 LY_WALLTIME = {
     8: "02:00:00",
@@ -215,6 +218,8 @@ def reconcile_in_flight(slurm=None, local_jobs: dict[str, subprocess.Popen] | No
                 f"[dispatcher] sacct unknown for job {job_id}, "
                 f"leaving in_flight (will retry): {json_path}"
             )
+            continue
+        if state in ACTIVE_STATES:
             continue
         if state in SUCCESS_STATES:
             finish_job(json_path, success=True)
