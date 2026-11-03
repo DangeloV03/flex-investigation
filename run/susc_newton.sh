@@ -32,12 +32,13 @@ export FLEX_OUTPUT_ROOT="$DATA_ROOT"
 cd "$DATA_ROOT"
 umask 002                                         # group-writable for both accounts
 
-CAMPAIGN=SUSC_RUNS_POS_DMU2                       # only used by `fit` for the physics
-COEX=COEX_RUNS_D3C/ly40/manage.csv
-DEGREE=3
-FIT_MIN=-1.85
-FIT_MAX=-1.55
-PHYSICS=(--delta-f 0.0 --delta-mu 2.0 --k 1.0 --scheme positive_drive)
+# Defaults are POS_DMU2. Wrappers (e.g. run/susc_newton_homo_1.0.sh) set these from the environment.
+CAMPAIGN="${CAMPAIGN:-SUSC_RUNS_POS_DMU2}"        # old campaign; `fit` only reads its physics
+COEX="${COEX:-COEX_RUNS_D3C/ly40/manage.csv}"     # coex mu(eps) points the cubic is fitted to
+DEGREE="${DEGREE:-3}"
+FIT_MIN="${FIT_MIN:--1.85}"
+FIT_MAX="${FIT_MAX:--1.55}"
+PHYSICS=(--delta-f "${DELTA_F:-0.0}" --delta-mu "${DELTA_MU:-2.0}" --k "${K:-1.0}" --scheme "${SCHEME:-positive_drive}")
 EXTRA=()                                          # newton start overrides (see newton.py start --help)
 
 if [[ "${SMOKE:-0}" == 1 ]]; then
@@ -48,6 +49,7 @@ if [[ "${SMOKE:-0}" == 1 ]]; then
 else
   WORK="${WORK:-SUSC_RUNS_POS_DMU2_newton}"
   EPS_MIN="${EPS_MIN:--1.800042}"; EPS_MAX="${EPS_MAX:--1.635042}"; EPS_STEP="${EPS_STEP:-0.005}"
+  [[ -n "${MAX_ITER:-}" ]] && EXTRA+=(--max-iter "$MAX_ITER")
   SIZES="${SIZES:-16 32 48 64 96 128}"
 fi
 RUNS="$WORK/runs"
