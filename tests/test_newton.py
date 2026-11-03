@@ -92,7 +92,7 @@ def test_noisy_secant_is_clamped_to_fluctuation_slope():
 
 
 def test_default_tau_and_cap():
-    assert newton.DEFAULT_CONFIG["tau"] == 0.2
+    assert newton.DEFAULT_CONFIG["tau"] == 0.1
     its = [{"mu": -3.0, "measurements": []}]
     assert newton.newton_step(its, meas(0.5, slope=1.0), cfg())["step"] == pytest.approx(-1e-3)
 
