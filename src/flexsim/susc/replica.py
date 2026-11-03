@@ -91,7 +91,24 @@ def run_replica(args: tuple) -> dict:
     boundary = Periodic()
     scratch_dir = os.path.join(outdir, f"_scratch_{replica_id}")
 
-    if resume_dir is not None and resume_id is not None:
+    if resume_dir is not None and resume_id is not None and run_settings.get("fresh_history"):
+        # New mu (Newton search): prior lattice as the start, none of its history,
+        # re-equilibrate at this mu.
+        state = np.load(os.path.join(resume_dir, f"final_lattice_{resume_id}.npy"))
+        prior_chunks = []
+        print(
+            f"[susc.runner] replica={replica_id} run_id={run_id} "
+            f"FRESH-HISTORY start from id={resume_id} in {resume_dir}, eq_time={eq_time}",
+            flush=True,
+        )
+        # A checkpoint means equilibration already happened; its state is used below.
+        if ckpt is None:
+            if eq_time > 0:
+                simulate(state, boundary, chain, [], [Time(eq_time)], seed, scratch_dir)
+                state = load.final_state(scratch_dir)
+            if ckpt_every > 0:
+                write_checkpoint(ckpt_file, state, [], 0.0, resume_id)
+    elif resume_dir is not None and resume_id is not None:
         # Resume mode: load prior lattice, skip equilibration.
         lattice_path = os.path.join(resume_dir, f"final_lattice_{resume_id}.npy")
         prior_ts_path = os.path.join(resume_dir, f"m_timeseries_{resume_id}.csv")

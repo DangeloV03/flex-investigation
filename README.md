@@ -61,6 +61,7 @@ source env.sh                   # each login: conda env, library path, import ch
 | | `check` | run that check by hand |
 | | `fixed-sweep` | older fixed-length sweep (no top-ups) |
 | | `run-one` | run one (ε, L) point (debugging) |
+| | `newton` | per (ε, L), correct μ with damped Newton steps until ⟨m⟩ ≈ 0, then run to J ≥ 10 (`run/susc_newton.sh`) |
 | `run/plots.py` | `susc` | χ, ⟨\|m\|⟩, c, U₄ vs ε; peak χ vs L |
 | | `fss` | finite-size scaling collapse of χ and ⟨\|m\|⟩ |
 | | `chi-scaling` | fit χ_max ∝ L^(γ/ν), with leave-one-out and bootstrap errors |
