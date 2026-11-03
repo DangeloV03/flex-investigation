@@ -16,8 +16,9 @@ that is not d<m>/d(beta*mu). In equilibrium, P ~ exp(beta*mu * N_occupied + ...)
     d<m>/d(beta*mu) = Cov(m, N_occupied) = N * Cov(m, rho_bonding + rho_inert),
 which is (N/2) Var(m) when there are no inert particles. It is computed from signed m,
 pooled over all replicas, which gives ~N m_s^2 / 2 near coexistence. From the second
-iteration on, the secant between the last two iterations is used when it is positive.
-Every step is damped by tau and capped at dmu_max.
+iteration on, the secant between the last two iterations is used when it is positive,
+clamped to [0.5, 5] x the fluctuation slope (two noisy <m> that barely differ give a tiny
+secant and would otherwise make a huge step). Every step is damped by tau and capped at dmu_max.
 
 Folder layout (one "pair dir" per (eps, L), named like a SUSC_RUNS run dir):
 
@@ -73,7 +74,9 @@ SEED_STRIDE = 100_000       # seed_base offset per iteration, so iterations neve
 
 DEFAULT_CONFIG = {
     "tau": 0.5,             # Newton damping
-    "dmu_max": 2e-3,        # cap on |delta(beta*mu)| per step
+    "dmu_max": 5e-4,        # cap on |delta(beta*mu)| per step (coex fit is good to ~2e-4)
+    "secant_lo": 0.5,       # measured secant slope is clamped to [secant_lo, secant_hi] x
+    "secant_hi": 5.0,       #   the fluctuation slope, so a noisy secant can't make a huge step
     "m_tol": 0.05,          # |<m>| tolerance (same cut as the plots' drop rule)
     "j_target": 10.0,       # mean jumps for the final chi
     "max_segments": 25,     # segments per iteration before giving up
@@ -188,6 +191,11 @@ def newton_step(iterations: list[dict], meas: dict, cfg: dict, beta: float = 1.0
         dm = m0 - prev["m0"]
         if dmu_b != 0.0 and dm / dmu_b > 0.0:
             slope, kind = dm / dmu_b, "secant"
+            ref = meas["slope_var"]
+            if math.isfinite(ref) and ref > 0.0:
+                lo, hi = cfg.get("secant_lo", 0.5) * ref, cfg.get("secant_hi", 5.0) * ref
+                if not lo <= slope <= hi:
+                    slope, kind = min(max(slope, lo), hi), "secant-clamped"
     if not (math.isfinite(slope) and slope > 0.0):
         step, kind = -math.copysign(cfg["dmu_max"], m0), "fallback"
     else:
