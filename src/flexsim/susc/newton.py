@@ -1,7 +1,7 @@
 """Newton search for the coexistence mu of each (eps, L) susceptibility point.
 
 Mentor's proposal (susceptibility notes, section 3.1): start at the coex-fit mu, measure
-m0 = <m>, and while m0 is clearly off zero correct mu with a damped Newton step
+m0 = <m>, and while |m0| > 0.05 correct mu with a damped Newton step
 
     beta*mu_new = beta*mu_old - tau * m0 / slope,      slope = d<m>/d(beta*mu)
 
@@ -73,7 +73,7 @@ DEFAULT_CONFIG = {
     "tau": 0.5,             # Newton damping
     "dmu_max": 2e-3,        # cap on |delta(beta*mu)| per step
     "m_tol": 0.05,          # |<m>| tolerance (same cut as the plots' drop rule)
-    "se_k": 2.0,            # take a step only if |m0| > se_k * SE(m0) as well
+    "se_k": 2.0,            # secant slope used only if its delta<m> exceeds se_k * combined SE
     "j_min": 3.0,           # mean jumps before m0 is judged at all
     "j_target": 10.0,       # mean jumps for the final chi
     "judge_segments": 3,    # judge anyway after this many segments with J < j_min
@@ -209,17 +209,16 @@ def choose_action(state: dict, meas: dict) -> tuple[str, str]:
 
     if J < cfg["j_min"] and nseg < cfg["judge_segments"]:
         return "continue", f"J={J:.1f} < j_min, too few jumps to judge <m>"
-    off = abs(m0) > max(cfg["m_tol"], cfg["se_k"] * se)
-    if off:
+    # No SE test here: the final run at the converged mu is pushed to J >= j_target
+    # anyway, and a point still off then gets another step.
+    if abs(m0) > cfg["m_tol"]:
         if len(state["iterations"]) >= cfg["max_iter"]:
             return "failed", f"<m>={m0:+.3f} still off after {cfg['max_iter']} mu values"
-        return "new_mu", f"<m>={m0:+.3f} > max(m_tol, {cfg['se_k']}*SE={cfg['se_k'] * se:.3f})"
+        return "new_mu", f"<m>={m0:+.3f} > m_tol={cfg['m_tol']} (SE={se:.3f})"
     if abs(m0) <= cfg["m_tol"] and J >= cfg["j_target"]:
         return "converged", f"<m>={m0:+.3f}, J={J:.1f}"
     if nseg >= cfg["max_segments"]:
         return "failed", f"{nseg} segments at this mu without converging (J={J:.1f}, <m>={m0:+.3f})"
-    if abs(m0) > cfg["m_tol"]:
-        return "continue", f"<m>={m0:+.3f} within noise (SE={se:.3f}); more data"
     return "continue", f"<m> ok, J={J:.1f} < {cfg['j_target']}"
 
 

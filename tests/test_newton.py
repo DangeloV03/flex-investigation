@@ -96,10 +96,10 @@ def test_judged_after_segment_cap_even_with_few_jumps():
     assert newton.choose_action(st, meas(0.5, se=0.01, J=1.0))[0] == "new_mu"
 
 
-def test_noise_guard_blocks_step():
+def test_any_m_over_tolerance_steps_regardless_of_se():
     st = state_with(n_seg=1)
-    # |m0| = 0.08 > m_tol but < 2 SE: more data, no step, not converged
-    assert newton.choose_action(st, meas(0.08, se=0.06, J=12.0))[0] == "continue"
+    assert newton.choose_action(st, meas(0.08, se=0.06, J=4.0))[0] == "new_mu"
+    assert newton.choose_action(st, meas(0.04, se=0.001, J=4.0))[0] == "continue"
 
 
 def test_zero_jump_symmetric_start_is_not_converged():

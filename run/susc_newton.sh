@@ -14,7 +14,7 @@
 #
 # Each (eps, L) starts at the cubic-fit mu (robust to single bad coex points), runs until
 # the replicas average J >= 3 jumps, then:
-#   |<m>| > max(0.05, 2 SE)  ->  damped Newton step  beta*mu -= tau <m> / (d<m>/d beta*mu),
+#   |<m>| > 0.05             ->  damped Newton step  beta*mu -= tau <m> / (d<m>/d beta*mu),
 #                                new iteration folder started from the last lattices
 #   otherwise                ->  more data at the same mu until J >= 10 with |<m>| <= 0.05
 # d<m>/d(beta*mu) comes from the fluctuations of signed m (N Cov(m, rho_B + rho_I)), later from
