@@ -73,8 +73,8 @@ CHUNK_TIME = 100.0          # simulated time per recorded sample, as in every ot
 SEED_STRIDE = 100_000       # seed_base offset per iteration, so iterations never share seeds
 
 DEFAULT_CONFIG = {
-    "tau": 0.5,             # Newton damping
-    "dmu_max": 5e-4,        # cap on |delta(beta*mu)| per step (coex fit is good to ~2e-4)
+    "tau": 0.2,             # Newton damping
+    "dmu_max": 1e-3,        # cap on |delta(beta*mu)| per step (coex fit is good to ~2e-4)
     "secant_lo": 0.5,       # measured secant slope is clamped to [secant_lo, secant_hi] x
     "secant_hi": 5.0,       #   the fluctuation slope, so a noisy secant can't make a huge step
     "m_tol": 0.05,          # |<m>| tolerance (same cut as the plots' drop rule)

@@ -91,9 +91,10 @@ def test_noisy_secant_is_clamped_to_fluctuation_slope():
     assert s["slope_kind"] == "secant-clamped" and s["slope"] == pytest.approx(350.0)
 
 
-def test_default_cap_is_5e_4():
+def test_default_tau_and_cap():
+    assert newton.DEFAULT_CONFIG["tau"] == 0.2
     its = [{"mu": -3.0, "measurements": []}]
-    assert newton.newton_step(its, meas(0.5, slope=1.0), cfg())["step"] == pytest.approx(-5e-4)
+    assert newton.newton_step(its, meas(0.5, slope=1.0), cfg())["step"] == pytest.approx(-1e-3)
 
 
 def test_fallback_when_slope_zero():
