@@ -75,6 +75,9 @@ source env.sh                   # each login: conda env, library path, import ch
 | | `L-scaling` | ε_c and BC vs L across multi-L coex runs |
 | | `distributions` | pooled P(m) from susc runs: first order vs continuous |
 
+Ly = 40 coex campaigns use the `run/coex_ly40_*.sh` scripts. Every setting is explained in
+[`run/runner.md`](run/runner.md).
+
 ## Examples
 
 `run/examples/` has one small, complete run of each kind. Each script's header

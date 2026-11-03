@@ -15,6 +15,7 @@
 # protocol as the campaign's existing Ly = 40 points.
 #
 # All paths are absolute (DATA_ROOT), so this works from any clone and any account.
+# Every setting is explained in run/runner.md.
 
 set -euo pipefail
 umask 002                                    # files stay group-writable for both accounts
