@@ -1,11 +1,13 @@
 """Newton search for the coexistence mu of each (eps, L) susceptibility point.
 
 Mentor's proposal (susceptibility notes, section 3.1): start at the coex-fit mu, measure
-m0 = <m>, and while |m0| > 0.05 correct mu with a damped Newton step
+m0 = <m> after every segment, and while |m0| > 0.05 correct mu with a damped Newton step
 
     beta*mu_new = beta*mu_old - tau * m0 / slope,      slope = d<m>/d(beta*mu)
 
-then run on at the final mu until the replicas average J >= 10 jumps. That run's chi
+then run on at the final mu until the replicas average J >= 10 jumps. There is no
+minimum jump count before m0 is judged and no standard-error test (agreed with the
+mentor): a point that only looked fine by chance is checked again at J >= 10. That run's chi
 is the one used for FSS. Every (eps, L) has its own chain, because the finite-size
 shift of coexistence differs per L.
 
@@ -14,8 +16,8 @@ that is not d<m>/d(beta*mu). In equilibrium, P ~ exp(beta*mu * N_occupied + ...)
     d<m>/d(beta*mu) = Cov(m, N_occupied) = N * Cov(m, rho_bonding + rho_inert),
 which is (N/2) Var(m) when there are no inert particles. It is computed from signed m,
 pooled over all replicas, which gives ~N m_s^2 / 2 near coexistence. From the second
-iteration on, the secant between the last two iterations is used when it is positive
-and clearly above noise. Every step is damped by tau and capped at dmu_max.
+iteration on, the secant between the last two iterations is used when it is positive.
+Every step is damped by tau and capped at dmu_max.
 
 Folder layout (one "pair dir" per (eps, L), named like a SUSC_RUNS run dir):
 
@@ -73,12 +75,9 @@ DEFAULT_CONFIG = {
     "tau": 0.5,             # Newton damping
     "dmu_max": 2e-3,        # cap on |delta(beta*mu)| per step
     "m_tol": 0.05,          # |<m>| tolerance (same cut as the plots' drop rule)
-    "se_k": 2.0,            # secant slope used only if its delta<m> exceeds se_k * combined SE
-    "j_min": 3.0,           # mean jumps before m0 is judged at all
     "j_target": 10.0,       # mean jumps for the final chi
-    "judge_segments": 3,    # judge anyway after this many segments with J < j_min
     "max_segments": 25,     # segments per iteration before giving up
-    "max_iter": 8,          # mu values before giving up
+    "max_iter": 20,         # mu values before giving up
     "max_retries": 2,       # reruns of a segment that produced no data
     "eq0": 1e6,             # first iteration: equilibration from random 0.8/0.2 fills
     "prod0": 2e6,           # first iteration: first production segment
@@ -181,15 +180,13 @@ def newton_step(iterations: list[dict], meas: dict, cfg: dict, beta: float = 1.0
     final measurement in "measurements"[-1].
     """
     mu = float(iterations[-1]["mu"])
-    m0, se = meas["m0"], meas["se"]
+    m0 = meas["m0"]
     slope, kind = meas["slope_var"], "variance"
     if len(iterations) >= 2 and iterations[-2].get("measurements"):
         prev = iterations[-2]["measurements"][-1]
         dmu_b = beta * (mu - float(iterations[-2]["mu"]))
         dm = m0 - prev["m0"]
-        noise = cfg["se_k"] * math.hypot(se if math.isfinite(se) else 0.0,
-                                         prev["se"] if math.isfinite(prev["se"]) else 0.0)
-        if dmu_b != 0.0 and dm / dmu_b > 0.0 and abs(dm) > noise:
+        if dmu_b != 0.0 and dm / dmu_b > 0.0:
             slope, kind = dm / dmu_b, "secant"
     if not (math.isfinite(slope) and slope > 0.0):
         step, kind = -math.copysign(cfg["dmu_max"], m0), "fallback"
@@ -207,10 +204,8 @@ def choose_action(state: dict, meas: dict) -> tuple[str, str]:
     nseg = len(it["measurements"])
     m0, se, J = meas["m0"], meas["se"], meas["J"]
 
-    if J < cfg["j_min"] and nseg < cfg["judge_segments"]:
-        return "continue", f"J={J:.1f} < j_min, too few jumps to judge <m>"
-    # No SE test here: the final run at the converged mu is pushed to J >= j_target
-    # anyway, and a point still off then gets another step.
+    # Judged after every segment: no minimum jump count and no SE test. A point that
+    # passes by chance is checked again when it reaches J >= j_target.
     if abs(m0) > cfg["m_tol"]:
         if len(state["iterations"]) >= cfg["max_iter"]:
             return "failed", f"<m>={m0:+.3f} still off after {cfg['max_iter']} mu values"

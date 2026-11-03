@@ -72,10 +72,10 @@ def test_secant_used_when_clear_and_positive():
     assert s["mu_next"] == pytest.approx(-3.002)
 
 
-def test_secant_skipped_when_within_noise_or_wrong_sign():
+def test_secant_used_even_when_small_but_skipped_when_wrong_sign():
     its = [{"mu": -3.0, "measurements": [meas(0.21, se=0.05)]},
            {"mu": -3.001, "measurements": []}]
-    assert newton.newton_step(its, meas(0.20, se=0.05), cfg())["slope_kind"] == "variance"
+    assert newton.newton_step(its, meas(0.20, se=0.05), cfg())["slope_kind"] == "secant"
     its[0]["measurements"] = [meas(0.10, se=0.001)]          # m went up while mu went down
     assert newton.newton_step(its, meas(0.20, se=0.001), cfg())["slope_kind"] == "variance"
 
@@ -86,14 +86,9 @@ def test_fallback_when_slope_zero():
     assert s["slope_kind"] == "fallback" and s["mu_next"] == pytest.approx(-3.001)
 
 
-def test_no_judgement_before_min_jumps():
+def test_judged_after_first_segment_even_with_few_jumps():
     st = state_with(n_seg=1)
-    assert newton.choose_action(st, meas(0.5, J=1.0))[0] == "continue"
-
-
-def test_judged_after_segment_cap_even_with_few_jumps():
-    st = state_with(n_seg=3, judge_segments=3)
-    assert newton.choose_action(st, meas(0.5, se=0.01, J=1.0))[0] == "new_mu"
+    assert newton.choose_action(st, meas(0.5, J=0.5))[0] == "new_mu"
 
 
 def test_any_m_over_tolerance_steps_regardless_of_se():
@@ -104,7 +99,7 @@ def test_any_m_over_tolerance_steps_regardless_of_se():
 
 def test_zero_jump_symmetric_start_is_not_converged():
     # half the replicas at +m_s, half at -m_s: <m> ~ 0 by construction, J = 0
-    st = state_with(n_seg=5, judge_segments=3)
+    st = state_with(n_seg=5)
     assert newton.choose_action(st, meas(0.0, se=0.18, J=0.0))[0] == "continue"
 
 

@@ -12,8 +12,8 @@
 #   SMOKE=1 bash run/susc_newton.sh fit|launch|status|analyze
 #       small test: 2 eps, L = 16/32, short segments, in NEWTON_SMOKE/ (separate from the campaign)
 #
-# Each (eps, L) starts at the cubic-fit mu (robust to single bad coex points), runs until
-# the replicas average J >= 3 jumps, then:
+# Each (eps, L) starts at the cubic-fit mu (robust to single bad coex points). After every
+# segment (no minimum jump count, no standard-error test):
 #   |<m>| > 0.05             ->  damped Newton step  beta*mu -= tau <m> / (d<m>/d beta*mu),
 #                                new iteration folder started from the last lattices
 #   otherwise                ->  more data at the same mu until J >= 10 with |<m>| <= 0.05
@@ -41,7 +41,7 @@ PHYSICS=(--delta-f 0.0 --delta-mu 2.0 --k 1.0 --scheme positive_drive)
 EXTRA=()                                          # newton start overrides (see newton.py start --help)
 
 if [[ "${SMOKE:-0}" == 1 ]]; then
-  WORK=NEWTON_SMOKE
+  WORK="${WORK:-NEWTON_SMOKE}"
   EPS_MIN=-1.700042; EPS_MAX=-1.650042; EPS_STEP=0.05
   SIZES="16 32"
   EXTRA=(--eq0 1e5 --prod0 2e5 --seg-prod 2e5 --eq-iter 2e4)
