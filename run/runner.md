@@ -126,3 +126,145 @@ python run/coex.py generate-susc --help
 python run/coex.py dispatch --help
 python run/coex.py analyze --help
 ```
+
+---
+
+# Susceptibility (susc) runners
+
+A susc campaign runs L × L lattices at the coexistence μ from a Ly = 40 coex campaign, and measures
+χ, U₄ and ⟨|m|⟩ at each (ε, L). Every `run/susc_fitted_coex_*.sh` script is a thin wrapper around one
+shared runner, `run/susc_fitted_coex.sh`. A wrapper only sets the settings below and then calls the runner.
+
+These scripts are on branch `newton-mu` (not yet on `cleanup` or `main`).
+
+## Quick start (Della)
+
+```bash
+cd <your clone of flex-investigation>          # on branch newton-mu, after git pull
+module load anaconda3/2024.10
+conda activate lattice
+
+bash run/susc_fitted_coex_neg_dmu2.sh fit             # cubic fit of coex μ(ε) -> fitted_mu.csv
+DRY_RUN=1 bash run/susc_fitted_coex_neg_dmu2.sh launch  # print the sbatch commands, submit nothing
+bash run/susc_fitted_coex_neg_dmu2.sh launch          # submit; top-up rounds chain on their own
+bash run/susc_fitted_coex_neg_dmu2.sh status          # queue + latest jump report
+bash run/susc_fitted_coex_neg_dmu2.sh analyze         # χ/U₄ plots + FSS
+```
+
+No tmux needed: once `launch` returns, everything runs inside Slurm. Data always goes to
+`/scratch/gpfs/WJACOBS/vd7294/flex-investigation`, whichever clone or account you run from.
+
+## How a campaign runs
+
+1. **fit**: fits a polynomial (cubic by default) to `mu_coex_FITTED(ε)` from the coex `manage.csv`,
+   using only the coex points with ε in [`FIT_MIN`, `FIT_MAX`]. Outliers are rejected. The fitted μ on
+   the susc ε grid goes to `<WORK>/fitted_mu.csv`, and `fit.png` / `fit.json` show the fit. The fit
+   smooths over individual coex points that came out wrong.
+2. **launch**: submits one Slurm job per (ε, L) (job names `susc_L16`, `susc_L32`, …), plus one
+   `susc_check` job that waits for all of them (`afterany`, so a job that times out doesn't block it).
+   Each job runs 16 replicas, with 1×10⁶ equilibration and 2×10⁶ production KMC time.
+3. **check / top-ups**: the check job counts the magnetisation jumps J (sign flips of m) for every
+   (ε, L). Points with mean J below `J_THRESHOLD` get a top-up job (`susc_top_L<L>`, +1×10⁶ production,
+   continuing from the last lattice), and another check job is chained after them. This repeats until
+   every point passes. If 3 rounds in a row add no data, the chain stops (STALLED in the check log).
+   Each round writes `<WORK>/runs/jump_report.md`.
+4. **analyze**: links every point with |⟨m⟩| ≤ `M_CUT` into `<WORK>/combined/` and plots from there.
+   Points with ⟨m⟩ far from 0 sat off coexistence, so their χ is biased. They stay on disk and are
+   listed in `combined/dropped_points.csv`.
+
+## Actions (first argument)
+
+| Action | What it does |
+|---|---|
+| `fit` | Cubic fit of the coex μ(ε) → `<WORK>/fitted_mu.csv`, `fit.png`, `fit.json`. |
+| `launch` | Submits the sweep and the first check job, and appends the output to `<WORK>/launch.log`. It refuses if `<WORK>/runs` already has data (`FORCE=1` overrides). `DRY_RUN=1` only prints the commands. |
+| `status` | Counts your `susc_*` jobs by name and state, and shows the latest jump report, including the pairs that haven't passed yet. |
+| `analyze` | `combine` (drops |⟨m⟩| > `M_CUT`), then the χ/U₄ plots (`<WORK>/plots`) and FSS (`<WORK>/plots/fss`). It can run at any time, including while top-ups are still going. |
+
+## Settings
+
+Set them in a wrapper with `export`, or on the command line before `bash`.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `WORK` | **required** | Campaign folder, e.g. `SUSC_RUNS_NEG_DMU2_FITTED_COEX`. Runs go in `<WORK>/runs`. |
+| `PHYS_CAMPAIGN` | **required** | An existing `SUSC_RUNS_*` folder with the same physics. `fit` only reads the physics from it. |
+| `COEX` | **required** | Coex ledger with the fitted μ, e.g. `COEX_RUNS_C3C/ly40/manage.csv`. |
+| `FIT_MIN`, `FIT_MAX` | **required** | ε range of the coex points used in the fit. Keep it a bit wider than the susc grid, and only where the coex fits are good. |
+| `EPS_MIN`, `EPS_MAX` | **required** | Susc ε grid (endpoints included). |
+| `EPS_STEP` | `0.005` | Susc ε spacing. |
+| `DELTA_MU` | **required** | βΔμ. |
+| `SCHEME` | **required** | `homo`, `positive_drive` or `negative_drive`. |
+| `DELTA_F` | `0.0` | βΔf. |
+| `K` | `1.0` | Base recycling rate k. |
+| `DEGREE` | `3` | Polynomial degree of the coex fit. |
+| `SIZES` | `16 32 48 64` | L values. L = 96 and 128 are much slower and are left out of the current campaigns. |
+| `J_THRESHOLD` | `10` | Mean jumps needed before a point counts as done. |
+| `M_CUT` | `0.05` | `analyze` drops points with |⟨m⟩| above this. |
+| `DRY_RUN` | `0` | `1` = `launch` prints the sbatch commands only. |
+| `FORCE` | `0` | `1` = `launch` even if `<WORK>/runs` already has data, e.g. to add sizes later: `SIZES="96 128" FORCE=1 bash <wrapper> launch`. |
+| `DATA_ROOT` | `/scratch/gpfs/WJACOBS/vd7294/flex-investigation` | Where the data lives. Leave it as is. |
+
+Fixed in the Slurm scripts (`src/flexsim/susc/slurm/`): 16 CPUs and 512 MB per CPU per job, 24 h wall
+time, and the equilibration/production times above.
+
+## Existing susc runners
+
+| Script | WORK | Scheme | βΔμ | Coex fit | ε grid | L |
+|---|---|---|---|---|---|---|
+| `susc_fitted_coex_neg_dmu2.sh` | `SUSC_RUNS_NEG_DMU2_FITTED_COEX` | negative_drive | +2 | C3C ly40, ε ∈ [−1.95, −1.60] | −1.878902 … −1.678902, step 0.005 | 16–64 |
+| `susc_pos_dmu2_shift.sh` | `SUSC_RUNS_POS_DMU2_shift` | positive_drive | +2 | D3C ly40, ε ∈ [−1.85, −1.55] | −1.800042 … −1.635042, step 0.005 | 16–128 |
+
+`susc_pos_dmu2_shift.sh` predates the shared runner. It has the same four actions, but its settings
+are hard-coded in the file, and its `analyze` also merges the older `SUSC_RUNS_POS_DMU2` points.
+
+`susc_newton.sh` / `susc_newton_homo_1.0.sh` (Newton correction of μ for each (ε, L)) are paused and
+not covered here.
+
+## Starting a new susc campaign
+
+Copy `run/susc_fitted_coex_neg_dmu2.sh`, then change `WORK`, `PHYS_CAMPAIGN`, `COEX`, the fit range,
+the ε grid and the physics. Run `fit` first and look at `fit.png` before launching. For example,
+negative drive βΔμ = 3 from the C3D coex:
+
+```bash
+cp run/susc_fitted_coex_neg_dmu2.sh run/susc_fitted_coex_neg_dmu3.sh
+# edit: WORK=SUSC_RUNS_NEG_DMU3_FITTED_COEX PHYS_CAMPAIGN=SUSC_RUNS_NEG_DMU3
+#       COEX=COEX_RUNS_C3D/ly40/manage.csv DELTA_MU=3.0, plus FIT_MIN/MAX and EPS_MIN/MAX
+bash run/susc_fitted_coex_neg_dmu3.sh fit
+DRY_RUN=1 bash run/susc_fitted_coex_neg_dmu3.sh launch
+bash run/susc_fitted_coex_neg_dmu3.sh launch
+```
+
+A good ε grid is ε_c ± 0.1, where ε_c is the Ly = 40 Binder-cumulant crossing of that coex campaign.
+
+## Stopping a susc campaign
+
+Every campaign uses the same job names (`susc_L*`, `susc_top_L*`, `susc_check`). So **don't cancel
+by name** (`scancel -n …`): it would also kill the other campaigns' jobs. Cancel by job ID instead.
+The IDs of each submission are in `<WORK>/runs/slurm_jobs.csv` (and `<WORK>/launch.log`). Cancel the
+pending `susc_check` job too, or it will submit another round of top-ups.
+
+## What each susc folder holds
+
+```
+<WORK>/
+  fitted_mu.csv, fit.png, fit.json   coex fit and the μ used for every ε
+  launch.log                         output of launch (job IDs)
+  runs/_<L>_<L>_.../_<eps>/          one folder per (ε, L): susceptibility_data.csv, m_timeseries_*.csv, lattices
+  runs/jump_report.md                latest check round: J per (ε, L)
+  combined/                          links to the points kept by analyze (+ dropped_points.csv)
+  plots/, plots/fss/                 χ, U₄, ⟨|m|⟩ vs ε, and FSS
+```
+
+## Lower-level commands
+
+The runner calls `python run/susc.py refit fit`, `python run/susc.py sweep` and
+`python run/susc.py refit combine`. To see all their options:
+
+```bash
+python run/susc.py sweep --help
+python run/susc.py check --help        # rerun a check / top-up round by hand
+python run/susc.py refit fit --help
+python run/susc.py refit combine --help
+```
