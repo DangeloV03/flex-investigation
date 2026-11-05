@@ -3,12 +3,14 @@
 Susceptibility runs of a driven lattice gas on an L × L lattice, using the
 [`lattice-gas`](https://github.com/moleary253/lattice-gas) Rust engine.
 
+Requires a conda env `lattice` with `numpy` and a built `lattice_gas`.
+
+## Single run
+
 ```bash
 sbatch submit.sh params.json                     # on the cluster
 python src/flexsim/susc/replica.py params.json   # directly
 ```
-
-`params.json` holds every parameter of a run:
 
 | Key | Meaning |
 |---|---|
@@ -21,7 +23,20 @@ python src/flexsim/susc/replica.py params.json   # directly
 | `seed` | base seed (replica i uses seed + 2i) |
 | `outdir` | output folder |
 
-Outputs in `outdir`: `m_timeseries_<i>.csv`, `final_lattice_<i>.npy`,
-`susceptibility_data.csv` (one row per replica) and a copy of the parameters.
+## Sweep
 
-Requires a conda env `lattice` with `numpy` and a built `lattice_gas`.
+```bash
+sbatch sweep.sh mu_database.csv                     # on the cluster
+python src/flexsim/susc/sweep.py mu_database.csv    # directly
+```
+
+Each CSV row (`lattice_size,epsilon,mu`) is one point. All other parameters and
+the replicas per point (M) are set at the top of `sweep.py`. N CPUs
+(`--cpus-per-task` in `sweep.sh`) run all point × replica tasks from one pool,
+so several points run at once when M < N. Output goes to
+`output/L<L>_eps<epsilon>_mu<mu>/`.
+
+## Outputs
+
+Per `outdir`: `params.json`, `m_timeseries_<i>.csv`, `final_lattice_<i>.npy`,
+`susceptibility_data.csv` (one row per replica).
