@@ -114,22 +114,48 @@ def robust_polyfit(eps, mu, err, degree, max_err, clip=4.0, iters=3):
     return coef, x0, resid, keep
 
 
+def fit_physics(args, camp: list[dict]) -> dict:
+    """Physics from the campaign's runs, or from --delta-f/--delta-mu/--k/--scheme.
+
+    A brand-new campaign has no runs yet, so the flags are the only source. When both
+    exist they must agree, so a wrapper can't fit coex data for the wrong physics.
+    """
+    given = {p: getattr(args, p, None) for p in PHYSICS}
+    if camp:
+        phys = campaign_physics(camp)
+        for p, v in given.items():
+            if v is None:
+                continue
+            same = v == phys[p] if p == "scheme" else abs(float(v) - float(phys[p])) < 1e-9
+            if not same:
+                raise SystemExit(f"--{p.replace('_', '-')} {v} does not match campaign "
+                                 f"{args.campaign} ({p} = {phys[p]})")
+        return phys
+    missing = [p for p, v in given.items() if v is None]
+    if missing:
+        where = os.path.abspath(args.campaign) if args.campaign else "(no --campaign given)"
+        raise SystemExit(f"no runs found under {where}: give the physics with "
+                         + " ".join(f"--{p.replace('_', '-')}" for p in missing)
+                         + ", or set FLEX_OUTPUT_ROOT to the folder that holds the campaign")
+    return {p: (v if p == "scheme" else float(v)) for p, v in given.items()}
+
+
 def do_fit(args) -> None:
-    camp = m_table(args.campaign)
-    if not camp:
-        raise SystemExit(f"no runs found under {os.path.abspath(args.campaign)}; set FLEX_OUTPUT_ROOT "
-                         f"to the folder that holds the campaign")
-    phys = campaign_physics(camp)
+    camp = m_table(args.campaign) if args.campaign and os.path.isdir(args.campaign) else []
+    phys = fit_physics(args, camp)
     eps_campaign = sorted({t["epsilon"] for t in camp})
     mu_campaign = {t["epsilon"]: t["mu"] for t in camp}
+    grid_flags = (args.eps_min, args.eps_max, args.eps_step)
+    if not camp and (None in grid_flags or args.fit_min is None or args.fit_max is None):
+        raise SystemExit("a campaign with no runs needs --eps-min/--eps-max/--eps-step "
+                         "and --fit-min/--fit-max")
     # 1e-5 slack: campaigns ran at eps rounded to 6 significant figures (-1.61301)
     # while the coex grid keeps more digits (-1.613011).
-    lo, hi = eps_campaign[0] - 1e-5, eps_campaign[-1] + 1e-5
+    lo, hi = (eps_campaign[0] - 1e-5, eps_campaign[-1] + 1e-5) if camp else (None, None)
     if args.fit_min is not None:
         lo = args.fit_min - 1e-9
     if args.fit_max is not None:
         hi = args.fit_max + 1e-9
-    grid_flags = (args.eps_min, args.eps_max, args.eps_step)
     if any(v is not None for v in grid_flags) and None in grid_flags:
         raise SystemExit("give all of --eps-min, --eps-max and --eps-step, or none")
     eps_out = frange(*grid_flags) if args.eps_min is not None else eps_campaign
@@ -478,8 +504,14 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("fit", help="fit mu_coex(eps) and write fitted_mu.csv")
-    p.add_argument("--campaign", required=True, help="SUSC_RUNS base whose eps range and physics to use")
+    p.add_argument("--campaign", default=None,
+                   help="SUSC_RUNS base whose eps range and physics to use (optional for a new "
+                        "campaign: then give the physics flags, eps grid and fit range)")
     p.add_argument("--coex", required=True, help="coex manage.csv with mu_coex_FITTED(_error)")
+    p.add_argument("--delta-f", type=float, default=None, help="physics, if the campaign has no runs")
+    p.add_argument("--delta-mu", type=float, default=None)
+    p.add_argument("--k", type=float, default=None)
+    p.add_argument("--scheme", default=None)
     p.add_argument("--degree", type=int, default=1, help="polynomial degree (1 = linear)")
     p.add_argument("--max-fit-err", type=float, default=1e-3,
                    help="drop coex fits with a larger reported error")
