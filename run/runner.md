@@ -135,12 +135,12 @@ A susc campaign runs L × L lattices at the coexistence μ from a Ly = 40 coex c
 χ, U₄ and ⟨|m|⟩ at each (ε, L). Every `run/susc_fitted_coex_*.sh` script is a thin wrapper around one
 shared runner, `run/susc_fitted_coex.sh`. A wrapper only sets the settings below and then calls the runner.
 
-These scripts are on branch `newton-mu` (not yet on `cleanup` or `main`).
+These scripts are on branches `cleanup` and `newton-mu` (not yet on `main`).
 
 ## Quick start (Della)
 
 ```bash
-cd <your clone of flex-investigation>          # on branch newton-mu, after git pull
+cd <your clone of flex-investigation>          # on branch cleanup or newton-mu, after git pull
 module load anaconda3/2024.10
 conda activate lattice
 
