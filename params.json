@@ -1,0 +1,17 @@
+{
+  "epsilon": -1.78,
+  "mu": -3.56,
+  "delta_mu": 2.0,
+  "delta_f": 0.0,
+  "k": 1.0,
+  "scheme": "negative_drive",
+  "L": 32,
+  "beta": 1.0,
+  "n_replicas": 16,
+  "eq_time": 1000000.0,
+  "prod_time": 2000000.0,
+  "prod_chunks": 20000,
+  "initial_fraction": 0.8,
+  "seed": 7000,
+  "outdir": "output/L32_eps-1.78"
+}

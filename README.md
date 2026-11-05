@@ -1,117 +1,27 @@
 # flex-investigation
 
-Monte Carlo lattice-gas simulations of driven chains, compared against FLEX theory.
-
-- **Coexistence (coex):** on an Lx × Ly slab, sweep μ at each (ε, Δμ) and fit the
-  coexistence chemical potential μ_coex. Compare it to the FLEX prediction.
-- **Susceptibility (susc):** on L × L lattices at coexistence, measure χ, ⟨|m|⟩, the
-  heat capacity c and the Binder cumulant U₄ against ε, for finite-size scaling.
-- **Criticality:** locate ε_c from the coex snapshots, using the bimodality of the
-  column order parameter, and from the susc magnetization distributions.
-
-Simulations use the [`lattice-gas`](https://github.com/moleary253/lattice-gas) Rust
-engine and run on Princeton Della through Slurm.
-
-## Layout
-
-```
-run/            what you run: four entry points, plus examples/
-  coex.py         coexistence campaigns
-  susc.py         susceptibility campaigns
-  plots.py        figures from finished runs
-  criticality.py  epsilon_c analysis
-  examples/       small runs to try on Della (start here)
-src/flexsim/    implementation (installed as the `flexsim` package)
-  coex/  susc/  criticality/
-tests/          pytest suite
-docs/           method notes (bimodality analysis, error bars)
-tools/          Della → workstation data sync
-output/         all data, plots, queues and Slurm logs (gitignored)
-```
-
-Only `run/` is meant to be used directly. Each `run/*.py` lists its commands:
+Susceptibility runs of a driven lattice gas on an L × L lattice, using the
+[`lattice-gas`](https://github.com/moleary253/lattice-gas) Rust engine.
 
 ```bash
-python run/susc.py                 # list commands
-python run/susc.py sweep --help    # options for one command
+sbatch submit.sh params.json                     # on the cluster
+python src/flexsim/susc/replica.py params.json   # directly
 ```
 
-## Setup
+`params.json` holds every parameter of a run:
 
-You need Python ≥ 3.10 and a built `lattice-gas`. For first-time setup on Della
-(clone, conda env, building `lattice-gas`, Slurm account), see
-[docs/della_setup.md](docs/della_setup.md). Short version:
+| Key | Meaning |
+|---|---|
+| `epsilon`, `mu`, `delta_mu`, `delta_f`, `k`, `beta` | physics (βε, βμ, βΔμ, βΔf, rate k, β) |
+| `scheme` | `homo`, `positive_drive` or `negative_drive` |
+| `L` | lattice side |
+| `n_replicas` | independent replicas, run in parallel (≤ CPUs of the job) |
+| `eq_time`, `prod_time`, `prod_chunks` | equilibration time, production time, number of samples |
+| `initial_fraction` | start fill: even replicas this fraction BONDING, odd ones 1 − it |
+| `seed` | base seed (replica i uses seed + 2i) |
+| `outdir` | output folder |
 
-```bash
-conda activate lattice          # env with lattice_gas built into it
-pip install -e .                # installs flexsim (once per checkout)
-source env.sh                   # each login: conda env, library path, import check
-```
+Outputs in `outdir`: `m_timeseries_<i>.csv`, `final_lattice_<i>.npy`,
+`susceptibility_data.csv` (one row per replica) and a copy of the parameters.
 
-## Commands
-
-| Entry point | Command | What it does |
-|---|---|---|
-| `run/coex.py` | `generate` | create the (ε, Δμ) job grid and queue it |
-| | `generate-susc` | create slab μ-sweep jobs for the susceptibility study |
-| | `start` / `stop` | start or stop the dispatcher and analyzer in tmux |
-| | `dispatch`, `analyze` | run either one in the foreground |
-| | `run-job` | run one job JSON (debugging) |
-| `run/susc.py` | `sweep` | submit an ε × L sweep. A check job runs top-ups until every point has enough magnetization jumps |
-| | `check` | run that check by hand |
-| | `fixed-sweep` | older fixed-length sweep (no top-ups) |
-| | `run-one` | run one (ε, L) point (debugging) |
-| | `newton` | per (ε, L), correct μ with damped Newton steps until ⟨m⟩ ≈ 0, then run to J ≥ 10 (`run/susc_newton.sh`) |
-| `run/plots.py` | `susc` | χ, ⟨\|m\|⟩, c, U₄ vs ε; peak χ vs L |
-| | `fss` | finite-size scaling collapse of χ and ⟨\|m\|⟩ |
-| | `chi-scaling` | fit χ_max ∝ L^(γ/ν), with leave-one-out and bootstrap errors |
-| | `jumps` | magnetization jump counts per (ε, L) |
-| | `flex-vs-sim` | FLEX vs simulated μ_coex |
-| `run/criticality.py` | `phase-diagram` | BC_max vs βε for one slab size, one curve per Δμ |
-| | `bc-fss` | the same for several slab sizes |
-| | `histograms` | P(φ_col) at several ε |
-| | `inspect` | ε grid coverage per Δμ |
-| | `replot-family`, `scheme-comparison` | replot / compare saved BC curves |
-| | `L-scaling` | ε_c and BC vs L across multi-L coex runs |
-| | `distributions` | pooled P(m) from susc runs: first order vs continuous |
-
-Ly = 40 coex campaigns use the `run/coex_ly40_*.sh` scripts. Every setting is explained in
-[`run/runner.md`](run/runner.md).
-
-## Examples
-
-`run/examples/` has one small, complete run of each kind. Each script's header
-explains the physics, cost and outputs.
-
-```bash
-bash run/examples/susc.sh launch          # 3 ε × L = 16, 32; ~30 min per round on Della
-bash run/examples/susc.sh status
-bash run/examples/susc.sh plots
-
-bash run/examples/coex.sh launch          # 5 ε at βΔμ = 1 on a 160 × 16 slab
-bash run/examples/coex.sh status
-bash run/examples/coex.sh plots           # FLEX vs simulation
-bash run/examples/coex.sh stop
-
-bash run/examples/criticality.sh coex     # BC vs ε from the coex example
-bash run/examples/criticality.sh susc     # P(m) from the susc example
-```
-
-## Where outputs go
-
-Everything is written under `output/` (gitignored). Set `FLEX_OUTPUT_ROOT` to use
-another directory. The `run/` scripts change into that directory first, so a
-relative path such as `--results-base SUSC_RUNS_S1A` means `output/SUSC_RUNS_S1A`.
-Slurm logs go to `output/slurm_reports/`.
-
-Slurm resources are set in `src/flexsim/coex/slurm_config.yml` (coex jobs) and in
-the `#SBATCH` headers of `src/flexsim/susc/slurm/*.sh` (susc jobs).
-
-## Tests
-
-```bash
-pip install -e '.[test]'
-pytest
-```
-
-The tests do not need `lattice-gas`.
+Requires a conda env `lattice` with `numpy` and a built `lattice_gas`.
