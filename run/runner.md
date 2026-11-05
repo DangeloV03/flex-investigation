@@ -215,6 +215,8 @@ time, and the equilibration/production times above.
 | `susc_fitted_coex_neg_dmu2.sh` | `SUSC_RUNS_NEG_DMU2_FITTED_COEX` | negative_drive | +2 | C3C ly40, ε ∈ [−1.95, −1.60] | −1.878902 … −1.678902, step 0.005 | 16–64 |
 | `susc_fitted_coex_neg_dmu1.sh` | `SUSC_RUNS_NEG_DMU1_FITTED_COEX` | negative_drive | +1 | C3A ly40 (`manage_recovered.csv`*), ε ∈ [−1.89, −1.55] | −1.823718 … −1.623718, step 0.005 | 16–64 |
 | `susc_fitted_coex_neg_dmu3.sh` | `SUSC_RUNS_NEG_DMU3_FITTED_COEX` | negative_drive | +3 | C3D ly40, ε ∈ [−2.13, −1.78] | −2.05772 … −1.85772, step 0.005 | 16–64 |
+| `susc_fitted_coex_neg_dmu_m1.sh` | `SUSC_RUNS_NEG_DMU-1_FITTED_COEX` | negative_drive | −1 | C3B ly40, ε ∈ [−1.95, −1.55] | −1.8232 … −1.6232, step 0.005 | 16–64 |
+| `susc_fitted_coex_neg_dmu_m2.sh` | `SUSC_RUNS_NEG_DMU-2_FITTED_COEX` | negative_drive | −2 | C3F ly40, ε ∈ [−1.95, −1.60] | −1.8232 … −1.6232, step 0.005 (ε_c assumed = C3B's) | 16–64 |
 | `susc_pos_dmu2_shift.sh` | `SUSC_RUNS_POS_DMU2_shift` | positive_drive | +2 | D3C ly40, ε ∈ [−1.85, −1.55] | −1.800042 … −1.635042, step 0.005 | 16–128 |
 
 \* A generator bug had wiped the C3A Ly=40 fits for ε ≥ −1.748718. `manage_recovered.csv` is `manage.csv` with
