@@ -135,12 +135,12 @@ A susc campaign runs L × L lattices at the coexistence μ from a Ly = 40 coex c
 χ, U₄ and ⟨|m|⟩ at each (ε, L). Every `run/susc_fitted_coex_*.sh` script is a thin wrapper around one
 shared runner, `run/susc_fitted_coex.sh`. A wrapper only sets the settings below and then calls the runner.
 
-These scripts are on branch `newton-mu` (not yet on `cleanup` or `main`).
+These scripts are on branches `cleanup` and `newton-mu` (not yet on `main`).
 
 ## Quick start (Della)
 
 ```bash
-cd <your clone of flex-investigation>          # on branch newton-mu, after git pull
+cd <your clone of flex-investigation>          # on branch cleanup or newton-mu, after git pull
 module load anaconda3/2024.10
 conda activate lattice
 
@@ -213,7 +213,13 @@ time, and the equilibration/production times above.
 | Script | WORK | Scheme | βΔμ | Coex fit | ε grid | L |
 |---|---|---|---|---|---|---|
 | `susc_fitted_coex_neg_dmu2.sh` | `SUSC_RUNS_NEG_DMU2_FITTED_COEX` | negative_drive | +2 | C3C ly40, ε ∈ [−1.95, −1.60] | −1.878902 … −1.678902, step 0.005 | 16–64 |
+| `susc_fitted_coex_neg_dmu1.sh` | `SUSC_RUNS_NEG_DMU1_FITTED_COEX` | negative_drive | +1 | C3A ly40 (`manage_recovered.csv`*), ε ∈ [−1.89, −1.55] | −1.823718 … −1.623718, step 0.005 | 16–64 |
+| `susc_fitted_coex_neg_dmu3.sh` | `SUSC_RUNS_NEG_DMU3_FITTED_COEX` | negative_drive | +3 | C3D ly40, ε ∈ [−2.13, −1.78] | −2.05772 … −1.85772, step 0.005 | 16–64 |
 | `susc_pos_dmu2_shift.sh` | `SUSC_RUNS_POS_DMU2_shift` | positive_drive | +2 | D3C ly40, ε ∈ [−1.85, −1.55] | −1.800042 … −1.635042, step 0.005 | 16–128 |
+
+\* A generator bug had wiped the C3A Ly=40 fits for ε ≥ −1.748718. `manage_recovered.csv` is `manage.csv` with
+those 121 fits put back from the analyzer log (`logs/c3_auto_20260923T130922Z.log`). They match the μ the old
+`SUSC_RUNS_NEG_DMU1` ran at to 5×10⁻⁷. `manage.csv` itself is unchanged.
 
 `susc_pos_dmu2_shift.sh` predates the shared runner. It has the same four actions, but its settings
 are hard-coded in the file, and its `analyze` also merges the older `SUSC_RUNS_POS_DMU2` points.
