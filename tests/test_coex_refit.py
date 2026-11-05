@@ -161,6 +161,48 @@ def test_fit_grid_flags_must_come_together(campaign, tmp_path):
             fit_min=None, fit_max=None, eps_min=-1.8, eps_max=None, eps_step=None))
 
 
+def _fit_args(tmp_path, coex, **kw):
+    a = dict(campaign=None, coex=coex, degree=1, max_fit_err=1e-3, out=str(tmp_path / "w"),
+             fit_min=-1.85, fit_max=-1.65, eps_min=-1.80, eps_max=-1.70, eps_step=0.05,
+             delta_f=0.0, delta_mu=1.0, k=1.0, scheme="homo")
+    a.update(kw)
+    return argparse.Namespace(**a)
+
+
+@pytest.mark.parametrize("campaign_dir", [None, "empty", "missing"])
+def test_fit_new_campaign_takes_physics_from_flags(tmp_path, campaign_dir):
+    """No runs yet (no --campaign, an empty folder, or no folder): physics comes from the flags."""
+    coex = str(tmp_path / "manage.csv")
+    write_coex(coex, [-1.85, -1.80, -1.75, -1.70, -1.65], lambda e: 2 * e)
+    camp = None
+    if campaign_dir:
+        camp = str(tmp_path / "SUSC_RUNS_NEW")
+        if campaign_dir == "empty":
+            os.makedirs(camp)
+    coex_refit.do_fit(_fit_args(tmp_path, coex, campaign=camp))
+    rows = list(csv.DictReader(open(tmp_path / "w" / "fitted_mu.csv")))
+    assert [float(r["epsilon"]) for r in rows] == [-1.80, -1.75, -1.70]
+    assert all(r["scheme"] == "homo" and float(r["delta_mu"]) == 1.0 for r in rows)
+    assert all(abs(float(r["mu_coex_FITTED"]) - 2 * float(r["epsilon"])) < 1e-8 for r in rows)
+
+
+def test_fit_new_campaign_needs_physics_grid_and_range(tmp_path):
+    coex = str(tmp_path / "manage.csv")
+    write_coex(coex, [-1.85, -1.80, -1.75, -1.70, -1.65], lambda e: 2 * e)
+    with pytest.raises(SystemExit, match="--delta-mu"):
+        coex_refit.do_fit(_fit_args(tmp_path, coex, delta_mu=None))
+    with pytest.raises(SystemExit, match="--fit-min"):
+        coex_refit.do_fit(_fit_args(tmp_path, coex, fit_min=None))
+
+
+def test_fit_physics_flags_must_match_campaign(campaign, tmp_path):
+    coex = str(tmp_path / "manage.csv")
+    write_coex(coex, [-1.85, -1.80, -1.75, -1.70, -1.65], lambda e: 2 * e)
+    with pytest.raises(SystemExit, match="does not match"):
+        coex_refit.do_fit(_fit_args(tmp_path, coex, campaign=campaign, delta_mu=2.0))
+    coex_refit.do_fit(_fit_args(tmp_path, coex, campaign=campaign))      # matching flags: fine
+
+
 def test_combine_links_kept_points_and_lists_dropped(campaign, tmp_path):
     new = str(tmp_path / "NEW")
     make_run(new, 16, -1.85, [0.02, 0.0], mu=-3.2)       # kept

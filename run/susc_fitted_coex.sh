@@ -10,7 +10,9 @@
 #
 # Wrappers set the campaign through the environment (see run/susc_fitted_coex_neg_dmu2.sh):
 #   WORK          output folder, e.g. SUSC_RUNS_NEG_DMU2_FITTED_COEX (runs go to $WORK/runs)
-#   PHYS_CAMPAIGN an existing SUSC_RUNS base with the same physics (fit only reads its physics)
+#   PHYS_CAMPAIGN optional: an existing SUSC_RUNS base with the same physics. fit checks the
+#                 physics against it and lists its old mu next to the new one. Leave it unset
+#                 (or point it at an empty folder) for physics that has never had a susc run.
 #   COEX          coex manage.csv with mu_coex_FITTED(_error)
 #   FIT_MIN/MAX   eps range of coex points used in the fit
 #   EPS_MIN/MAX/STEP  susc eps grid;  SIZES  L values
@@ -25,7 +27,7 @@ export FLEX_OUTPUT_ROOT="$DATA_ROOT"
 cd "$DATA_ROOT"
 umask 002                                         # group-writable for both accounts
 
-: "${WORK:?set by the wrapper}" "${PHYS_CAMPAIGN:?}" "${COEX:?}" "${FIT_MIN:?}" "${FIT_MAX:?}"
+: "${WORK:?set by the wrapper}" "${COEX:?}" "${FIT_MIN:?}" "${FIT_MAX:?}"
 : "${EPS_MIN:?}" "${EPS_MAX:?}" "${DELTA_MU:?}" "${SCHEME:?}"
 DEGREE="${DEGREE:-3}"
 EPS_STEP="${EPS_STEP:-0.005}"
@@ -38,7 +40,9 @@ RUNS="$WORK/runs"
 need() { [[ -f "$1" ]] || { echo "Missing $1 — run '$0 $2' first." >&2; exit 1; }; }
 
 do_fit() {
-  python "$REPO/run/susc.py" refit fit --campaign "$PHYS_CAMPAIGN" --coex "$COEX" --degree "$DEGREE" \
+  local camp=()
+  [[ -n "${PHYS_CAMPAIGN:-}" ]] && camp=(--campaign "$PHYS_CAMPAIGN")
+  python "$REPO/run/susc.py" refit fit "${camp[@]}" --coex "$COEX" --degree "$DEGREE" "${PHYSICS[@]}" \
       --fit-min "$FIT_MIN" --fit-max "$FIT_MAX" \
       --eps-min "$EPS_MIN" --eps-max "$EPS_MAX" --eps-step "$EPS_STEP" --out "$WORK"
 }
