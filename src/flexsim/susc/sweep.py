@@ -8,6 +8,9 @@ L, epsilon, mu, outdir, which come from the CSV row). Every CSV row becomes a pa
 dict, all (row, replica) tasks go into one pool of N workers, and each row's outdir
 gets params.json, m_timeseries_<i>.csv, final_lattice_<i>.npy and
 susceptibility_data.csv (written as soon as all M replicas of that row are done).
+With "continuation": true every replica of every row must already have its
+final_lattice_<i>.npy and m_timeseries_<i>.csv; this is checked for all rows before
+anything runs, and each row's parameters go to params_continuation.json instead.
 """
 
 import csv
@@ -16,7 +19,7 @@ import multiprocessing as mp
 import os
 import sys
 
-from replica import DEFAULTS, REQUIRED, run_replica
+from replica import DEFAULTS, REQUIRED, check_continuation, run_replica
 
 SWEEP_KEYS = ["mu_database", "outroot"]
 PER_ROW = ["L", "epsilon", "mu", "outdir"]
@@ -37,18 +40,24 @@ def main():
         points = [{"L": int(r["lattice_size"]), "epsilon": float(r["epsilon"]), "mu": float(r["mu"])}
                   for r in csv.DictReader(f)]
 
-    jobs = []
-    for pt in points:
-        p = {**fixed, **pt,
+    if fixed["continuation"]:
+        fixed["eq_time"] = 0
+    jobs = [{**fixed, **pt,
              "outdir": os.path.join(cfg["outroot"], f"L{pt['L']}_eps{pt['epsilon']}_mu{pt['mu']}")}
+            for pt in points]
+    if fixed["continuation"]:  # fail before running anything if any replica can't be continued
+        for p in jobs:
+            check_continuation(p)
+    for p in jobs:
         os.makedirs(p["outdir"], exist_ok=True)
-        with open(os.path.join(p["outdir"], "params.json"), "w") as f:
+        name = "params_continuation.json" if p["continuation"] else "params.json"
+        with open(os.path.join(p["outdir"], name), "w") as f:
             json.dump(p, f, indent=2)
-        jobs.append(p)
 
     n_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count()))
     tasks = [(j, i, p) for j, p in enumerate(jobs) for i in range(n_rep)]
-    print(f"{len(jobs)} points x {n_rep} replicas on {n_cpus} CPUs", flush=True)
+    mode = " (continuation)" if fixed["continuation"] else ""
+    print(f"{len(jobs)} points x {n_rep} replicas on {n_cpus} CPUs{mode}", flush=True)
 
     results = {j: [] for j in range(len(jobs))}
     with mp.Pool(n_cpus) as pool:

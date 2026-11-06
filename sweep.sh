@@ -30,7 +30,12 @@ PROD_TIME=5e6
 PROD_CHUNKS=2000
 INITIAL_M=0.8
 SEED=$RANDOM
+CONTINUATION=false            # true: restart every replica from its final_lattice_<i>.npy in
+                              # OUTROOT (no equilibration) and append to m_timeseries_<i>.csv
 # ------------------------------------------------------------------
+
+CONTINUATION=$(echo "$CONTINUATION" | tr '[:upper:]' '[:lower:]')  # JSON needs true/false
+[[ $CONTINUATION == true || $CONTINUATION == false ]] || { echo "CONTINUATION must be true or false"; exit 1; }
 
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p "$OUTROOT"
@@ -49,7 +54,8 @@ cat > "$PARAMS" <<EOF
   "prod_time": $PROD_TIME,
   "prod_chunks": $PROD_CHUNKS,
   "initial_m": $INITIAL_M,
-  "seed": $SEED
+  "seed": $SEED,
+  "continuation": $CONTINUATION
 }
 EOF
 
