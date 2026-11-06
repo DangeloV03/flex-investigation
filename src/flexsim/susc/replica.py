@@ -21,14 +21,12 @@ import tempfile
 
 import numpy as np
 from lattice_gas import load
-from lattice_gas.analysis import Snapshots
 from lattice_gas.boundary_condition import Periodic
 from lattice_gas.ending_criterion import Time
 from lattice_gas.markov_chain import HeteroChain
 from lattice_gas.simulate import simulate
 
 EMPTY, INERT, BONDING = 0, 1, 2
-SAMPLES_PER_BLOCK = 1000  # production samples per simulate() call (bounds memory and disk I/O)
 
 DEFAULTS = {
     "beta": 1.0,
@@ -42,19 +40,20 @@ DEFAULTS = {
 REQUIRED = ["epsilon", "mu", "delta_mu", "delta_f", "k", "scheme", "L", "outdir"]
 
 
-def densities(states):
-    """Densities of BONDING, INERT, EMPTY for a stack of lattices of shape (n, L, L)."""
-    return [(states == s).mean(axis=(1, 2)) for s in (BONDING, INERT, EMPTY)]
+def densities(state):
+    n = state.size
+    return (np.count_nonzero(state == BONDING) / n,
+            np.count_nonzero(state == INERT) / n,
+            np.count_nonzero(state == EMPTY) / n)
 
 
-def energy(states, beta, epsilon, mu, delta_f):
-    """beta*E = (beta*eps/2) sum_bonding n_bonding_neighbours - beta*mu*n_B - beta*(mu+df)*n_I,
-    for a stack of lattices of shape (n, L, L)."""
-    b = (states == BONDING).astype(float)
-    neighbours = np.roll(b, 1, 1) + np.roll(b, -1, 1) + np.roll(b, 1, 2) + np.roll(b, -1, 2)
-    n_b = b.sum(axis=(1, 2))
-    n_i = (states == INERT).sum(axis=(1, 2))
-    return 0.5 * beta * epsilon * (b * neighbours).sum(axis=(1, 2)) - beta * mu * n_b - beta * (mu + delta_f) * n_i
+def energy(state, beta, epsilon, mu, delta_f):
+    """beta*E = (beta*eps/2) sum_bonding n_bonding_neighbours - beta*mu*n_B - beta*(mu+df)*n_I."""
+    b = (state == BONDING).astype(float)
+    neighbours = np.roll(b, 1, 0) + np.roll(b, -1, 0) + np.roll(b, 1, 1) + np.roll(b, -1, 1)
+    n_b = b.sum()
+    n_i = np.count_nonzero(state == INERT)
+    return 0.5 * beta * epsilon * float((b * neighbours).sum()) - beta * mu * n_b - beta * (mu + delta_f) * n_i
 
 
 def initial_state(L, fraction, seed):
@@ -82,33 +81,22 @@ def run_replica(args):
                         np.exp(beta * p["mu"]),                    # bonding fugacity
                         p["k"], p["scheme"])
     boundary = Periodic()
-    # The engine only returns results through a directory, so put it on RAM-backed
-    # /dev/shm (Linux) when available; otherwise fall back to the default temp dir.
-    scratch = tempfile.mkdtemp(prefix=f"susc_{i}_", dir="/dev/shm" if os.path.isdir("/dev/shm") else None)
+    scratch = tempfile.mkdtemp(dir="/dev/shm" if os.path.isdir("/dev/shm") else None)  # RAM-backed on Linux
 
     state = initial_state(L, fraction, seed)
     simulate(state, boundary, chain, [], [Time(p["eq_time"])], seed, scratch)
     state = load.final_state(scratch)
 
-    # Production: one simulate() per block of samples; a Snapshots analyzer records the
-    # lattice every chunk_time, so the state is not written and reloaded once per sample.
-    n_samples = int(p["prod_chunks"])
-    chunk_time = p["prod_time"] / n_samples
-    snaps = []
-    for block, start in enumerate(range(0, n_samples, SAMPLES_PER_BLOCK)):
-        n = min(SAMPLES_PER_BLOCK, n_samples - start)
-        simulate(state, boundary, chain, [Snapshots(chunk_time)], [Time(n * chunk_time)],
-                 seed + 1 + block, scratch)
-        snaps.append(np.asarray(load.analyzers(scratch)[0].snapshots[:n]))  # t = 0, dt, ..., (n-1) dt
+    chunk_time = p["prod_time"] / p["prod_chunks"]
+    rows = []
+    for c in range(p["prod_chunks"]):
+        simulate(state, boundary, chain, [], [Time(chunk_time)], seed + 1 + c, scratch)
         state = load.final_state(scratch)
+        rho_b, rho_i, rho_e = densities(state)
+        rows.append({"chunk": c, "rho_bonding": rho_b, "rho_inert": rho_i, "rho_empty": rho_e,
+                     "m": rho_b - rho_i - rho_e,
+                     "energy": energy(state, beta, p["epsilon"], p["mu"], p["delta_f"])})
     shutil.rmtree(scratch, ignore_errors=True)
-
-    states = np.concatenate(snaps)
-    rho_b, rho_i, rho_e = densities(states)
-    m = rho_b - rho_i - rho_e
-    e = energy(states, beta, p["epsilon"], p["mu"], p["delta_f"])
-    rows = [{"chunk": c, "rho_bonding": rho_b[c], "rho_inert": rho_i[c], "rho_empty": rho_e[c],
-             "m": m[c], "energy": e[c]} for c in range(n_samples)]
 
     np.save(os.path.join(p["outdir"], f"final_lattice_{i}.npy"), state)
     with open(os.path.join(p["outdir"], f"m_timeseries_{i}.csv"), "w", newline="") as f:
@@ -116,6 +104,8 @@ def run_replica(args):
         w.writeheader()
         w.writerows(rows)
 
+    m = np.array([r["m"] for r in rows])
+    e = np.array([r["energy"] for r in rows])
     abs_m, m2 = np.abs(m).mean(), (m ** 2).mean()
     return {
         "replica": i, "seed": seed, "initial_fraction": fraction,
