@@ -13,9 +13,11 @@
 set -euo pipefail
 PARAMS=${1:?usage: sbatch submit.sh params.json}
 
+set +u  # module/conda scripts reference unset vars (e.g. PS1) in batch shells
 module load anaconda3/2024.10
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate lattice
+set -u
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 
 cd "$SLURM_SUBMIT_DIR"
