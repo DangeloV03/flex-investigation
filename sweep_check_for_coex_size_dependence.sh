@@ -15,13 +15,13 @@ set -euo pipefail
 # Also four replicas should be enough!
 
 # ---- sweep parameters (L, epsilon, mu come from the CSV rows) ----
-MU_DATABASE=mu_database_sparse_neg_drive_dmu3.csv   # CSV: lattice_size,epsilon,mu (e.g. from setup_sweep.py)
+MU_DATABASE=mu_database_sparse_homo_dmu3.csv   # CSV: lattice_size,epsilon,mu (e.g. from setup_sweep.py)
 OUTROOT=/scratch/gpfs/WJACOBS/MLO/3SM_COEX_SIZE_DEPENDENCE
 N_REPLICAS=4                 # independent trajectories per row (must be even)
 DELTA_MU=3.0
 DELTA_F=0.0
 K=1.0
-SCHEME=negative_drive
+SCHEME=homo
 BETA=1.0
 EQ_TIME=4e6
 PROD_TIME=1e6
