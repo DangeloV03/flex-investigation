@@ -1,6 +1,6 @@
 """Susceptibility run on an L x L lattice: equilibrate, then sample m(t) in chunks.
 
-    python src/flexsim/susc/replica.py params.json
+    python src/flexsim/susc/replica.py params.json [--RANDOM_INITIAL]
 
 Runs `n_replicas` independent replicas in parallel (one process each) and writes to
 `outdir`:
@@ -13,6 +13,10 @@ m = rho_bonding - rho_inert - rho_empty, chi = N * beta * (<m^2> - <|m|>^2).
 With "continuation": true, replica i restarts from final_lattice_<i>.npy in `outdir`
 (no equilibration), appends its new chunks to m_timeseries_<i>.csv, and the
 statistics in susceptibility_data.csv are computed over the whole (old + new) series.
+
+With "random_initial": true (or --RANDOM_INITIAL on the command line) `initial_m` is
+ignored and each replica draws its initial m uniformly from [-1, 1] (mean 0, covering
+all of m space).
 """
 
 import csv
@@ -41,6 +45,7 @@ DEFAULTS = {
     "initial_m": 0.8,
     "seed": 7000,
     "continuation": False,
+    "random_initial": False,
 }
 REQUIRED = ["epsilon", "mu", "delta_mu", "delta_f", "k", "scheme", "L", "outdir"]
 
@@ -66,6 +71,19 @@ def initial_state(L, m, rng):
     state = np.zeros((L, L), dtype=np.uint32)
     state.ravel()[rng.choice(L * L, int(round((1 + m) / 2 * L * L)), replace=False)] = BONDING
     return state
+
+
+def load_params(argv, defaults):
+    """Read the JSON named in argv (plus optional --RANDOM_INITIAL flag) over defaults."""
+    flag = "--RANDOM_INITIAL"
+    args = [a for a in argv[1:] if a != flag]
+    if len(args) != 1:
+        sys.exit(f"usage: python {argv[0]} params.json [{flag}]")
+    with open(args[0]) as f:
+        p = {**defaults, **json.load(f)}
+    if flag in argv[1:]:
+        p["random_initial"] = True
+    return args[0], p
 
 
 def replica_files(outdir, i):
@@ -115,6 +133,8 @@ def run_replica(args):
         if state.shape != (L, L):
             raise ValueError(f"{lattice_file} has shape {state.shape}, expected {(L, L)}")
     else:
+        if p["random_initial"]:
+            m0 = float(rng.uniform(-1, 1))
         state = initial_state(L, m0, rng)
         simulate(state, boundary, chain, [], [Time(p["eq_time"])], seed, scratch)
         state = load.final_state(scratch)
@@ -155,13 +175,10 @@ def run_replica(args):
 
 
 def main():
-    if len(sys.argv) != 2:
-        sys.exit(f"usage: python {sys.argv[0]} params.json")
-    with open(sys.argv[1]) as f:
-        p = {**DEFAULTS, **json.load(f)}
+    path, p = load_params(sys.argv, DEFAULTS)
     missing = [key for key in REQUIRED if key not in p]
     if missing:
-        sys.exit(f"missing parameters in {sys.argv[1]}: {missing}")
+        sys.exit(f"missing parameters in {path}: {missing}")
 
     os.makedirs(p["outdir"], exist_ok=True)
     if p["continuation"]:

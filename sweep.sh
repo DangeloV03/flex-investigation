@@ -29,6 +29,7 @@ EQ_TIME=2e6
 PROD_TIME=5e6
 PROD_CHUNKS=2000
 INITIAL_M=0.8
+RANDOM_INITIAL=false          # true: ignore INITIAL_M, draw each initial m uniformly from [-1, 1]
 SEED=$RANDOM
 CONTINUATION=false            # true: restart every replica from its final_lattice_<i>.npy in
                               # OUTROOT (no equilibration) and append to m_timeseries_<i>.csv
@@ -38,6 +39,8 @@ OUTROOT="$OUTROOT/SCHEME_${SCHEME}_DF_${DELTA_F}_K_${K}_DMU_${DELTA_MU}"
 
 CONTINUATION=$(echo "$CONTINUATION" | tr '[:upper:]' '[:lower:]')  # JSON needs true/false
 [[ $CONTINUATION == true || $CONTINUATION == false ]] || { echo "CONTINUATION must be true or false"; exit 1; }
+RANDOM_INITIAL=$(echo "$RANDOM_INITIAL" | tr '[:upper:]' '[:lower:]')
+[[ $RANDOM_INITIAL == true || $RANDOM_INITIAL == false ]] || { echo "RANDOM_INITIAL must be true or false"; exit 1; }
 
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p "$OUTROOT"
@@ -56,6 +59,7 @@ cat > "$PARAMS" <<EOF
   "prod_time": $PROD_TIME,
   "prod_chunks": $PROD_CHUNKS,
   "initial_m": $INITIAL_M,
+  "random_initial": $RANDOM_INITIAL,
   "seed": $SEED,
   "continuation": $CONTINUATION
 }

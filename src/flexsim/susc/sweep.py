@@ -1,6 +1,6 @@
 """Sweep over (L, epsilon, mu) from a CSV, M replicas per point, on N CPUs.
 
-    python src/flexsim/susc/sweep.py sweep.json
+    python src/flexsim/susc/sweep.py sweep.json [--RANDOM_INITIAL]
 
 The JSON holds "mu_database" (CSV with lattice_size,epsilon,mu), "outroot",
 "n_replicas" (M) and every fixed physics parameter of replica.py (all keys except
@@ -11,6 +11,8 @@ susceptibility_data.csv (written as soon as all M replicas of that row are done)
 With "continuation": true every replica of every row must already have its
 final_lattice_<i>.npy and m_timeseries_<i>.csv; this is checked for all rows before
 anything runs, and each row's parameters go to params_continuation.json instead.
+"random_initial": true (or --RANDOM_INITIAL) gives every replica an initial m drawn
+uniformly from [-1, 1] instead of +-initial_m (see replica.py).
 """
 
 import csv
@@ -20,20 +22,17 @@ import os
 import sys
 import time
 
-from replica import DEFAULTS, REQUIRED, check_continuation, run_replica
+from replica import DEFAULTS, REQUIRED, check_continuation, load_params, run_replica
 
 SWEEP_KEYS = ["mu_database", "outroot"]
 PER_ROW = ["L", "epsilon", "mu", "outdir"]
 
 
 def main():
-    if len(sys.argv) != 2:
-        sys.exit(f"usage: python {sys.argv[0]} sweep.json")
-    with open(sys.argv[1]) as f:
-        cfg = {**DEFAULTS, **json.load(f)}
+    path, cfg = load_params(sys.argv, DEFAULTS)
     missing = [k for k in SWEEP_KEYS + REQUIRED if k not in PER_ROW and k not in cfg]
     if missing:
-        sys.exit(f"missing parameters in {sys.argv[1]}: {missing}")
+        sys.exit(f"missing parameters in {path}: {missing}")
     fixed = {k: v for k, v in cfg.items() if k not in SWEEP_KEYS}
     n_rep = int(fixed["n_replicas"])
 
