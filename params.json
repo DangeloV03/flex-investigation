@@ -11,7 +11,7 @@
   "eq_time": 1000000.0,
   "prod_time": 2000000.0,
   "prod_chunks": 20000,
-  "initial_fraction": 0.8,
+  "initial_m": 0.8,
   "seed": 7000,
   "outdir": "output/L32_eps-1.78"
 }

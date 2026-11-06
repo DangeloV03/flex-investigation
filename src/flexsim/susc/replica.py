@@ -34,7 +34,7 @@ DEFAULTS = {
     "eq_time": 1e6,
     "prod_time": 2e6,
     "prod_chunks": 20000,
-    "initial_fraction": 0.8,
+    "initial_m": 0.8,
     "seed": 7000,
 }
 REQUIRED = ["epsilon", "mu", "delta_mu", "delta_f", "k", "scheme", "L", "outdir"]
@@ -56,10 +56,10 @@ def energy(state, beta, epsilon, mu, delta_f):
     return 0.5 * beta * epsilon * float((b * neighbours).sum()) - beta * mu * n_b - beta * (mu + delta_f) * n_i
 
 
-def initial_state(L, fraction, rng):
-    """A random `fraction` of the sites BONDING, the rest EMPTY."""
+def initial_state(L, m, rng):
+    """Random BONDING/EMPTY lattice with order parameter m (rho_bonding = (1 + m) / 2)."""
     state = np.zeros((L, L), dtype=np.uint32)
-    state.ravel()[rng.choice(L * L, int(round(fraction * L * L)), replace=False)] = BONDING
+    state.ravel()[rng.choice(L * L, int(round((1 + m) / 2 * L * L)), replace=False)] = BONDING
     return state
 
 
@@ -69,14 +69,15 @@ def sem(x):
 
 def run_replica(args):
     i, p = args
+    if int(p["n_replicas"]) % 2:
+        raise ValueError(f"n_replicas must be even, got {p['n_replicas']}")
     beta, L = p["beta"], int(p["L"])
     # Independent random stream per replica (reproducible from the base seed): it sets the
     # starting geometry and the engine seed of every simulate call.
     rng = np.random.default_rng([p["seed"], i])
     seed, *chunk_seeds = (int(x) for x in rng.integers(2**63, size=p["prod_chunks"] + 1))
-    # Even replicas start mostly BONDING, odd ones mostly EMPTY, to sample both phases.
-    high = max(p["initial_fraction"], 1 - p["initial_fraction"])
-    fraction = high if i % 2 == 0 else 1 - high
+    # Half the replicas (even i) start at m = +|initial_m|, the other half at -|initial_m|.
+    m0 = abs(p["initial_m"]) if i % 2 == 0 else -abs(p["initial_m"])
 
     chain = HeteroChain(beta, p["epsilon"], p["delta_mu"],
                         np.exp(beta * (p["mu"] + p["delta_f"])),  # inert fugacity
@@ -85,7 +86,7 @@ def run_replica(args):
     boundary = Periodic()
     scratch = tempfile.mkdtemp(dir="/dev/shm" if os.path.isdir("/dev/shm") else None)  # RAM-backed on Linux
 
-    state = initial_state(L, fraction, rng)
+    state = initial_state(L, m0, rng)
     simulate(state, boundary, chain, [], [Time(p["eq_time"])], seed, scratch)
     state = load.final_state(scratch)
 
@@ -110,7 +111,7 @@ def run_replica(args):
     e = np.array([r["energy"] for r in rows])
     abs_m, m2 = np.abs(m).mean(), (m ** 2).mean()
     return {
-        "replica": i, "seed": seed, "initial_fraction": fraction,
+        "replica": i, "seed": seed, "initial_m": m0,
         "m_mean": m.mean(), "m_mean_err": sem(m),
         "abs_m_mean": abs_m, "abs_m_mean_err": sem(np.abs(m)),
         "m2_mean": m2, "m2_mean_err": sem(m ** 2),

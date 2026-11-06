@@ -19,7 +19,7 @@ python src/flexsim/susc/replica.py params.json   # directly
 | `L` | lattice side |
 | `n_replicas` | independent replicas, run in parallel (≤ CPUs of the job) |
 | `eq_time`, `prod_time`, `prod_chunks` | equilibration time, production time, number of samples |
-| `initial_fraction` | start fill: even replicas this fraction BONDING, odd ones 1 − it |
+| `initial_m` | starting order parameter: even replicas random BONDING/EMPTY at m = +it, odd ones at m = −it (`n_replicas` must be even) |
 | `seed` | base seed; replica i draws its starting geometry and all engine seeds from an RNG seeded with (seed, i) |
 | `outdir` | output folder |
 

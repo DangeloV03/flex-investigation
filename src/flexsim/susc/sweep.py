@@ -28,7 +28,7 @@ FIXED = {
     "eq_time": 1e6,
     "prod_time": 2e6,
     "prod_chunks": 20000,
-    "initial_fraction": 0.8,
+    "initial_m": 0.8,
     "seed": 7000,
 }
 OUTROOT = "output"  # default; override with the optional second argument
