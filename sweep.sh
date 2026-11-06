@@ -9,9 +9,11 @@
 # Run every (L, epsilon, mu) row of a CSV on --cpus-per-task CPUs:
 #     sbatch sweep.sh mu_database.csv
 # Fixed parameters and replicas per row (M) are set at the top of sweep.py.
+# Afterwards average.py writes mu_database_iteration1.csv with <m> and chi per row.
 
 set -euo pipefail
 CSV=${1:?usage: sbatch sweep.sh mu_database.csv}
+OUTROOT=output  # folder that receives one subdirectory per CSV row
 
 module load anaconda3/2024.10
 source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -19,4 +21,5 @@ conda activate lattice
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 
 cd "$SLURM_SUBMIT_DIR"
-python -u src/flexsim/susc/sweep.py "$CSV"
+python -u src/flexsim/susc/sweep.py "$CSV" "$OUTROOT"
+python -u src/flexsim/susc/average.py "$CSV" "$OUTROOT"

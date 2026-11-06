@@ -1,6 +1,6 @@
 """Sweep over (L, epsilon, mu) from a CSV, M replicas per point, on N CPUs.
 
-    python src/flexsim/susc/sweep.py mu_database.csv
+    python src/flexsim/susc/sweep.py mu_database.csv [outroot]
 
 Every CSV row becomes an in-memory params dict (same keys as params.json) with the
 fixed parameters below. All (row, replica) tasks go into one pool of N workers, so
@@ -31,13 +31,14 @@ FIXED = {
     "initial_fraction": 0.8,
     "seed": 7000,
 }
-OUTROOT = "output"
+OUTROOT = "output"  # default; override with the optional second argument
 # --------------------------------------------------------------
 
 
 def main():
-    if len(sys.argv) != 2:
-        sys.exit(f"usage: python {sys.argv[0]} mu_database.csv")
+    if len(sys.argv) not in (2, 3):
+        sys.exit(f"usage: python {sys.argv[0]} mu_database.csv [outroot]")
+    outroot = sys.argv[2] if len(sys.argv) == 3 else OUTROOT
     with open(sys.argv[1]) as f:
         points = [{"L": int(r["lattice_size"]), "epsilon": float(r["epsilon"]), "mu": float(r["mu"])}
                   for r in csv.DictReader(f)]
@@ -45,7 +46,7 @@ def main():
     jobs = []
     for pt in points:
         p = {**FIXED, **pt, "n_replicas": N_REPLICAS,
-             "outdir": os.path.join(OUTROOT, f"L{pt['L']}_eps{pt['epsilon']}_mu{pt['mu']}")}
+             "outdir": os.path.join(outroot, f"L{pt['L']}_eps{pt['epsilon']}_mu{pt['mu']}")}
         os.makedirs(p["outdir"], exist_ok=True)
         with open(os.path.join(p["outdir"], "params.json"), "w") as f:
             json.dump(p, f, indent=2)
