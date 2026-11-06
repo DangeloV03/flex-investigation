@@ -18,6 +18,7 @@ import json
 import multiprocessing as mp
 import os
 import sys
+import time
 
 from replica import DEFAULTS, REQUIRED, check_continuation, run_replica
 
@@ -60,21 +61,27 @@ def main():
     print(f"{len(jobs)} points x {n_rep} replicas on {n_cpus} CPUs{mode}", flush=True)
 
     results = {j: [] for j in range(len(jobs))}
+    spans = {j: [] for j in range(len(jobs))}  # (start, end) of each replica
     with mp.Pool(n_cpus) as pool:
-        for j, r in pool.imap_unordered(run_task, tasks):
+        for j, r, t0, t1 in pool.imap_unordered(run_task, tasks):
             results[j].append(r)
+            spans[j].append((t0, t1))
             if len(results[j]) == n_rep:
                 rows = sorted(results[j], key=lambda r: r["replica"])
                 with open(os.path.join(jobs[j]["outdir"], "susceptibility_data.csv"), "w", newline="") as f:
                     w = csv.DictWriter(f, fieldnames=list(rows[0]))
                     w.writeheader()
                     w.writerows(rows)
-                print(f"done {jobs[j]['outdir']}", flush=True)
+                wall = int(max(t1 for _, t1 in spans[j]) - min(t0 for t0, _ in spans[j]))
+                print(f"[{time.strftime('%H:%M')}] done {jobs[j]['outdir']}\n"
+                      f"    wall time {wall // 3600}h {wall % 3600 // 60:02d}m {wall % 60:02d}s", flush=True)
 
 
 def run_task(args):
     j, i, p = args
-    return j, run_replica((i, p))
+    t0 = time.time()
+    r = run_replica((i, p))
+    return j, r, t0, time.time()
 
 
 if __name__ == "__main__":
