@@ -26,7 +26,7 @@ BETA=1.0
 EQ_TIME=4e6
 PROD_TIME=1e6
 PROD_CHUNKS=500
-INITIAL_M=0.8
+INITIAL_M=0.0
 SEED=$RANDOM
 CONTINUATION=false            # true: restart every replica from its final_lattice_<i>.npy in
                               # OUTROOT (no equilibration) and append to m_timeseries_<i>.csv
