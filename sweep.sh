@@ -34,6 +34,8 @@ CONTINUATION=false            # true: restart every replica from its final_latti
                               # OUTROOT (no equilibration) and append to m_timeseries_<i>.csv
 # ------------------------------------------------------------------
 
+OUTROOT="$OUTROOT/SCHEME_${SCHEME}_DF_${DELTA_F}_K_${K}_DMU_${DELTA_MU}"
+
 CONTINUATION=$(echo "$CONTINUATION" | tr '[:upper:]' '[:lower:]')  # JSON needs true/false
 [[ $CONTINUATION == true || $CONTINUATION == false ]] || { echo "CONTINUATION must be true or false"; exit 1; }
 
