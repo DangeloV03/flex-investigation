@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # This script is meant to find out about the size dependence of mu_coex(epsilon;L). In order to calculate that I only want <m>(mu) which 
-# should reach steady-state reasonably fast even near criticality. Therefore, 3x EQ + 1x PROD is enough.
+# should reach steady-state reasonably fast even near criticality. Therefore, 4x EQ + 1x PROD is enough.
 # Also four replicas should be enough!
 
 # ---- sweep parameters (L, epsilon, mu come from the CSV rows) ----
