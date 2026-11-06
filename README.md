@@ -20,7 +20,7 @@ python src/flexsim/susc/replica.py params.json   # directly
 | `n_replicas` | independent replicas, run in parallel (≤ CPUs of the job) |
 | `eq_time`, `prod_time`, `prod_chunks` | equilibration time, production time, number of samples |
 | `initial_fraction` | start fill: even replicas this fraction BONDING, odd ones 1 − it |
-| `seed` | base seed (replica i uses seed + 2i) |
+| `seed` | base seed; replica i draws its starting geometry and all engine seeds from an RNG seeded with (seed, i) |
 | `outdir` | output folder |
 
 ## Sweep

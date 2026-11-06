@@ -56,9 +56,8 @@ def energy(state, beta, epsilon, mu, delta_f):
     return 0.5 * beta * epsilon * float((b * neighbours).sum()) - beta * mu * n_b - beta * (mu + delta_f) * n_i
 
 
-def initial_state(L, fraction, seed):
+def initial_state(L, fraction, rng):
     """A random `fraction` of the sites BONDING, the rest EMPTY."""
-    rng = np.random.default_rng(seed)
     state = np.zeros((L, L), dtype=np.uint32)
     state.ravel()[rng.choice(L * L, int(round(fraction * L * L)), replace=False)] = BONDING
     return state
@@ -71,7 +70,10 @@ def sem(x):
 def run_replica(args):
     i, p = args
     beta, L = p["beta"], int(p["L"])
-    seed = p["seed"] + 2 * i
+    # Independent random stream per replica (reproducible from the base seed): it sets the
+    # starting geometry and the engine seed of every simulate call.
+    rng = np.random.default_rng([p["seed"], i])
+    seed, *chunk_seeds = (int(x) for x in rng.integers(2**63, size=p["prod_chunks"] + 1))
     # Even replicas start mostly BONDING, odd ones mostly EMPTY, to sample both phases.
     high = max(p["initial_fraction"], 1 - p["initial_fraction"])
     fraction = high if i % 2 == 0 else 1 - high
@@ -83,14 +85,14 @@ def run_replica(args):
     boundary = Periodic()
     scratch = tempfile.mkdtemp(dir="/dev/shm" if os.path.isdir("/dev/shm") else None)  # RAM-backed on Linux
 
-    state = initial_state(L, fraction, seed)
+    state = initial_state(L, fraction, rng)
     simulate(state, boundary, chain, [], [Time(p["eq_time"])], seed, scratch)
     state = load.final_state(scratch)
 
     chunk_time = p["prod_time"] / p["prod_chunks"]
     rows = []
     for c in range(p["prod_chunks"]):
-        simulate(state, boundary, chain, [], [Time(chunk_time)], seed + 1 + c, scratch)
+        simulate(state, boundary, chain, [], [Time(chunk_time)], chunk_seeds[c], scratch)
         state = load.final_state(scratch)
         rho_b, rho_i, rho_e = densities(state)
         rows.append({"chunk": c, "rho_bonding": rho_b, "rho_inert": rho_i, "rho_empty": rho_e,
