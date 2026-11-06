@@ -25,9 +25,9 @@ FIXED = {
     "k": 1.0,
     "scheme": "negative_drive",
     "beta": 1.0,
-    "eq_time": 1e6,
-    "prod_time": 2e6,
-    "prod_chunks": 20000,
+    "eq_time": 3e6,
+    "prod_time": 5e5,
+    "prod_chunks": 500,
     "initial_m": 0.8,
     "seed": 7000,
 }
