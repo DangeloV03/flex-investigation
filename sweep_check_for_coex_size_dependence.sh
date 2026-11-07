@@ -3,7 +3,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem-per-cpu=256M
-#SBATCH --time=23:59:59
+#SBATCH --time=02:00:00
 #SBATCH -o /home/mo9089/slurm_reports/%A_%a.out
 #SBATCH --error=/home/mo9089/slurm_reports/%A_%a.err
 #SBATCH --array=0
@@ -15,13 +15,13 @@ set -euo pipefail
 # Also four replicas should be enough!
 
 # ---- sweep parameters (L, epsilon, mu come from the CSV rows) ----
-MU_DATABASE=mu_database_sparse_homo_dmu3.csv   # CSV: lattice_size,epsilon,mu (e.g. from setup_sweep.py)
+MU_DATABASE=mu_database_sparse_neg_drive_dmu3_smallL.csv   # CSV: lattice_size,epsilon,mu (e.g. from setup_sweep.py)
 OUTROOT=/scratch/gpfs/WJACOBS/MLO/3SM_COEX_SIZE_DEPENDENCE
 N_REPLICAS=4                 # independent trajectories per row (must be even)
 DELTA_MU=3.0
 DELTA_F=0.0
 K=1.0
-SCHEME=homo
+SCHEME=negative_drive
 BETA=1.0
 EQ_TIME=4e6
 PROD_TIME=1e6
