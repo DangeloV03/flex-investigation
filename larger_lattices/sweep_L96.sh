@@ -14,7 +14,7 @@
 # which sweep.py reads. Afterwards average.py writes <m> and chi per row, renamed to
 # larger_lattices/mu_database_L96_iteration1.csv so results aren't overwritten.
 #
-# Same (epsilon, mu) pairs and run lengths as sweep.sh at L = 96.
+# Same (epsilon, mu) pairs as mu_database.csv (DELTA_MU = 1) and the same run lengths as sweep_homo_dmu<N>.sh, at L = 96.
 
 set -euo pipefail
 

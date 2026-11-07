@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=sweep
+#SBATCH --job-name=sweep_homo_dmu2
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem-per-cpu=512M
@@ -9,18 +9,18 @@
 #SBATCH --array=0
 #
 # Run every (L, epsilon, mu) row of MU_DATABASE on --cpus-per-task CPUs:
-#     sbatch sweep.sh
+#     sbatch sweep_homo_dmu2.sh
 # All parameters are set below; they are written to $OUTROOT/sweep_params.json,
-# which sweep.py reads. Afterwards average.py writes mu_database_iteration1.csv
-# (next to MU_DATABASE) with <m> and chi per row.
+# which sweep.py reads. Afterwards average.py writes <m> and chi per row, renamed to
+# mu_database_homo_dmu2_iteration1.csv so other sweeps' results aren't overwritten.
 
 set -euo pipefail
 
 # ---- sweep parameters (L, epsilon, mu come from the CSV rows) ----
-MU_DATABASE=mu_database.csv   # CSV: lattice_size,epsilon,mu (e.g. from setup_sweep.py)
+MU_DATABASE=mu_database_homo_dmu2.csv   # CSV: lattice_size,epsilon,mu (e.g. from setup_sweep.py)
 OUTROOT=/scratch/gpfs/WJACOBS/MLO/3SM_CORRECTIONS
 N_REPLICAS=16                 # independent trajectories per row (must be even)
-DELTA_MU=1.0
+DELTA_MU=2.0
 DELTA_F=0.0
 K=1.0
 SCHEME=homo
@@ -74,3 +74,4 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 
 python -u src/flexsim/susc/sweep.py "$PARAMS"
 python -u src/flexsim/susc/average.py "$MU_DATABASE" "$OUTROOT"
+mv "$(dirname "$MU_DATABASE")/mu_database_iteration1.csv" "${MU_DATABASE%.csv}_iteration1.csv"

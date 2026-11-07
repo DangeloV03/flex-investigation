@@ -26,21 +26,23 @@ python src/flexsim/susc/replica.py params.json   # directly
 ## Sweep
 
 ```bash
-sbatch sweep.sh mu_database.csv                               # on the cluster
+sbatch sweep_homo_dmu2.sh                                     # on the cluster (or sweep_homo_dmu3.sh)
 python src/flexsim/susc/sweep.py mu_database.csv [outroot]    # directly
 python src/flexsim/susc/average.py mu_database.csv [outroot]  # directly
 ```
 
 Each CSV row (`lattice_size,epsilon,mu`) is one point. All other parameters and
 the replicas per point (M) are set at the top of `sweep.py`. N CPUs
-(`--cpus-per-task` in `sweep.sh`) run all point × replica tasks from one pool,
+(`--cpus-per-task` in `sweep_homo_dmu<N>.sh`) run all point × replica tasks from one pool,
 so several points run at once when M < N. Output goes to
 `<outroot>/L<L>_eps<epsilon>_mu<mu>/`, where `outroot` defaults to `output`
-(set `OUTROOT` in `sweep.sh`).
+(set `OUTROOT` in `sweep_homo_dmu<N>.sh`).
 
-After the sweep, `sweep.sh` runs `average.py`, which averages `<m>` and `chi`
+After the sweep, `sweep_homo_dmu<N>.sh` runs `average.py`, which averages `<m>` and `chi`
 over the M replicas of each point and writes `mu_database_iteration1.csv`
 (next to the input CSV): a copy of it with extra columns `m_mean` and `chi_mean`.
+The sweep script then renames it to `<database>_iteration1.csv`
+(e.g. `mu_database_homo_dmu2_iteration1.csv`) so sweeps don't overwrite each other.
 
 ## Outputs
 
