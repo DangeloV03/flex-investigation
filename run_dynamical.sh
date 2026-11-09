@@ -10,7 +10,7 @@
 #
 # Relaxation m(t) from the ordered state: no equilibration, 32 trajectories per
 # (L, epsilon, mu) row starting at |m| = 1 (even replicas +1, odd -1), sampled every
-# 100 kMC time units (PROD_TIME / PROD_CHUNKS) over 1e6.
+# 10 kMC time units (PROD_TIME / PROD_CHUNKS) over 1e6.
 # Two cases run one after the other, each over L = 16, 24, 32 at epsilon = -1.6:
 #   case 1: dmu=0, k=0, df=-20, mu=-3.2       (mu_database_dynamical_dmu0.csv)
 #   case 2: dmu=1, k=1, df=0,   mu=-2.65564   (mu_database_dynamical_dmu1.csv, coexistence)
@@ -27,7 +27,7 @@ SCHEME=homo
 BETA=1.0
 EQ_TIME=0
 PROD_TIME=1e6
-PROD_CHUNKS=10000             # chunk length PROD_TIME/PROD_CHUNKS = 100 kMC time
+PROD_CHUNKS=100000            # chunk length PROD_TIME/PROD_CHUNKS = 10 kMC time
 INITIAL_M=1.0
 RANDOM_INITIAL=false
 CONTINUATION=false
@@ -60,6 +60,8 @@ for CASE in "${CASES[@]}"; do
 I want to rework the @run_dynamical.sh set up a bit. I want 32 trajectories on 32 CPUS to start at m=1. No eq time and then we measure m(t) in time steps of 100 kMC time over a production time of 10^6. Within one script do that for two cases: at epsilon=-1.6, L=32. The first case is \Delta \mu=0, k=0, \Delta f=-20, and mu=-3.2. The second case is k=1, \Delta f=0, \Delta \mu=1.0 and the corresponding coexistence chemical potential which is -2.65564. Ask me any questions you might have before starting. You can set it up so that it overwrites the data in the current directory, that is fine
 
 Follow-up: 1. The +-m split is fine. 2. Homo scheme please. 3. Run the two cases one after another they are fast enough. 4. Yes. Also please not only do it for L=32 but also for L=16 and L=24
+
+Follow-up: Okay I checked the results and I think we need to change it slightly so that we measure every 10kMC time units. The relaxation process is very fast.
 PROMPT_EOF
 
     cat >> "$OUTROOT/claude_intent.md" <<PARAMS_EOF
