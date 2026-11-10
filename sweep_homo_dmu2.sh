@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=sweep_homo_dmu2
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=96
 #SBATCH --mem-per-cpu=512M
 #SBATCH --time=23:59:59
 #SBATCH -o /home/mo9089/slurm_reports/%A_%a.out
@@ -10,14 +10,14 @@
 #
 # Run every (L, epsilon, mu) row of MU_DATABASE on --cpus-per-task CPUs:
 #     sbatch sweep_homo_dmu2.sh
-# All parameters are set below; they are written to $OUTROOT/sweep_params.json,
+# All parameters are set below; they are written to $OUTROOT/sweep_params_L64_rest.json,
 # which sweep.py reads. Afterwards average.py writes <m> and chi per row, renamed to
-# mu_database_homo_dmu2_iteration1.csv so other sweeps' results aren't overwritten.
+# mu_database_homo_dmu2_L64_rest_iteration1.csv so other sweeps' results aren't overwritten.
 
 set -euo pipefail
 
 # ---- sweep parameters (L, epsilon, mu come from the CSV rows) ----
-MU_DATABASE=mu_database_homo_dmu2.csv   # CSV: lattice_size,epsilon,mu (e.g. from setup_sweep.py)
+MU_DATABASE=mu_database_homo_dmu2_L64_rest.csv   # CSV: lattice_size,epsilon,mu (e.g. from setup_sweep.py)
 OUTROOT=/scratch/gpfs/WJACOBS/MLO/3SM_CORRECTIONS
 N_REPLICAS=16                 # independent trajectories per row (must be even)
 DELTA_MU=2.0
@@ -44,7 +44,7 @@ RANDOM_INITIAL=$(echo "$RANDOM_INITIAL" | tr '[:upper:]' '[:lower:]')
 
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p "$OUTROOT"
-PARAMS="$OUTROOT/sweep_params.json"
+PARAMS="$OUTROOT/sweep_params_L64_rest.json"
 cat > "$PARAMS" <<EOF
 {
   "mu_database": "$MU_DATABASE",
