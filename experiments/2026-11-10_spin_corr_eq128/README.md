@@ -10,7 +10,7 @@ Active-active spatial correlation C(r) = ⟨n₀ n_r⟩ − ρ² for the equilib
 
 **Protocol.**
 - 4 independent replicas per ε, each started from a random lattice with half the sites active (⟨m⟩ ≈ 0).
-- Equilibration of 2×10⁵ time units, then 2×10⁶ of production with a snapshot every 1000 time units: 2000 snapshots per replica, 8000 per ε.
+- Equilibration of 10⁶ time units, then 2×10⁷ of production with a snapshot every 1000 time units: 20 000 snapshots per replica, 80 000 per ε (about 2.6 GB in total).
 - Each replica is its own 1-CPU Slurm task (8 tasks in total).
 
 ## Run on Della (from the repo root, after `git pull` on the `experiments` branch)
@@ -30,9 +30,9 @@ Other knobs (env vars): `EPS_LIST`, `NREP`, `EQ_TIME`, `PROD_TIME`, `CHUNK_TIME`
 chained round (`afterany`), and rounds exit at once for replicas that have finished. If 3 rounds
 are not enough, rerun `launch` with `RESUME_ROUNDS=…`. It resumes and never restarts from scratch.
 
-**Speed estimate.** Summer L=256 runs did 1.5×10⁵ time units in under 5 h on 2 CPUs, so 128²
-should manage roughly 10⁵ time units per CPU-hour. The 2.2×10⁶ total then takes about 1 day per replica.
-Check `status` (or the `wall=` field in `logs/*.out`) after an hour to confirm.
+**Speed (measured 2026-11-10 on the della9 login node).** 128² runs about 500–600 time units per second
+(4000 units in 7.5 s at both ε), so the 2.1×10⁷ total takes roughly 10–15 h per replica and fits in one
+24 h job. The resume rounds are only a safety net.
 
 ## What `analyze` writes (`plots/`)
 

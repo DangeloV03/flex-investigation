@@ -10,7 +10,7 @@
 # Every task is resumable: it checkpoints after each chunk. 'launch' also queues RESUME_ROUNDS
 # follow-up arrays (afterany) that resume anything that ran out of wall time; they exit
 # immediately for replicas that are done. Override defaults with env vars, e.g.
-#   PROD_TIME=4000000 RESUME_ROUNDS=5 bash .../submit.sh launch
+#   PROD_TIME=40000000 RESUME_ROUNDS=5 bash .../submit.sh launch
 
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -18,17 +18,19 @@ DATA_ROOT="${DATA_ROOT:-/scratch/gpfs/WJACOBS/vd7294/flex-investigation}"
 OUT="${OUT:-$DATA_ROOT/SPIN_CORR_EQ128}"
 EPS_LIST=(${EPS_LIST:--1.7627 -1.65})
 NREP="${NREP:-4}"
-EQ_TIME="${EQ_TIME:-200000}"
-PROD_TIME="${PROD_TIME:-2000000}"
+EQ_TIME="${EQ_TIME:-1000000}"
+PROD_TIME="${PROD_TIME:-20000000}"
 CHUNK_TIME="${CHUNK_TIME:-1000}"
 WALL="${WALL:-23:59:00}"
 RESUME_ROUNDS="${RESUME_ROUNDS:-3}"
 CONDA_ENV="${FLEX_CONDA_ENV:-lattice}"
 
 activate() {
+  set +u   # module/conda scripts reference unset variables (e.g. PS1)
   module load anaconda3/2024.10 2>/dev/null || true
   source "$(conda info --base)/etc/profile.d/conda.sh"
   conda activate "$CONDA_ENV"
+  set -u
   export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
   export PYTHONUNBUFFERED=1
 }
