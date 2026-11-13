@@ -232,46 +232,101 @@ def _style(ax):
     ax.tick_params(colors=INK2, labelsize=8)
 
 
+def spin_G(df, eps, rho):
+    """Connected spin-spin correlation G(r) = <s0 sr> - <s>^2 (s = 2n - 1) and its error.
+    At eps_c <s> = 0 by symmetry, so G = <s0 sr>; subtracting the sampled <s>^2 there would only
+    inject the slow sign noise of m."""
+    m = 0.0 if abs(eps - EPS_C) < 1e-3 else (2 * rho - 1)
+    return df.S_full - m ** 2, df.S_full_err
+
+
+def spin_fits(df, eps, rho, L):
+    """Textbook fits of G(r): power law A r^-eta at eps_c; A e^{-r/xi} and OZ A e^{-r/xi}/sqrt(r) otherwise."""
+    G, err = spin_G(df, eps, rho)
+    out = dict(eta_fit=np.nan, eta_A=np.nan, xi_exp=np.nan, xi_exp_err=np.nan, exp_A=np.nan,
+               xi_oz=np.nan, xi_oz_err=np.nan, oz_A=np.nan, r_signal=np.nan)
+    if abs(eps - EPS_C) < 1e-3:
+        m = (df.r >= 2) & (df.r <= 16) & (G > 0)
+        if m.sum() >= 3:
+            sl, ic = np.polyfit(np.log(df.r[m]), np.log(G[m]), 1)
+            out.update(eta_fit=-sl, eta_A=np.exp(ic))
+        return out
+    # conservative: larger of the time-block and replica-spread errors, and a 5-sigma signal cut.
+    # Below that, the averaged noise (~1e-4 here) piles up into a spurious flat floor.
+    err_c = np.maximum(err, df.S_full_err_rep) if "S_full_err_rep" in df else err
+    sig = (G > 5 * err_c) & (df.r >= 1)
+    r_sig = int(df.r[sig].max()) if sig.any() else 0
+    # first r where the signal drops below 5 sigma
+    below = df.r[(df.r >= 1) & ~sig]
+    r_sig = int(below.min()) - 1 if len(below) else r_sig
+    out["r_signal"] = r_sig
+    m = (df.r >= 10) & (df.r <= min(r_sig, 40, L / 2 - 1)) & (G > 0)
+    if m.sum() < 3:
+        m = (df.r >= 2) & (df.r <= max(r_sig, 5)) & (G > 0)
+    for name, f in (("exp", lambda r, A, xi: A * np.exp(-r / xi)), ("oz", oz)):
+        try:
+            p, cov = curve_fit(f, df.r[m], G[m], p0=[G[m].iloc[0] * 3, 5.0], sigma=err[m].clip(lower=1e-12),
+                               maxfev=20000)
+            if 0 < p[1] < L:
+                out.update({f"xi_{name}": p[1], f"xi_{name}_err": np.sqrt(cov[1, 1]), f"{name}_A": p[0]})
+        except Exception:
+            pass
+    return out
+
+
 def plot_correlations(curves, summ, path):
-    """One panel per eps: C(r) + OZ fit away from eps_c, <s0 sr> log-log at eps_c."""
+    """Spin-spin correlation G(r) vs r, one panel per eps, with the textbook fits:
+    power law r^-eta at eps_c (log-log), exponential away from it (log-linear)."""
     items = sorted(curves.items())
-    fig, axes = plt.subplots(1, len(items), figsize=(6 * len(items), 4.4), squeeze=False)
+    fig, axes = plt.subplots(1, len(items), figsize=(6.2 * len(items), 4.6), squeeze=False)
     for ax, (eps, (df, L)) in zip(axes[0], items):
         row = summ[np.isclose(summ.eps, eps)].iloc[0]
         nrep = sum(c.startswith("S_rep") for c in df.columns)
+        G, err = spin_G(df, eps, row.rho)
+        msub = 0.0 if abs(eps - EPS_C) < 1e-3 else (2 * row.rho - 1) ** 2
         if abs(eps - EPS_C) < 1e-3:
-            d = df[(df.r >= 1) & (df.S_full > 0)]
+            k = (df.r >= 1) & (G > 0)
             for i in range(nrep):
-                ax.plot(d.r, d[f"S_rep{i}"], color=REP_COLORS[i], lw=0.8, alpha=0.6, label=f"replica {i}")
-            ax.errorbar(d.r, d.S_full, yerr=d.S_full_err, fmt="o", ms=3.5, color="#0b0b0b", ecolor="#0b0b0b",
-                        elinewidth=0.8, capsize=0, label="mean ± s.e. (time blocks)", zorder=5)
+                ax.plot(df.r[k], df[f"S_rep{i}"][k], color=REP_COLORS[i], lw=0.8, alpha=0.6, label=f"replica {i}")
+            ax.errorbar(df.r[k], G[k], yerr=err[k], fmt="o", ms=3.5, color="#0b0b0b", elinewidth=0.8, capsize=0,
+                        label="mean ± s.e. (time blocks)", zorder=5)
             rr = np.arange(1, L // 2 + 1)
-            A = float(d.S_full[d.r == 2].iloc[0]) * 2 ** 0.25
-            ax.plot(rr, A * rr ** -0.25, ":", color="#0b0b0b", lw=1.2, label=r"$r^{-1/4}$ (exact $\eta=1/4$)")
-            ax.axhline(row.absm ** 2, color=INK2, lw=1, ls="--", label=r"$\langle|m|\rangle^2$ (finite-size plateau)")
+            if np.isfinite(row.eta_fit):
+                ax.plot(rr, row.eta_A * rr ** -row.eta_fit, "-", color="#0b0b0b", lw=1.3,
+                        label=rf"fit $A\,r^{{-\eta}}$, r = 2–16: $\eta$ = {row.eta_fit:.3f}")
+            A = float(G[df.r == 2].iloc[0]) * 2 ** 0.25
+            ax.plot(rr, A * rr ** -0.25, ":", color="#0b0b0b", lw=1.2, label=r"exact 2D Ising $r^{-1/4}$ ($\eta$ = 1/4)")
+            ax.axhline(row.absm ** 2, color=INK2, lw=1, ls="--", label=r"$\langle|m|\rangle^2$: finite-size plateau")
             ax.set_xscale("log")
-            ax.set_yscale("log")
-            ax.set_ylabel(r"$\langle s_0 s_r\rangle$   ($s=\pm1$: active / not)")
-            ax.set_title(f"βε = {eps:g} (ε_c): power law, fitted η = {row.eta_fit:.3f} for r = 2–16", fontsize=10)
+            ax.set_title(f"βε = {eps:g} = ε_c: power law, η = {row.eta_fit:.3f}  (exact 1/4)", fontsize=10)
         else:
-            d = df[(df.r >= 1) & (df.C_glob > 0)]
+            rs = row.r_signal if np.isfinite(row.r_signal) else L // 2
+            k = (df.r >= 1) & (df.r <= rs) & (G > 0)
             for i in range(nrep):
-                ax.plot(d.r, d[f"C_rep{i}"], color=REP_COLORS[i], lw=0.8, alpha=0.6, label=f"replica {i}")
-            ax.errorbar(d.r, d.C_glob, yerr=d.C_glob_err, fmt="o", ms=3.5, color="#0b0b0b", elinewidth=0.8,
-                        capsize=0, label="mean ± s.e. (time blocks)", zorder=5)
-            rr = np.linspace(2, min(60, L / 2), 200)
-            if np.isfinite(row.xi_fit):
-                ax.plot(rr, oz(rr, row.oz_A, row.xi_fit), "-", color="#0b0b0b", lw=1.2,
-                        label=f"OZ fit, r = 10–40: ξ = {row.xi_fit:.2f}")
-            ax.set_yscale("log")
-            ax.set_ylim(bottom=max(d.C_glob.min() / 2, 1e-6))
-            ax.set_ylabel(r"$C(r)=\langle n_0 n_r\rangle-\rho^2$")
-            ax.set_title(f"βε = {eps:g}: exponential decay, ξ = {row.xi_fit:.2f} (exact Ising {row.xi_ising_exact:.2f})",
+                ax.plot(df.r[k], df[f"S_rep{i}"][k] - msub, color=REP_COLORS[i], lw=0.8, alpha=0.6,
+                        label=f"replica {i}")
+            ax.errorbar(df.r[k], G[k], yerr=err[k], fmt="o", ms=3.5, color="#0b0b0b", elinewidth=0.8, capsize=0,
+                        label="mean ± s.e. (time blocks)", zorder=5)
+            rr = np.linspace(1, rs, 200)
+            if np.isfinite(row.xi_exp):
+                ax.plot(rr, row.exp_A * np.exp(-rr / row.xi_exp), "-", color="#0b0b0b", lw=1.3,
+                        label=rf"fit $A\,e^{{-r/\xi}}$: $\xi$ = {row.xi_exp:.2f}")
+            if np.isfinite(row.xi_oz):
+                ax.plot(rr, oz(rr, row.oz_A, row.xi_oz), "--", color="#eb6834", lw=1.3,
+                        label=rf"fit $A\,e^{{-r/\xi}}/\sqrt{{r}}$ (2D OZ): $\xi$ = {row.xi_oz:.2f}")
+            ax.set_xlim(0, rs + 2)
+            ax.set_title(f"βε = {eps:g}: exponential decay, ξ = {row.xi_oz:.2f} (OZ)  vs exact Ising {row.xi_ising_exact:.2f}",
                          fontsize=10)
+            note = f"fits use r = 10–{int(min(rs, 40))}"
+            if rs < L // 2:
+                note += f"; shown up to r = {int(rs)}\n(beyond: G < 5σ, at the noise floor ~1e-4)"
+            ax.text(0.99, 0.97, note, transform=ax.transAxes, ha="right", va="top", fontsize=7.5, color=INK2)
+        ax.set_yscale("log")
         ax.set_xlabel("r (lattice units)")
+        ax.set_ylabel(r"$G(r)=\langle s_0 s_r\rangle-\langle s\rangle^2$")
         _style(ax)
-        ax.legend(frameon=False, fontsize=8, loc="lower left")
-    fig.suptitle(f"Active–active spatial correlation, equilibrium, L = {items[0][1][1]}", fontsize=11)
+        ax.legend(frameon=False, fontsize=7.5, loc="lower left")
+    fig.suptitle(f"Spin-spin correlation (s = +1 active, −1 otherwise), equilibrium, L = {items[0][1][1]}", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     fig.savefig(path, dpi=180)
     plt.close(fig)
@@ -300,7 +355,7 @@ def plot_m(out, path, max_points=4000):
             ax.set_ylim(-0.9, 0.9)
             ax.set_yticks([-0.5, 0, 0.5])
             ax.text(0.995, 0.92, f"replica {i}", transform=ax.transAxes, ha="right", va="top", fontsize=8,
-                    color=INK2)
+                    color=INK2, bbox=dict(facecolor="white", edgecolor="none", alpha=0.85, pad=1.5), zorder=10)
             if i == 0:
                 ax.set_title(f"βε = {meta['eps']:g}" + ("  (ε_c)" if abs(meta["eps"] - EPS_C) < 1e-3 else "")
                              + "   — shaded: equilibration", fontsize=10)
@@ -334,38 +389,51 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", required=True, help="campaign folder with eps*/replica_*")
     ap.add_argument("--plots", required=True)
+    ap.add_argument("--from-csv", action="store_true",
+                    help="redraw figures and refit from the corr_*.csv / summary.csv already in --plots "
+                         "(no snapshot pass; m(t) figure still reads timeseries.csv under --out if present)")
     a = ap.parse_args()
     os.makedirs(a.plots, exist_ok=True)
 
     rows, curves = [], {}
-    for edir in sorted(glob.glob(os.path.join(a.out, "eps*"))):
-        res = analyze_eps(edir)
-        if res is None:
-            continue
-        meta, rho, df, tau = res
-        eps, L = meta["eps"], meta["L"]
-        tag = os.path.basename(edir)
-        df.to_csv(os.path.join(a.plots, f"corr_{tag}.csv"), index=False)
-        tau.to_csv(os.path.join(a.plots, f"tau_{tag}.csv"), index=False)
-        xi, xi_err, A = fit_xi(df, L)
-        rows.append(dict(eps=eps, L=L, n_snap=int(tau.n_snap.sum()), rho=rho, m=2 * rho - 1,
-                         absm=tau.absm_mean.mean(), tau_m=tau.tau_m.mean(), tau_absm=tau.tau_absm.mean(),
-                         n_eff_total=tau.n_eff.sum(), xi_fit=xi, xi_fit_err=xi_err, oz_A=A,
-                         xi_ising_exact=ising_xi(eps), eta_fit=fit_eta(df)))
-        curves[eps] = (df, L)
-        print(f"\n== {tag}  rho={rho:.4f}  snapshots={int(tau.n_snap.sum())}")
-        chk = df[df.r.isin([1, 4, 16, 32])][["r", "S_full", "S_full_err_rep", "S_full_err_blk1",
-                                            "S_full_err_blk2", "S_full_err_blk4"]]
-        print("error on <s0 sr>: replica spread vs batch means (blk1/2/4 = 1/40, 1/20, 1/10 of a run):")
-        print(chk.to_string(index=False, float_format=lambda v: f"{v:.2e}"))
-        print(tau.round(4).to_string(index=False))
+    if a.from_csv:
+        old = pd.read_csv(os.path.join(a.plots, "summary.csv"))
+        keep = ["eps", "L", "n_snap", "rho", "m", "absm", "tau_m", "tau_absm", "n_eff_total", "xi_ising_exact"]
+        for r in old[keep].to_dict("records"):
+            tag = "eps" + f"{r['eps']:.4f}".replace("-", "m").replace(".", "p")
+            df = pd.read_csv(os.path.join(a.plots, f"corr_{tag}.csv"))
+            L = int(r["L"])
+            rows.append(dict(r, **spin_fits(df, r["eps"], r["rho"], L)))
+            curves[r["eps"]] = (df, L)
+    else:
+        for edir in sorted(glob.glob(os.path.join(a.out, "eps*"))):
+            res = analyze_eps(edir)
+            if res is None:
+                continue
+            meta, rho, df, tau = res
+            eps, L = meta["eps"], meta["L"]
+            tag = os.path.basename(edir)
+            df.to_csv(os.path.join(a.plots, f"corr_{tag}.csv"), index=False)
+            tau.to_csv(os.path.join(a.plots, f"tau_{tag}.csv"), index=False)
+            rows.append(dict(eps=eps, L=L, n_snap=int(tau.n_snap.sum()), rho=rho, m=2 * rho - 1,
+                             absm=tau.absm_mean.mean(), tau_m=tau.tau_m.mean(), tau_absm=tau.tau_absm.mean(),
+                             n_eff_total=tau.n_eff.sum(), xi_ising_exact=ising_xi(eps),
+                             **spin_fits(df, eps, rho, L)))
+            curves[eps] = (df, L)
+            print(f"\n== {tag}  rho={rho:.4f}  snapshots={int(tau.n_snap.sum())}")
+            chk = df[df.r.isin([1, 4, 16, 32])][["r", "S_full", "S_full_err_rep", "S_full_err_blk1",
+                                                "S_full_err_blk2", "S_full_err_blk4"]]
+            print("error on <s0 sr>: replica spread vs batch means (blk1/2/4 = 1/40, 1/20, 1/10 of a run):")
+            print(chk.to_string(index=False, float_format=lambda v: f"{v:.2e}"))
+            print(tau.round(4).to_string(index=False))
 
     summ = pd.DataFrame(rows)
     summ.to_csv(os.path.join(a.plots, "summary.csv"), index=False)
     print("\n" + summ.round(4).to_string(index=False))
 
     plot_correlations(curves, summ, os.path.join(a.plots, "correlations.png"))
-    plot_m(a.out, os.path.join(a.plots, "m_timeseries.png"))
+    if glob.glob(os.path.join(a.out, "eps*", "replica_*", "timeseries.csv")):
+        plot_m(a.out, os.path.join(a.plots, "m_timeseries.png"))
     # the older single-panel C(r) plots are superseded by correlations.png
     for old in ("C_r.png", "C_r_loglog.png"):
         if os.path.isfile(os.path.join(a.plots, old)):
