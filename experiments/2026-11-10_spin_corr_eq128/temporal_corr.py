@@ -131,8 +131,12 @@ def main():
         ax.set_ylabel("normalized autocorrelation C(t)")
         ax.legend(fontsize=8.5, loc="upper right")
         ax.grid(alpha=0.25, which="both")
-    axes[0].set_title("short times: |m| relaxes inside one phase")
-    axes[1].set_title("long times: m decorrelates only by sign flips")
+    if out["m"]["tau_exp"] > 10 * out["|m|"]["tau_exp"]:   # two-phase (critical) regime: slow sign flips
+        axes[0].set_title("short times: |m| relaxes inside one phase")
+        axes[1].set_title("long times: m decorrelates only by sign flips")
+    else:                                                    # one disordered phase, no slow flip mode
+        axes[0].set_title("m and |m| (single disordered phase, no slow flip mode)")
+        axes[1].set_title(f"m alone (samples every {dt:.0f} t.u., comparable to tau)")
     eps = tag.replace("eps", "").replace("m", "-").replace("p", ".")
     fig.suptitle(f"Temporal autocorrelation of the magnetization, βε = {eps}, L = 128, {nrep} replicas "
                  f"× {n * dt:.2g} t.u. (thin: replicas; band: ±1 s.e.; dashed: exp fit; dotted: 1/e)",
