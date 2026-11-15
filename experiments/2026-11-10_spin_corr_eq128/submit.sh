@@ -11,6 +11,8 @@
 # follow-up arrays (afterany) that resume anything that ran out of wall time; they exit
 # immediately for replicas that are done. Override defaults with env vars, e.g.
 #   PROD_TIME=40000000 RESUME_ROUNDS=5 bash .../submit.sh launch
+# Driven runs (e.g. neg drive dmu=3 at the cubic-fit coex mu): run_neg_dmu3.sh sets
+#   SCHEME DELTA_MU DELTA_F K MU_FIT_JSON EPS_LIST OUT JOB_NAME and calls this script.
 
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -24,6 +26,14 @@ CHUNK_TIME="${CHUNK_TIME:-1000}"
 WALL="${WALL:-23:59:00}"
 RESUME_ROUNDS="${RESUME_ROUNDS:-3}"
 CONDA_ENV="${FLEX_CONDA_ENV:-lattice}"
+JOB_NAME="${JOB_NAME:-spincorr128}"
+# Driven physics (defaults = equilibrium). MU_FIT_JSON: coex cubic fit (required unless homo dmu=0).
+SCHEME="${SCHEME:-homo}"
+DELTA_MU="${DELTA_MU:-0.0}"
+DELTA_F="${DELTA_F:-0.0}"
+K="${K:-1.0}"
+MU_FIT_JSON="${MU_FIT_JSON:-}"
+PHYS_ARGS="--scheme $SCHEME --delta-mu $DELTA_MU --delta-f $DELTA_F --k $K${MU_FIT_JSON:+ --mu-fit-json $MU_FIT_JSON}"
 
 activate() {
   set +u   # module/conda scripts reference unset variables (e.g. PS1)
@@ -39,9 +49,10 @@ do_smoke() {
   activate
   local tmp="$OUT/_smoke"
   rm -rf "$tmp"
-  python "$HERE/spin_corr_run.py" --eps -1.7627 --replica 0 --out "$tmp" --smoke
+  local e="${EPS_LIST[0]}"
+  python "$HERE/spin_corr_run.py" --eps "$e" --replica 0 --out "$tmp" --smoke $PHYS_ARGS
   # second call must resume and report "already done"
-  python "$HERE/spin_corr_run.py" --eps -1.7627 --replica 0 --out "$tmp" --smoke
+  python "$HERE/spin_corr_run.py" --eps "$e" --replica 0 --out "$tmp" --smoke $PHYS_ARGS
   python "$HERE/spin_corr_analyze.py" --out "$tmp" --plots "$tmp/plots"
   echo "Smoke test OK. Output in $tmp (safe to delete)."
 }
@@ -53,7 +64,7 @@ do_launch() {
   local script="$OUT/task.sh"
   cat > "$script" <<EOF
 #!/bin/bash
-#SBATCH --job-name=spincorr128
+#SBATCH --job-name=$JOB_NAME
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=2G
@@ -71,7 +82,7 @@ EPS=\${EPS_LIST[\$((SLURM_ARRAY_TASK_ID / $NREP))]}
 REP=\$((SLURM_ARRAY_TASK_ID % $NREP))
 echo "[task] \$(hostname) eps=\$EPS replica=\$REP"
 python $OUT/spin_corr_run.py --eps "\$EPS" --replica "\$REP" --out $OUT \\
-  --eq-time $EQ_TIME --prod-time $PROD_TIME --chunk-time $CHUNK_TIME
+  --eq-time $EQ_TIME --prod-time $PROD_TIME --chunk-time $CHUNK_TIME $PHYS_ARGS
 EOF
   local jid; jid=$(sbatch --parsable "$script")
   echo "round 0: array job $jid ($n tasks)" | tee -a "$OUT/launch.log"
@@ -79,11 +90,12 @@ EOF
     jid=$(sbatch --parsable --dependency=afterany:"$jid" "$script")
     echo "round $r (resume): array job $jid" | tee -a "$OUT/launch.log"
   done
+  echo "$PHYS_ARGS" | tee -a "$OUT/launch.log"
   echo "eps=${EPS_LIST[*]} NREP=$NREP eq=$EQ_TIME prod=$PROD_TIME chunk=$CHUNK_TIME -> $OUT" | tee -a "$OUT/launch.log"
 }
 
 do_status() {
-  squeue -u "$USER" -h -n spincorr128 -o "%i %T %M %R" || true
+  squeue -u "$USER" -h -n "$JOB_NAME" -o "%i %T %M %R" || true
   for f in "$OUT"/eps*/replica_*/progress.json; do
     [[ -f "$f" ]] && echo "$(dirname "${f#$OUT/}"): $(cat "$f")"
   done

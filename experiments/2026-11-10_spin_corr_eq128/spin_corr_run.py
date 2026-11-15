@@ -1,7 +1,8 @@
 """One replica of the equilibrium 128x128 spin-spin correlation run (resumable).
 
-Physics (same as the summer correlation runs): homo, beta*df = 0, k = 1, beta*dmu = 0,
-exact coexistence mu = -ln(e^{2|eps|} - e^{df}). Spin s = +1 on BONDING (active),
+Physics default (same as the summer correlation runs): homo, beta*df = 0, k = 1, beta*dmu = 0,
+exact coexistence mu = -ln(e^{2|eps|} - e^{df}). Driven runs: --scheme/--delta-mu plus
+--mu-fit-json (cubic coex fit, e.g. SUSC_RUNS_NEG_DMU3_FITTED_COEX/fit.json) or --mu. Spin s = +1 on BONDING (active),
 -1 otherwise, so the active-active correlation is C(r) = G(r)/4.
 
 Start: random lattice, half active (<m> ~ 0), the rest empty. Equilibrate for EQ_TIME,
@@ -54,14 +55,37 @@ def main():
     p.add_argument("--eq-chunk", type=float, default=10_000, help="checkpoint interval during eq")
     p.add_argument("--delta-f", type=float, default=0.0)
     p.add_argument("--k", type=float, default=1.0)
+    p.add_argument("--delta-mu", type=float, default=0.0)
+    p.add_argument("--scheme", default="homo", help="homo | negative_drive | positive_drive")
+    p.add_argument("--mu", type=float, default=None,
+                   help="chemical potential; default exact equilibrium coex mu (homo, dmu=0 only)")
+    p.add_argument("--mu-fit-json", default=None,
+                   help="coex fit.json from run/susc.py refit fit: mu = polyval(coeffs, eps - x0)")
     p.add_argument("--seed-base", type=int, default=20261110)
     p.add_argument("--smoke", action="store_true", help="L=16, short times: checks the pipeline")
     a = p.parse_args()
     if a.smoke:
         a.L, a.eq_time, a.prod_time, a.chunk_time, a.eq_chunk = 16, 200, 500, 50, 100
 
-    mu = exact_mu(a.eps, a.delta_f)
-    chain = HeteroChain(1.0, a.eps, 0.0, np.exp(mu + a.delta_f), np.exp(mu), a.k, "homo")
+    mu_source = "exact"
+    if a.mu is not None:
+        mu, mu_source = a.mu, "explicit"
+    elif a.mu_fit_json:
+        fit = json.load(open(a.mu_fit_json))
+        phys = fit.get("physics", {})
+        want = dict(delta_f=a.delta_f, delta_mu=a.delta_mu, k=a.k, scheme=a.scheme)
+        if phys and any(phys.get(key) != val for key, val in want.items()):
+            raise SystemExit(f"fit physics {phys} != run physics {want}")
+        lo, hi = fit["fit_range"]
+        if not lo <= a.eps <= hi:
+            raise SystemExit(f"eps {a.eps} outside fit range {fit['fit_range']}")
+        mu = float(np.polyval(fit["coefficients_high_to_low"], a.eps - fit["x0"]))
+        mu_source = os.path.abspath(a.mu_fit_json)
+    else:
+        if a.scheme != "homo" or a.delta_mu != 0.0:
+            raise SystemExit("exact mu only holds for homo, dmu = 0: pass --mu or --mu-fit-json")
+        mu = exact_mu(a.eps, a.delta_f)
+    chain = HeteroChain(1.0, a.eps, a.delta_mu, np.exp(mu + a.delta_f), np.exp(mu), a.k, a.scheme)
     boundary = Periodic()
 
     rdir = os.path.join(a.out, eps_tag(a.eps), f"replica_{a.replica}")
@@ -87,12 +111,13 @@ def main():
         state = np.zeros((a.L, a.L), dtype=np.uint32)
         state[rng.random((a.L, a.L)) < 0.5] = BONDING
         prog = {"phase": "eq", "chunk": 0, "t": 0.0, "done": False}
-        meta = dict(vars(a), mu=mu, scheme="homo", delta_mu=0.0, n_eq_chunks=n_eq,
+        meta = dict(vars(a), mu=mu, mu_source=mu_source, n_eq_chunks=n_eq,
                     n_prod_chunks=n_prod, seed0=seed0)
         json.dump(meta, open(os.path.join(rdir, "meta.json"), "w"), indent=2)
         with open(ts_path, "w") as f:
             f.write("chunk,phase,t,rho_B,m\n")
-    print(f"[spin_corr] eps={a.eps} L={a.L} mu={mu:.6f} replica={a.replica} "
+    print(f"[spin_corr] {a.scheme} dmu={a.delta_mu} df={a.delta_f} k={a.k} "
+          f"eps={a.eps} L={a.L} mu={mu:.6f} ({mu_source}) replica={a.replica} "
           f"eq={a.eq_time} prod={a.prod_time} every {a.chunk_time}", flush=True)
 
     t_wall = time.time()
