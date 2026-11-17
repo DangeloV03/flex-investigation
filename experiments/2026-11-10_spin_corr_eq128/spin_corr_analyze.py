@@ -220,6 +220,16 @@ def fit_eta(df, r_min=2, r_max=16):
 
 
 EPS_C = -2 * np.log(1 + np.sqrt(2))
+CRITICAL_EPS = {round(EPS_C, 4)}   # eps values plotted/fitted as critical points; --critical-eps adds driven ones
+
+
+def near_crit(eps):
+    """True at the exact Ising eps_c, or at an eps the user marked critical (driven runs near their own eps_c)."""
+    return any(abs(eps - e) < 1e-3 for e in CRITICAL_EPS)
+
+
+def is_ising_c(eps):
+    return abs(eps - EPS_C) < 1e-3
 REP_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 INK2, GRID = "#52514e", "#e4e3df"
 
@@ -236,7 +246,7 @@ def spin_G(df, eps, rho):
     """Connected spin-spin correlation G(r) = <s0 sr> - <s>^2 (s = 2n - 1) and its error.
     At eps_c <s> = 0 by symmetry, so G = <s0 sr>; subtracting the sampled <s>^2 there would only
     inject the slow sign noise of m."""
-    m = 0.0 if abs(eps - EPS_C) < 1e-3 else (2 * rho - 1)
+    m = 0.0 if near_crit(eps) else (2 * rho - 1)
     return df.S_full - m ** 2, df.S_full_err
 
 
@@ -245,7 +255,7 @@ def spin_fits(df, eps, rho, L):
     G, err = spin_G(df, eps, rho)
     out = dict(eta_fit=np.nan, eta_A=np.nan, xi_exp=np.nan, xi_exp_err=np.nan, exp_A=np.nan,
                xi_oz=np.nan, xi_oz_err=np.nan, oz_A=np.nan, r_signal=np.nan)
-    if abs(eps - EPS_C) < 1e-3:
+    if near_crit(eps):
         m = (df.r >= 2) & (df.r <= 16) & (G > 0)
         if m.sum() >= 3:
             sl, ic = np.polyfit(np.log(df.r[m]), np.log(G[m]), 1)
@@ -274,6 +284,17 @@ def spin_fits(df, eps, rho, L):
     return out
 
 
+def is_eq(row):
+    """Equilibrium = homo scheme at dmu = 0 (older summaries have no scheme column: equilibrium)."""
+    return str(row.get("scheme", "homo")) in ("homo", "nan") and float(row.get("delta_mu", 0) or 0) == 0
+
+
+def physics_label(row):
+    if is_eq(row):
+        return "equilibrium"
+    return f"{row['scheme']}, βΔμ = {float(row['delta_mu']):g}, k = {float(row.get('k', 1)):g}"
+
+
 def plot_correlations(curves, summ, path):
     """Spin-spin correlation G(r) vs r, one panel per eps, with the textbook fits:
     power law r^-eta at eps_c (log-log), exponential away from it (log-linear)."""
@@ -283,8 +304,8 @@ def plot_correlations(curves, summ, path):
         row = summ[np.isclose(summ.eps, eps)].iloc[0]
         nrep = sum(c.startswith("S_rep") for c in df.columns)
         G, err = spin_G(df, eps, row.rho)
-        msub = 0.0 if abs(eps - EPS_C) < 1e-3 else (2 * row.rho - 1) ** 2
-        if abs(eps - EPS_C) < 1e-3:
+        msub = 0.0 if near_crit(eps) else (2 * row.rho - 1) ** 2
+        if near_crit(eps):
             k = (df.r >= 1) & (G > 0)
             for i in range(nrep):
                 ax.plot(df.r[k], df[f"S_rep{i}"][k], color=REP_COLORS[i], lw=0.8, alpha=0.6, label=f"replica {i}")
@@ -298,7 +319,11 @@ def plot_correlations(curves, summ, path):
             ax.plot(rr, A * rr ** -0.25, ":", color="#0b0b0b", lw=1.2, label=r"exact 2D Ising $r^{-1/4}$ ($\eta$ = 1/4)")
             ax.axhline(row.absm ** 2, color=INK2, lw=1, ls="--", label=r"$\langle|m|\rangle^2$: finite-size plateau")
             ax.set_xscale("log")
-            ax.set_title(f"βε = {eps:g} = ε_c: power law, η = {row.eta_fit:.3f}  (exact 1/4)", fontsize=10)
+            if is_ising_c(eps):
+                ax.set_title(f"βε = {eps:g} = ε_c: power law, η = {row.eta_fit:.3f}  (exact 1/4)", fontsize=10)
+            else:
+                ax.set_title(f"βε = {eps:g}, treated as near-critical: η_eff = {row.eta_fit:.3f}\n"
+                             f"(full ⟨s0 sr⟩; Ising 1/4 shown only as a guide)", fontsize=10)
         else:
             rs = row.r_signal if np.isfinite(row.r_signal) else L // 2
             k = (df.r >= 1) & (df.r <= rs) & (G > 0)
@@ -315,8 +340,8 @@ def plot_correlations(curves, summ, path):
                 ax.plot(rr, oz(rr, row.oz_A, row.xi_oz), "--", color="#eb6834", lw=1.3,
                         label=rf"fit $A\,e^{{-r/\xi}}/\sqrt{{r}}$ (2D OZ): $\xi$ = {row.xi_oz:.2f}")
             ax.set_xlim(0, rs + 2)
-            ax.set_title(f"βε = {eps:g}: exponential decay, ξ = {row.xi_oz:.2f} (OZ)  vs exact Ising {row.xi_ising_exact:.2f}",
-                         fontsize=10)
+            ref = f"  vs exact Ising {row.xi_ising_exact:.2f}" if is_eq(row) else ""
+            ax.set_title(f"βε = {eps:g}: exponential decay, ξ = {row.xi_oz:.2f} (OZ){ref}", fontsize=10)
             note = f"fits use r = 10–{int(min(rs, 40))}"
             if rs < L // 2:
                 note += f"; shown up to r = {int(rs)}\n(beyond: G < 5σ, at the noise floor ~1e-4)"
@@ -326,8 +351,9 @@ def plot_correlations(curves, summ, path):
         ax.set_ylabel(r"$G(r)=\langle s_0 s_r\rangle-\langle s\rangle^2$")
         _style(ax)
         ax.legend(frameon=False, fontsize=7.5, loc="lower left")
-    fig.suptitle(f"Spin-spin correlation (s = +1 active, −1 otherwise), equilibrium, L = {items[0][1][1]}", fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.suptitle(f"Spin-spin correlation (s = +1 active, −1 otherwise)\n{physics_label(summ.iloc[0])}, "
+                 f"L = {items[0][1][1]}", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.88))
     fig.savefig(path, dpi=180)
     plt.close(fig)
 
@@ -357,7 +383,7 @@ def plot_m(out, path, max_points=4000):
             ax.text(0.995, 0.92, f"replica {i}", transform=ax.transAxes, ha="right", va="top", fontsize=8,
                     color=INK2, bbox=dict(facecolor="white", edgecolor="none", alpha=0.85, pad=1.5), zorder=10)
             if i == 0:
-                ax.set_title(f"βε = {meta['eps']:g}" + ("  (ε_c)" if abs(meta["eps"] - EPS_C) < 1e-3 else "")
+                ax.set_title(f"βε = {meta['eps']:g}" + ("  (ε_c)" if is_ising_c(meta["eps"]) else "  (near ε_c)" if near_crit(meta["eps"]) else "")
                              + "   — shaded: equilibration", fontsize=10)
             if j == 0:
                 ax.set_ylabel("m", fontsize=9)
@@ -372,7 +398,7 @@ def plot_m(out, path, max_points=4000):
         ax.hist(allm, bins=np.linspace(-0.9, 0.9, 91), density=True, color="#2a78d6", alpha=0.85,
                 edgecolor="white", linewidth=0.3)
         L = meta["L"]
-        if abs(meta["eps"] - EPS_C) < 1e-3:
+        if is_ising_c(meta["eps"]):
             for s in (-1, 1):
                 ax.axvline(s * L ** -0.125, color="#0b0b0b", ls=":", lw=1)
             ax.text(0.99, 0.95, rf"dotted: $\pm L^{{-1/8}}$ = ±{L ** -0.125:.2f}", transform=ax.transAxes,
@@ -392,13 +418,18 @@ def main():
     ap.add_argument("--from-csv", action="store_true",
                     help="redraw figures and refit from the corr_*.csv / summary.csv already in --plots "
                          "(no snapshot pass; m(t) figure still reads timeseries.csv under --out if present)")
+    ap.add_argument("--critical-eps", type=float, nargs="*", default=[],
+                    help="also treat these eps as critical (power-law fit of the full <s0 sr>), e.g. a driven "
+                         "run near its own eps_c")
     a = ap.parse_args()
+    CRITICAL_EPS.update(round(e, 4) for e in a.critical_eps)
     os.makedirs(a.plots, exist_ok=True)
 
     rows, curves = [], {}
     if a.from_csv:
         old = pd.read_csv(os.path.join(a.plots, "summary.csv"))
-        keep = ["eps", "L", "n_snap", "rho", "m", "absm", "tau_m", "tau_absm", "n_eff_total", "xi_ising_exact"]
+        keep = [c for c in ["eps", "L", "n_snap", "rho", "m", "absm", "tau_m", "tau_absm", "n_eff_total",
+                            "xi_ising_exact", "scheme", "delta_mu", "k"] if c in old.columns]
         for r in old[keep].to_dict("records"):
             tag = "eps" + f"{r['eps']:.4f}".replace("-", "m").replace(".", "p")
             df = pd.read_csv(os.path.join(a.plots, f"corr_{tag}.csv"))
@@ -418,6 +449,8 @@ def main():
             rows.append(dict(eps=eps, L=L, n_snap=int(tau.n_snap.sum()), rho=rho, m=2 * rho - 1,
                              absm=tau.absm_mean.mean(), tau_m=tau.tau_m.mean(), tau_absm=tau.tau_absm.mean(),
                              n_eff_total=tau.n_eff.sum(), xi_ising_exact=ising_xi(eps),
+                             scheme=meta.get("scheme", "homo"), delta_mu=meta.get("delta_mu", 0.0),
+                             k=meta.get("k", 1.0),
                              **spin_fits(df, eps, rho, L)))
             curves[eps] = (df, L)
             print(f"\n== {tag}  rho={rho:.4f}  snapshots={int(tau.n_snap.sum())}")
