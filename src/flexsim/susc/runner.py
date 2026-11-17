@@ -137,6 +137,15 @@ def main() -> None:
         default=None,
         help="Replica IDs to resume from (one per CPU slot; auto-detected from CSV if omitted)",
     )
+    parser.add_argument(
+        "--fresh-history",
+        action="store_true",
+        help=(
+            "With --resume-dir: start from the prior final lattices but keep none of their "
+            "history. Equilibrate for --eq-time at this run's mu, then write a new time "
+            "series. Used by the Newton mu search when mu changes between iterations."
+        ),
+    )
     args = parser.parse_args()
 
     if args.mu is not None:
@@ -266,7 +275,14 @@ def main() -> None:
                 task_settings["resume_id"] = rid
                 task_settings["prior_prod_time"] = stats.get("prior_prod_time", 0.0)
                 task_settings["prior_wall_time"] = stats.get("prior_wall_time", 0.0)
-                task_settings["eq_time"] = 0.0  # skip equilibration on resume
+                if args.fresh_history:
+                    # New mu: old chunks belong to a different mu, so drop them
+                    # and re-equilibrate from the old lattice.
+                    task_settings["fresh_history"] = True
+                    task_settings["prior_prod_time"] = 0.0
+                    task_settings["prior_wall_time"] = 0.0
+                else:
+                    task_settings["eq_time"] = 0.0  # skip equilibration on resume
             tasks.append((slot_idx, run_id, seed, params, task_settings, outdir))
 
         # Append each replica's row as it lands, not once the whole batch is
@@ -289,7 +305,8 @@ def main() -> None:
                 )
                 # The new row now points at the full history; the file it
                 # resumed from is a redundant prefix of it.
-                if args.resume_dir and str(result.get("resume_id", "")).strip():
+                if (args.resume_dir and not args.fresh_history
+                        and str(result.get("resume_id", "")).strip()):
                     drop_superseded_timeseries(
                         os.path.join(args.resume_dir, f"m_timeseries_{result['resume_id']}.csv"),
                         os.path.join(outdir, f"m_timeseries_{result['id']}.csv"),
