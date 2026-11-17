@@ -8,7 +8,13 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
-from flexsim.susc.layout import find_susceptibility_csvs, read_susceptibility_csv
+# Top-ups append rows whose timeseries already contain the earlier generation's
+# samples as a prefix, so only each replica's newest row is used (no double counting).
+from flexsim.susc.layout import (
+    find_susceptibility_csvs,
+    latest_row_per_replica,
+    read_susceptibility_csv,
+)
 
 
 def _tail_slice(n: int, tail_fraction: float) -> slice:
@@ -101,7 +107,7 @@ def aggregate(
     n_loaded = 0
     for i_path, csv_path in enumerate(paths):
         dirpath = os.path.dirname(csv_path)
-        meta_rows = read_susceptibility_csv(csv_path)
+        meta_rows = latest_row_per_replica(read_susceptibility_csv(csv_path))
         for meta in meta_rows:
             run_id = str(meta.get("id", "")).strip()
             if not run_id:
@@ -233,7 +239,7 @@ def aggregate_pooled(
     n_loaded = 0
     for i_path, csv_path in enumerate(paths):
         dirpath = os.path.dirname(csv_path)
-        for meta in read_susceptibility_csv(csv_path):
+        for meta in latest_row_per_replica(read_susceptibility_csv(csv_path)):
             run_id = str(meta.get("id", "")).strip()
             if not run_id:
                 continue

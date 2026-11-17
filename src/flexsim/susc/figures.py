@@ -69,6 +69,12 @@ def _plot_l_curves_vs_epsilon(
     plt.close(fig)
     print(f"Wrote {path}")
 
+    csv_path = os.path.splitext(path)[0] + ".csv"
+    plot_df[["L", "epsilon", y_col, yerr_col]].sort_values(["L", "epsilon"]).to_csv(
+        csv_path, index=False
+    )
+    print(f"Wrote {csv_path}")
+
 
 def plot_chi_vs_epsilon(agg: pd.DataFrame, outdir: str, pooled: bool = False) -> None:
     suffix = " (pooled)" if pooled else ""

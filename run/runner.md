@@ -37,7 +37,8 @@ Set them in a wrapper with `export`, or on the command line before `bash`.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `EXP` | **required** | Campaign name. The data goes in `COEX_RUNS_<EXP>/ly40/`, and the tmux session is `coex-<EXP>-ly40`. |
+| `EXP` | **required** | Campaign name. The data goes in `COEX_RUNS_<EXP>/ly40/` (unless `CAMPAIGN_DIR` is set), and the tmux session is `coex-<EXP>-ly40` (`.` and `:` become `p`). |
+| `CAMPAIGN_DIR` | `COEX_RUNS_<EXP>` | Campaign folder under `DATA_ROOT`. The NEG_DMU wrappers set it to `COEX_NEG_DMU_<dmu>`. |
 | `DELTA_MU` | **required** | βΔμ, the chemical drive. |
 | `WRAPPER` | **required** | Absolute path of the script being run. The tmux windows call it again, so the settings carry over. Wrappers set it automatically. |
 | `SCHEME` | `positive_drive` | Simulation rate scheme: `homo`, `positive_drive` or `negative_drive`. |
@@ -55,7 +56,7 @@ Set them in a wrapper with `export`, or on the command line before `bash`.
 | `FORCE` | `0` | `1` = run `generate` even if this exact grid was generated before. Duplicate ε are still skipped. |
 | `DATA_ROOT` | `/scratch/gpfs/WJACOBS/vd7294/flex-investigation` | Where the data lives. Leave it as is. |
 
-Fixed, not settable: Ly = 40 and Lx = 400. Each job gets 1 GB of memory (`src/flexsim/coex/slurm_config.yml`) and a 24 h wall time (`LY_WALLTIME` in `src/flexsim/coex/dispatcher.py`).
+Fixed, not settable: Ly = 40 and Lx = 400. Each job gets 512 MB of memory (`src/flexsim/coex/slurm_config.yml`; Ly = 40 peak is 0.19 GB) and a 12 h wall time (longest Ly = 40 job so far: 2.5 h) (`LY_WALLTIME` in `src/flexsim/coex/dispatcher.py`).
 
 ### Scheme values
 
@@ -80,6 +81,9 @@ All of them use βΔf = 0 and k = 1.
 | `coex_ly40_extend_d3d.sh` | D3D | positive_drive (default) | +3 | −2.1 … −1.6 (default) | 0.01 |
 | `coex_ly40_extend_d3e.sh` | D3E | positive_drive (default) | +4 | −2.1 … −1.6 (default) | 0.01 |
 | `coex_ly40_d3f.sh` | D3F | positive_drive | −2 | −2.2 … −1.5 | 0.02 |
+| `coex_ly40_neg_dmu_0p5.sh` | NEG_DMU_0.5 (`COEX_NEG_DMU_0.5`) | negative_drive | +0.5 | −1.95 … −1.15 | 0.02 |
+| `coex_ly40_neg_dmu_1p5.sh` | NEG_DMU_1.5 (`COEX_NEG_DMU_1.5`) | negative_drive | +1.5 | −2.09 … −1.15 | 0.02 |
+| `coex_ly40_neg_dmu_2p5.sh` | NEG_DMU_2.5 (`COEX_NEG_DMU_2.5`) | negative_drive | +2.5 | −2.15 … −1.29 | 0.02 |
 
 The D3C/D3D/D3E wrappers set only `EXP` and `DELTA_MU`. Everything else in those runs came from the defaults above.
 
