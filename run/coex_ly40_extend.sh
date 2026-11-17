@@ -37,20 +37,21 @@ MAX_CONCURRENT="${MAX_CONCURRENT:-30}"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SELF="${WRAPPER:?set by the per-campaign script}"
-BASE="$DATA_ROOT/COEX_RUNS_$EXP/ly$LY"
-SESSION="coex-$EXP-ly$LY"
+CAMPAIGN_DIR="${CAMPAIGN_DIR:-COEX_RUNS_$EXP}"   # folder under DATA_ROOT; default COEX_RUNS_<EXP>
+BASE="$DATA_ROOT/$CAMPAIGN_DIR/ly$LY"
+SESSION="coex-${EXP//[.:]/p}-ly$LY"           # tmux forbids '.' and ':' in session names
 MARKER="$BASE/.extend_${EPS_MIN}_${EPS_MAX}_${EPS_STEP}"
 export FLEX_OUTPUT_ROOT="$DATA_ROOT"
 
 coex() { python "$REPO/run/coex.py" "$@"; }
 
 # NEW_BASE=1 (set by a wrapper) starts a campaign's first Ly = 40 folder; the campaign itself must
-# exist unless NEW_CAMPAIGN=1 (a brand-new COEX_RUNS_<EXP>).
+# exist unless NEW_CAMPAIGN=1 (a brand-new $CAMPAIGN_DIR).
 if [[ ! -d "$BASE" ]]; then
-  if [[ "${NEW_BASE:-0}" == 1 && ( -d "$DATA_ROOT/COEX_RUNS_$EXP" || "${NEW_CAMPAIGN:-0}" == 1 ) ]]; then
+  if [[ "${NEW_BASE:-0}" == 1 && ( -d "$DATA_ROOT/$CAMPAIGN_DIR" || "${NEW_CAMPAIGN:-0}" == 1 ) ]]; then
     mkdir -p "$BASE/samples" "$BASE/results"
     # Both accounts must be able to write here and in every folder made below, whoever made it.
-    for d in "$DATA_ROOT/COEX_RUNS_$EXP" "$BASE" "$BASE/samples" "$BASE/results"; do
+    for d in "$DATA_ROOT/$CAMPAIGN_DIR" "$BASE" "$BASE/samples" "$BASE/results"; do
       [[ -O "$d" ]] && setfacl -m u:vd7294:rwx,u:mo9089:rwx,d:u:vd7294:rwx,d:u:mo9089:rwx,d:g::rwx "$d" 2>/dev/null || true
     done
   else
