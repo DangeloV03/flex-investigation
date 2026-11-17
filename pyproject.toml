@@ -31,4 +31,4 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.pyright]
-extraPaths = ["src"]
+extraPaths = ["src", "run"]
