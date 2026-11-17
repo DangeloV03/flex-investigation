@@ -280,3 +280,24 @@ python run/susc.py check --help        # rerun a check / top-up round by hand
 python run/susc.py refit fit --help
 python run/susc.py refit combine --help
 ```
+
+# Finite-size scaling (FSS)
+
+`run/fss_runner.py` is the one file to read and run for FSS. Its docstring explains the observables,
+the cuts and the collapse fit. `run/examples/fss.sh` runs it over the five positive-drive
+fitted-coex campaigns. To analyse other campaigns, edit the `CAMPAIGNS` list in that file.
+
+```bash
+module load anaconda3/2024.10 && conda activate lattice
+bash run/examples/fss.sh run                    # first time: read the time series, fit, plot (use a compute node)
+bash run/examples/fss.sh refit --fix-nu 1.0     # change fit options: seconds, reuses fss_table.csv
+bash run/examples/fss.sh summary                # eps_c, 1/nu, gamma/nu, beta/nu per campaign
+
+# one campaign by hand
+python run/fss_runner.py SUSC_RUNS_POS_DMU1_FITTED_COEX/runs --out fss_pos_dmu1 --workers 4
+python run/fss_runner.py --help                 # all options (--sizes, --xr, --max-abs-m, --min-jumps, ...)
+```
+
+Output per campaign: `observables_vs_eps.png`, `fss_collapse.png` (χ, ⟨|m|⟩ and U₄ collapses),
+`chi_peak_scaling.png` (χ_max vs L), `fss_table.csv` and `fss_fit_results.json`. Output goes under
+`$FSS_OUT`, which defaults to `~/fss_example_output`.
