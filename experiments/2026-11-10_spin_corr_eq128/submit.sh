@@ -27,13 +27,14 @@ WALL="${WALL:-23:59:00}"
 RESUME_ROUNDS="${RESUME_ROUNDS:-3}"
 CONDA_ENV="${FLEX_CONDA_ENV:-lattice}"
 JOB_NAME="${JOB_NAME:-spincorr128}"
+LSIZE="${LSIZE:-128}"   # lattice side L (L x L)
 # Driven physics (defaults = equilibrium). MU_FIT_JSON: coex cubic fit (required unless homo dmu=0).
 SCHEME="${SCHEME:-homo}"
 DELTA_MU="${DELTA_MU:-0.0}"
 DELTA_F="${DELTA_F:-0.0}"
 K="${K:-1.0}"
 MU_FIT_JSON="${MU_FIT_JSON:-}"
-PHYS_ARGS="--scheme $SCHEME --delta-mu $DELTA_MU --delta-f $DELTA_F --k $K${MU_FIT_JSON:+ --mu-fit-json $MU_FIT_JSON}"
+PHYS_ARGS="--L $LSIZE --scheme $SCHEME --delta-mu $DELTA_MU --delta-f $DELTA_F --k $K${MU_FIT_JSON:+ --mu-fit-json $MU_FIT_JSON}"
 
 activate() {
   set +u   # module/conda scripts reference unset variables (e.g. PS1)
@@ -91,7 +92,7 @@ EOF
     echo "round $r (resume): array job $jid" | tee -a "$OUT/launch.log"
   done
   echo "$PHYS_ARGS" | tee -a "$OUT/launch.log"
-  echo "eps=${EPS_LIST[*]} NREP=$NREP eq=$EQ_TIME prod=$PROD_TIME chunk=$CHUNK_TIME -> $OUT" | tee -a "$OUT/launch.log"
+  echo "L=$LSIZE eps=${EPS_LIST[*]} NREP=$NREP eq=$EQ_TIME prod=$PROD_TIME chunk=$CHUNK_TIME -> $OUT" | tee -a "$OUT/launch.log"
 }
 
 do_status() {
